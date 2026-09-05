@@ -877,6 +877,44 @@ If GRE is up but BGP is not, check both ends hold the /31.
 Both endpoints are `dial_out_only`. They must transit a hub. This is a fact
 about NAT, not a limitation of the controller.
 
+**`docker compose build` fails: "unable to apply apparmor profile"**
+
+```
+runc run failed: unable to start container process: error during container init:
+unable to apply apparmor profile: apparmor failed to apply profile:
+write fsmount:fscontext:proc/thread-self/attr/apparmor/exec: no such file or directory
+```
+
+Not a problem with this project — no container process can start on that host at
+all, so whichever `RUN` step happens to come first is the one that reports it.
+
+Almost always **Docker inside an unprivileged LXC container**, Proxmox in
+particular. Confirm with `systemd-detect-virt` (prints `lxc`) and a `-pve`
+kernel. runc 1.3 mounts a fresh procfs through the new mount API and then writes
+the AppArmor label into it; inside unprivileged LXC that new mount does not
+expose the apparmor attributes, even though the container's inherited `/proc`
+does. Nothing you change inside the container fixes it.
+
+Fix on the **Proxmox host**, not in the container:
+
+```bash
+pct stop <vmid>
+pct set <vmid> --features nesting=1,keyctl=1
+echo "lxc.apparmor.profile: unconfined" >> /etc/pve/lxc/<vmid>.conf
+pct start <vmid>
+```
+
+> `lxc.apparmor.profile: unconfined` removes AppArmor confinement **of the LXC
+> container itself**, weakening its isolation from the Proxmox host. That is a
+> real cost, and this controller can decrypt the credentials of every router you
+> manage. If the choice is available, run it in a VM rather than an LXC
+> container — Docker-in-LXC is a long-standing awkward combination and this is
+> not the last edge you will hit.
+
+To confirm the cause before touching the host, `systemctl stop apparmor &&
+systemctl restart docker` inside the container will let the build through. That
+is a diagnostic, not a fix — it drops confinement for everything on the box.
+
 **A device rebooted after an apply**
 The rollback fired: the controller could not reach it after the push. The device
 is on its pre-apply configuration. Check the job's diff for what would have
