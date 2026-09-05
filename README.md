@@ -71,6 +71,35 @@ degraded path instead of tearing it down, so it recovers on its own.
 | [Plan](docs/plan.md) | The original roadmap, M1–M6 |
 | [Lab](labs/README.md) | containerlab topology and the fabric verifier |
 
+### Prerequisites on Debian / Ubuntu
+
+Only Docker is needed to run the stack.
+
+```bash
+# Docker Engine + the compose v2 plugin.
+# Debian's own docker.io package does NOT include compose v2 -- if you install
+# that, `docker compose` will not exist and only the legacy `docker-compose`
+# binary might. Use Docker's repository instead:
+curl -fsSL https://get.docker.com | sh
+docker compose version   # must print v2.x
+```
+
+For local development (`make install`, `make test`) you also need Python 3.11 or
+newer. Debian splits the venv module into its own package:
+
+```bash
+sudo apt install python3 python3-venv build-essential
+```
+
+| Release | Default `python3` | Works? |
+|---|---|---|
+| Debian 12 bookworm | 3.11 | Yes |
+| Debian 13 trixie | 3.13 | Yes |
+| Ubuntu 22.04 | 3.10 | No — needs a newer Python |
+| Ubuntu 24.04 | 3.12 | Yes |
+
+`make doctor` reports what it can actually find on your host.
+
 ## Quick start
 
 ```bash

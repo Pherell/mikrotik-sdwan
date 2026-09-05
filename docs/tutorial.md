@@ -38,6 +38,17 @@ used here (`198.51.100.0/24`, `203.0.113.0/24`) will not route anywhere.
 
 ## Part 0 — Install
 
+On Debian or Ubuntu, install Docker with the compose v2 plugin first. **Debian's
+own `docker.io` package does not include it** — `docker compose` will simply not
+exist:
+
+```bash
+curl -fsSL https://get.docker.com | sh
+docker compose version   # must print v2.x
+```
+
+Then:
+
 ```bash
 git clone https://github.com/Pherell/mikrotik-sdwan.git
 cd mikrotik-sdwan

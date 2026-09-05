@@ -1,0 +1,18 @@
+# Normalise to LF in the repository. A shell script committed with CRLF fails
+# on Linux with "bad interpreter: /bin/bash^M", which is a confusing way to
+# discover that someone committed from Windows.
+* text=auto eol=lf
+
+# Never touched by the CRLF machinery.
+*.png binary
+*.jpg binary
+*.pdf binary
+
+# These must stay LF even if a contributor forces CRLF locally.
+*.sh   text eol=lf
+*.rsc  text eol=lf
+Makefile text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+Caddyfile text eol=lf

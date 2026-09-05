@@ -34,7 +34,7 @@ the controller reaches it.
 
 ```bash
 sudo clab deploy -t labs/hub-spoke.clab.yml
-python labs/verify_fabric.py --api http://localhost:8000 --password "$SDWAN_BOOTSTRAP_ADMIN_PASSWORD"
+python3 labs/verify_fabric.py --api http://localhost:8000 --password "$SDWAN_BOOTSTRAP_ADMIN_PASSWORD"
 sudo clab destroy -t labs/hub-spoke.clab.yml --cleanup
 ```
 
