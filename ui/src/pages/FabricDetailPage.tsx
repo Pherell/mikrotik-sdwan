@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { FabricSettings } from "../components/FabricSettings";
 import { TopologyGraph } from "../components/TopologyGraph";
 import { endpoints, type Expansion } from "../lib/api";
 
@@ -9,6 +10,9 @@ export function FabricDetailPage() {
   const { fabricId = "" } = useParams();
   const queryClient = useQueryClient();
   const [expansion, setExpansion] = useState<Expansion | null>(null);
+  const [editing, setEditing] = useState(false);
+  const navigate = useNavigate();
+  const me = useQuery({ queryKey: ["me"], queryFn: endpoints.me });
   const [addSiteId, setAddSiteId] = useState("");
 
   const fabric = useQuery({
@@ -27,6 +31,14 @@ export function FabricDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["fabric", fabricId] });
     queryClient.invalidateQueries({ queryKey: ["fabric-links", fabricId] });
   }
+
+  const removeFabric = useMutation({
+    mutationFn: () => endpoints.deleteFabric(fabricId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["fabrics"] });
+      navigate("/fabrics", { replace: true });
+    },
+  });
 
   const expand = useMutation({
     mutationFn: () => endpoints.expand(fabricId),
@@ -75,6 +87,28 @@ export function FabricDetailPage() {
               {expand.isPending ? "Expanding…" : "Recompute links"}
             </button>
           </div>
+          <div style={{ flex: 0 }}>
+            <button onClick={() => setEditing(!editing)}>
+              {editing ? "Close" : "Settings"}
+            </button>
+          </div>
+          {me.data?.role === "admin" && (
+            <div style={{ flex: 0 }}>
+              <button
+                onClick={() => {
+                  if (
+                    confirm(
+                      `Delete fabric ${f.name}? Tunnels stay on the devices until ` +
+                        `each member site is applied again.`,
+                    )
+                  )
+                    removeFabric.mutate();
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          )}
         </div>
 
         <dl className="kv" style={{ marginTop: 16 }}>
@@ -95,6 +129,8 @@ export function FabricDetailPage() {
         {expand.isError && <div className="error">{(expand.error as Error).message}</div>}
         {expansion && <ExpansionResult result={expansion} />}
       </div>
+
+      {editing && <FabricSettings fabric={f} onDone={() => setEditing(false)} />}
 
       <div className="card">
         <h2>Topology</h2>

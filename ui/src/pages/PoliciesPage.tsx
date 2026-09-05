@@ -27,6 +27,15 @@ export function PoliciesPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["policies"] }),
   });
 
+  // Priority and enabled are what actually get changed day to day -- silencing
+  // a rule during an incident, or reordering two that overlap. Both edit in
+  // place rather than behind a form.
+  const update = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: unknown }) =>
+      endpoints.updatePolicy(id, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["policies"] }),
+  });
+
   return (
     <>
       <div className="card">
@@ -39,7 +48,8 @@ export function PoliciesPage() {
           </div>
         </div>
         <p className="muted" style={{ marginBottom: 0 }}>
-          Rules are evaluated top to bottom by priority and the first match wins.
+          Rules are evaluated top to bottom by priority and the first match wins —
+          edit a priority or untick a rule right in the table.
           Matching is by prefix, port and DSCP — RouterOS has no usable
           application classifier, so an app group is a prefix list, not DPI.
         </p>
@@ -76,11 +86,34 @@ export function PoliciesPage() {
             </thead>
             <tbody>
               {policies.data.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.priority}</td>
+                <tr key={p.id} style={{ opacity: p.enabled ? 1 : 0.55 }}>
                   <td>
-                    {p.name}
-                    {!p.enabled && <span className="muted"> · disabled</span>}
+                    <input
+                      type="number"
+                      style={{ width: 74 }}
+                      defaultValue={p.priority}
+                      onBlur={(e) => {
+                        const next = Number(e.target.value);
+                        if (next !== p.priority)
+                          update.mutate({ id: p.id, body: { priority: next } });
+                      }}
+                    />
+                  </td>
+                  <td>
+                    <label style={{ margin: 0, display: "inline-flex", gap: 6 }}>
+                      <input
+                        type="checkbox"
+                        style={{ width: "auto" }}
+                        checked={p.enabled}
+                        onChange={(e) =>
+                          update.mutate({
+                            id: p.id,
+                            body: { enabled: e.target.checked },
+                          })
+                        }
+                      />
+                      <span style={{ color: "var(--text)" }}>{p.name}</span>
+                    </label>
                   </td>
                   <td className="muted">{describeMatch(p)}</td>
                   <td>{p.prefer_tags.join(" → ")}</td>
@@ -96,6 +129,7 @@ export function PoliciesPage() {
           </table>
         )}
         {remove.isError && <div className="error">{(remove.error as Error).message}</div>}
+        {update.isError && <div className="error">{(update.error as Error).message}</div>}
       </div>
 
       <SlaProfiles profiles={slas.data ?? []} />
@@ -114,9 +148,33 @@ function describeMatch(p: Policy): string {
 }
 
 function SlaProfiles({ profiles }: { profiles: SlaProfile[] }) {
+  const queryClient = useQueryClient();
+  const [adding, setAdding] = useState(false);
+
+  const remove = useMutation({
+    mutationFn: (id: string) => endpoints.deleteSla(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["slas"] }),
+  });
+
   return (
     <div className="card">
-      <h2>SLA profiles</h2>
+      <div className="row" style={{ alignItems: "center" }}>
+        <h2 style={{ margin: 0 }}>SLA profiles</h2>
+        <div style={{ flex: 0 }}>
+          <button onClick={() => setAdding(!adding)}>
+            {adding ? "Cancel" : "New profile"}
+          </button>
+        </div>
+      </div>
+      {adding && (
+        <SlaForm
+          onDone={() => {
+            setAdding(false);
+            queryClient.invalidateQueries({ queryKey: ["slas"] });
+          }}
+        />
+      )}
+      {remove.isError && <div className="error">{(remove.error as Error).message}</div>}
       {profiles.length === 0 ? (
         <p className="muted">
           None defined. Policies without one use 20% loss / 300 ms, probed every 10 s.
@@ -131,6 +189,7 @@ function SlaProfiles({ profiles }: { profiles: SlaProfile[] }) {
               <th>Jitter</th>
               <th>Probe</th>
               <th>Detects in</th>
+              <th />
             </tr>
           </thead>
           <tbody>
@@ -144,6 +203,9 @@ function SlaProfiles({ profiles }: { profiles: SlaProfile[] }) {
                   {s.probe_count} × {s.probe_interval_seconds}s
                 </td>
                 <td className="muted">~{s.detection_seconds}s</td>
+                <td>
+                  <button onClick={() => remove.mutate(s.id)}>Delete</button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -333,4 +395,114 @@ function splitList(value: string): string[] {
     .split(",")
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function SlaForm({ onDone }: { onDone: () => void }) {
+  const [form, setForm] = useState({
+    name: "",
+    loss_percent: 20,
+    latency_ms: 300,
+    jitter_ms: "",
+    probe_interval_seconds: 10,
+    probe_count: 10,
+    recovery_seconds: 60,
+  });
+
+  const create = useMutation({
+    mutationFn: () =>
+      endpoints.createSla({
+        ...form,
+        jitter_ms: form.jitter_ms ? Number(form.jitter_ms) : null,
+      }),
+    onSuccess: onDone,
+  });
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        create.mutate();
+      }}
+      style={{ margin: "12px 0" }}
+    >
+      {create.isError && <div className="error">{(create.error as Error).message}</div>}
+      <div className="row">
+        <label>
+          Name
+          <input
+            required
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
+        </label>
+        <label>
+          Loss %
+          <input
+            type="number"
+            min={1}
+            max={100}
+            value={form.loss_percent}
+            onChange={(e) => setForm({ ...form, loss_percent: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Latency (ms)
+          <input
+            type="number"
+            min={1}
+            value={form.latency_ms}
+            onChange={(e) => setForm({ ...form, latency_ms: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Jitter (ms)
+          <input
+            type="number"
+            placeholder="optional"
+            value={form.jitter_ms}
+            onChange={(e) => setForm({ ...form, jitter_ms: e.target.value })}
+          />
+        </label>
+      </div>
+      <div className="row">
+        <label>
+          Probe every (s)
+          <input
+            type="number"
+            min={1}
+            value={form.probe_interval_seconds}
+            onChange={(e) =>
+              setForm({ ...form, probe_interval_seconds: Number(e.target.value) })
+            }
+          />
+        </label>
+        <label>
+          Packets per probe
+          <input
+            type="number"
+            min={1}
+            value={form.probe_count}
+            onChange={(e) => setForm({ ...form, probe_count: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Recovery hold (s)
+          <input
+            type="number"
+            min={0}
+            value={form.recovery_seconds}
+            onChange={(e) => setForm({ ...form, recovery_seconds: Number(e.target.value) })}
+          />
+        </label>
+      </div>
+      <p className="muted">
+        Detection takes roughly {form.probe_interval_seconds * 2}s. Tightening the
+        interval speeds that up and costs router CPU; below a second or two you start
+        failing over on ordinary jitter.
+      </p>
+      <button className="primary" type="submit" disabled={create.isPending}>
+        {create.isPending ? "Creating…" : "Create"}
+      </button>
+    </form>
+  );
 }

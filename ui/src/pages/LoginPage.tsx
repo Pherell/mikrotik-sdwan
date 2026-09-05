@@ -14,11 +14,11 @@ export function LoginPage() {
     mutationFn: () => endpoints.login(email, password),
     onSuccess: (data) => {
       setToken(data.access_token);
-      navigate("/sites", { replace: true });
+      navigate("/", { replace: true });
     },
   });
 
-  if (getToken()) return <Navigate to="/sites" replace />;
+  if (getToken()) return <Navigate to="/" replace />;
 
   function submit(event: FormEvent) {
     event.preventDefault();

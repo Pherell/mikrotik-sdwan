@@ -34,6 +34,11 @@ sweeps the old stack off the devices, and converges — no CLI.
 order. An SLA profile's thresholds become netwatch probes whose scripts demote a
 degraded path instead of tearing it down, so it recovers on its own.
 
+**The UI.** Seven sections — Overview, Sites, Fabrics, Policies, Jobs, Settings,
+Users. The overview is the front door: fleet health at a glance, anything needing
+attention, bulk apply across every site, and a one-click drift sweep. Everything
+the API can do is reachable from the browser.
+
 **Everything else:**
 
 - Add a RouterOS 7 device from the browser, probe it read-only, and see its

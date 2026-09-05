@@ -254,3 +254,81 @@ pre.diff {
   color: var(--bad);
   font-weight: 600;
 }
+
+.warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+textarea {
+  display: block;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  resize: vertical;
+}
+
+textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+input[type="file"] {
+  padding: 6px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+
+.tile-value {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.tile-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.tile-ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.tile-ok .tile-value {
+  color: var(--ok);
+}
+
+.tile-warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.tile-warn .tile-value {
+  color: var(--warn);
+}
+
+.tile-bad {
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+}
+.tile-bad .tile-value {
+  color: var(--bad);
+}

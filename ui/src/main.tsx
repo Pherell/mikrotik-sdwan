@@ -5,10 +5,13 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { App } from "./App";
 import { ApiError } from "./lib/api";
+import { DashboardPage } from "./pages/DashboardPage";
 import { FabricDetailPage } from "./pages/FabricDetailPage";
 import { FabricsPage } from "./pages/FabricsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { PoliciesPage } from "./pages/PoliciesPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { UsersPage } from "./pages/UsersPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SiteDetailPage } from "./pages/SiteDetailPage";
 import { SitesPage } from "./pages/SitesPage";
@@ -34,13 +37,16 @@ createRoot(root).render(
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route element={<App />}>
+            <Route path="/" element={<DashboardPage />} />
             <Route path="/sites" element={<SitesPage />} />
             <Route path="/sites/:siteId" element={<SiteDetailPage />} />
             <Route path="/fabrics" element={<FabricsPage />} />
             <Route path="/fabrics/:fabricId" element={<FabricDetailPage />} />
             <Route path="/policies" element={<PoliciesPage />} />
             <Route path="/jobs" element={<JobsPage />} />
-            <Route path="*" element={<Navigate to="/sites" replace />} />
+            <Route path="/users" element={<UsersPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
       </BrowserRouter>

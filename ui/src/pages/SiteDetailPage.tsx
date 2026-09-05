@@ -1,12 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ApplyPanel } from "../components/ApplyPanel";
+import { DeviceConsole, RollbackPanel } from "../components/DeviceConsole";
+import { SiteSettings } from "../components/SiteSettings";
+import { WanEditor } from "../components/WanEditor";
 import { endpoints } from "../lib/api";
 
 export function SiteDetailPage() {
   const { siteId = "" } = useParams();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
+
+  const me = useQuery({ queryKey: ["me"], queryFn: endpoints.me });
 
   const site = useQuery({
     queryKey: ["site", siteId],
@@ -19,6 +27,14 @@ export function SiteDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["site", siteId] });
       queryClient.invalidateQueries({ queryKey: ["sites"] });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () => endpoints.deleteSite(siteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sites"] });
+      navigate("/sites", { replace: true });
     },
   });
 
@@ -57,6 +73,23 @@ export function SiteDetailPage() {
               {drift.isPending ? "Checking…" : "Check for drift"}
             </button>
           </div>
+          <div style={{ flex: 0 }}>
+            <button onClick={() => setEditing(!editing)}>
+              {editing ? "Close" : "Edit"}
+            </button>
+          </div>
+          {me.data?.role === "admin" && (
+            <div style={{ flex: 0 }}>
+              <button
+                onClick={() => {
+                  if (confirm(`Delete site ${s.name}? This does not remove anything from the device.`))
+                    remove.mutate();
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          )}
         </div>
 
         {s.last_error && <div className="error" style={{ marginTop: 12 }}>{s.last_error}</div>}
@@ -94,45 +127,18 @@ export function SiteDetailPage() {
         </dl>
       </div>
 
+      {remove.isError && <div className="error">{(remove.error as Error).message}</div>}
+
+      {editing && <SiteSettings site={s} onDone={() => setEditing(false)} />}
+
+      <RollbackPanel siteId={s.id} />
+
       <ApplyPanel siteId={s.id} />
 
-      <div className="card">
-        <h2>Uplinks</h2>
-        {s.wans.length === 0 ? (
-          <p className="muted">No uplinks recorded. Probe the device to discover them.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Interface</th>
-                <th>Public IP</th>
-                <th>Gateway</th>
-                <th>Cost</th>
-                <th>Reachability</th>
-              </tr>
-            </thead>
-            <tbody>
-              {s.wans.map((w) => (
-                <tr key={w.id}>
-                  <td>{w.name}</td>
-                  <td>{w.interface}</td>
-                  <td>{w.public_ip ?? <span className="muted">none</span>}</td>
-                  <td className="muted">{w.gateway ?? "—"}</td>
-                  <td>{w.cost}</td>
-                  <td>
-                    {w.dial_out_only ? (
-                      <span className="badge drifted">dial-out only</span>
-                    ) : (
-                      <span className="badge reachable">can accept tunnels</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <WanEditor site={s} />
+
+      <DeviceConsole siteId={s.id} />
+
     </>
   );
 }

@@ -20,14 +20,19 @@ export function App() {
     <div className="layout">
       <header className="topbar">
         <h1>
-          <Link to="/sites" style={{ color: "inherit", textDecoration: "none" }}>
+          <Link to="/" style={{ color: "inherit", textDecoration: "none" }}>
             SD-WAN Controller
           </Link>
         </h1>
+        <Link to="/" className="navlink">Overview</Link>
         <Link to="/sites" className="navlink">Sites</Link>
         <Link to="/fabrics" className="navlink">Fabrics</Link>
         <Link to="/policies" className="navlink">Policies</Link>
         <Link to="/jobs" className="navlink">Jobs</Link>
+        <Link to="/settings" className="navlink">Settings</Link>
+        {user?.role === "admin" && (
+          <Link to="/users" className="navlink">Users</Link>
+        )}
         <span className="spacer" />
         {user && (
           <span className="muted">

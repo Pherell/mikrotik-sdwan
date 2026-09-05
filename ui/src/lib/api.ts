@@ -129,6 +129,7 @@ export interface Site {
   last_seen_at: string | null;
   last_error: string | null;
   has_credentials: boolean;
+  loopback_ip: string | null;
   local_prefixes: string[];
   drift_action: string;
   wans: Wan[];
@@ -297,6 +298,53 @@ export interface Policy {
   fallback: string;
 }
 
+export interface User {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: "admin" | "operator" | "viewer";
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface ArmedRollback {
+  name: string;
+  interval: string | null;
+  next_run: string | null;
+  on_event: string | null;
+}
+
+/** Menus the controller will read straight off a device. Mirrors READABLE_PATHS
+ *  in app/api/v1/sites.py -- anything else is refused server-side. */
+export const DEVICE_MENUS = [
+  "system/resource",
+  "system/identity",
+  "system/package",
+  "system/scheduler",
+  "system/routerboard",
+  "interface",
+  "interface/bridge",
+  "interface/gre",
+  "interface/wireguard",
+  "ip/address",
+  "ip/route",
+  "ip/dhcp-client",
+  "ip/firewall/address-list",
+  "ip/firewall/mangle",
+  "ip/ipsec/active-peers",
+  "ip/ipsec/installed-sa",
+  "ip/ipsec/policy",
+  "ip/ipsec/peer",
+  "ip/ipsec/profile",
+  "ip/ipsec/proposal",
+  "routing/bgp/session",
+  "routing/bgp/connection",
+  "routing/bgp/template",
+  "routing/bgp/network",
+  "routing/table",
+  "tool/netwatch",
+] as const;
+
 export const endpoints = {
   login: (email: string, password: string) =>
     api.post<{ access_token: string; expires_in: number }>("/auth/login", {
@@ -338,4 +386,33 @@ export const endpoints = {
   driftCheck: (siteId: string) => api.post<Job>(`/sites/${siteId}/drift`),
   driftSweep: () => api.post<Job[]>("/drift"),
   exportUrl: () => `${BASE}/intent/export`,
+
+  // -- editing (previously API-only) ---------------------------------------
+  updateSite: (id: string, body: unknown) => api.patch<Site>(`/sites/${id}`, body),
+  updateWan: (siteId: string, wanId: string, body: unknown) =>
+    api.patch<Wan>(`/sites/${siteId}/wans/${wanId}`, body),
+  deleteWan: (siteId: string, wanId: string) =>
+    api.del(`/sites/${siteId}/wans/${wanId}`),
+  updateFabric: (id: string, body: unknown) => api.patch<Fabric>(`/fabrics/${id}`, body),
+  createAppGroup: (body: unknown) => api.post<AppGroup>("/app-groups", body),
+
+  // -- users ---------------------------------------------------------------
+  users: () => api.get<User[]>("/users"),
+  createUser: (body: unknown) => api.post<User>("/users", body),
+  updateUser: (id: string, body: unknown) => api.patch<User>(`/users/${id}`, body),
+
+  // -- device console and rollback recovery --------------------------------
+  deviceRead: (siteId: string, menu: string) =>
+    api.get<Record<string, unknown>[]>(`/sites/${siteId}/device/${menu}`),
+  rollbacks: (siteId: string) => api.get<ArmedRollback[]>(`/sites/${siteId}/rollbacks`),
+  clearRollback: (siteId: string, name: string) =>
+    api.del(`/sites/${siteId}/rollbacks/${encodeURIComponent(name)}`),
+
+  // -- GitOps --------------------------------------------------------------
+  importIntent: (yaml: string, dryRun: boolean) =>
+    request<Record<string, unknown>>(`/intent/import?dry_run=${dryRun}`, {
+      method: "POST",
+      body: yaml,
+      headers: { "Content-Type": "application/yaml" },
+    }),
 };
