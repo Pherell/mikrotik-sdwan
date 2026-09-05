@@ -79,6 +79,10 @@ make secrets      # paste the output into .env
 docker compose up -d --build
 ```
 
+`make secrets` needs `python3` or `openssl`; `make doctor` reports what it can
+find. Only Docker is required for the stack itself — the venv targets are for
+local development.
+
 Open <http://localhost:8080> and sign in with `SDWAN_BOOTSTRAP_ADMIN_EMAIL` and
 `SDWAN_BOOTSTRAP_ADMIN_PASSWORD`. The bootstrap admin is seeded only when the
 user table is empty.

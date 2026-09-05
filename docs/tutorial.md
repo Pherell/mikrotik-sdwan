@@ -61,6 +61,17 @@ SDWAN_BOOTSTRAP_ADMIN_PASSWORD=<generated>
 >
 > `SDWAN_JWT_SECRET` only signs API tokens. Rotating that just logs everyone out.
 
+> **No `make` or no `python3`?** `make secrets` is only a convenience. Generate
+> the four values however you like — this works on any host with openssl:
+>
+> ```bash
+> for k in POSTGRES_PASSWORD SDWAN_SECRET_KEY SDWAN_JWT_SECRET SDWAN_BOOTSTRAP_ADMIN_PASSWORD; do
+>   echo "$k=$(openssl rand -hex 32)"
+> done
+> ```
+>
+> `make doctor` reports which tools it can find.
+
 Bring it up:
 
 ```bash

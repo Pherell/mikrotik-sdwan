@@ -86,6 +86,11 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    environment:
+      # The Caddyfile reads {$SDWAN_DOMAIN}. Without this the variable never
+      # reaches the container, it silently falls back to localhost, and no
+      # certificate is ever provisioned for the real hostname.
+      SDWAN_DOMAIN: ${SDWAN_DOMAIN:-localhost}
     ports:
       - "${HTTP_PORT:-8080}:80"
       - "${HTTPS_PORT:-8443}:443"
