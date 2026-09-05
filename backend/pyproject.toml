@@ -1,0 +1,58 @@
+[project]
+name = "mikrotik-sdwan"
+version = "0.1.0"
+description = "Intent-based SD-WAN controller for MikroTik RouterOS"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic[email]>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "httpx>=0.28",
+    "asyncssh>=2.18",
+    "cryptography>=44.0",
+    "bcrypt>=4.2",
+    "pyjwt>=2.10",
+    "arq>=0.26",
+    "redis>=5.2",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.20",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "aiosqlite>=0.20",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.isort]
+# A local ./alembic directory otherwise shadows the installed package and ruff
+# sorts it as first-party.
+known-third-party = ["alembic"]
+known-first-party = ["app", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# Revision bodies are machine-generated; reformatting them on every autogenerate
+# would produce noise without making them more readable.
+"alembic/versions/*.py" = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

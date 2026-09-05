@@ -1,0 +1,26 @@
+! Route reflector for the SD-WAN overlay.
+!
+! FRR is used here rather than RouterOS because v7's route-reflector support is
+! still rough. Hubs peer with this; spokes are its clients.
+frr defaults traditional
+hostname softhub
+log stdout
+
+router bgp {{ASN}}
+ bgp router-id {{ROUTER_ID}}
+ no bgp ebgp-requires-policy
+ bgp cluster-id {{ROUTER_ID}}
+ ! Spokes have no session with each other, so the reflector is what makes
+ ! spoke-to-spoke routing work at all.
+ neighbor spokes peer-group
+ neighbor spokes remote-as {{ASN}}
+ neighbor spokes route-reflector-client
+ neighbor spokes timers 10 30
+
+ address-family ipv4 unicast
+  neighbor spokes activate
+  ! Advertise everything learned, including between clients.
+  neighbor spokes next-hop-self
+ exit-address-family
+!
+! Peers are appended below by the controller.

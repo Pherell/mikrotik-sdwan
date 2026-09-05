@@ -1,0 +1,35 @@
+# Optional software hub: strongSwan for IPsec, FRR as the BGP route reflector.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.softhub.yml up -d
+#
+# Two reasons to run it:
+#   * a real hub in the cloud without buying a CHR licence;
+#   * a reference route reflector, because FRR's is mature and RouterOS v7's is
+#     still rough.
+services:
+  softhub:
+    build: ./softhub
+    environment:
+      SOFTHUB_ASN: ${SDWAN_ASN:-65000}
+      SOFTHUB_ROUTER_ID: ${SOFTHUB_ROUTER_ID:-10.254.0.254}
+      SOFTHUB_LOOPBACK: ${SOFTHUB_ROUTER_ID:-10.254.0.254}
+    # IPsec and policy routing need to touch the kernel. NET_ADMIN plus the two
+    # sysctls is the minimum -- do not reach for privileged.
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      net.ipv4.ip_forward: 1
+      net.ipv4.conf.all.rp_filter: 0
+      net.ipv4.conf.default.rp_filter: 0
+    ports:
+      - "500:500/udp"
+      - "4500:4500/udp"
+    volumes:
+      - softhub-swanctl:/etc/swanctl/conf.d
+      - softhub-frr:/etc/frr
+    restart: unless-stopped
+
+volumes:
+  softhub-swanctl:
+  softhub-frr:

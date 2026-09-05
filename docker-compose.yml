@@ -1,0 +1,105 @@
+name: mikrotik-sdwan
+
+x-backend-env: &backend-env
+  SDWAN_ENV: ${SDWAN_ENV:-prod}
+  SDWAN_DEBUG: ${SDWAN_DEBUG:-false}
+  SDWAN_DATABASE_URL: postgresql+asyncpg://sdwan:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/sdwan
+  SDWAN_REDIS_URL: redis://redis:6379/0
+  SDWAN_SECRET_KEY: ${SDWAN_SECRET_KEY:?set SDWAN_SECRET_KEY in .env}
+  SDWAN_JWT_SECRET: ${SDWAN_JWT_SECRET:?set SDWAN_JWT_SECRET in .env}
+  SDWAN_BOOTSTRAP_ADMIN_EMAIL: ${SDWAN_BOOTSTRAP_ADMIN_EMAIL:-admin@local}
+  SDWAN_BOOTSTRAP_ADMIN_PASSWORD: ${SDWAN_BOOTSTRAP_ADMIN_PASSWORD:?set SDWAN_BOOTSTRAP_ADMIN_PASSWORD in .env}
+  SDWAN_CORS_ORIGINS: ${SDWAN_CORS_ORIGINS:-http://localhost:8080}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sdwan
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: sdwan
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdwan -d sdwan"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Migrations run once, before api and worker start. Keeping this out of the
+  # api entrypoint means two api replicas cannot race each other on upgrade.
+  migrate:
+    build: ./backend
+    environment: *backend-env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: ./backend
+    environment: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    environment: *backend-env
+    command: ["arq", "app.tasks.worker.WorkerSettings"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./ui
+      args:
+        VITE_API_BASE: /api/v1
+    expose:
+      - "80"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - api
+      - ui
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:

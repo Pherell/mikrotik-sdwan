@@ -1,0 +1,67 @@
+# Three-site SD-WAN fabric on CHR, for verifying that the rendered RouterOS
+# configuration actually establishes.
+#
+#   linux "internet" bridges the three uplinks so the CHRs can reach each other
+#   without any host routing. Each router keeps a second link to a management
+#   bridge that the controller reaches from the host.
+#
+# Requires a CHR image imported as vrnetlab/mikrotik_ros:7.14.3. The free CHR
+# licence caps throughput at 1 Mbps -- fine for control-plane assertions,
+# useless for throughput tests.
+#
+#   sudo clab deploy -t hub-spoke.clab.yml
+#   sudo clab destroy -t hub-spoke.clab.yml --cleanup
+
+name: sdwan
+
+mgmt:
+  network: sdwan-mgmt
+  ipv4-subnet: 172.30.30.0/24
+
+topology:
+  kinds:
+    mikrotik_ros:
+      image: vrnetlab/mikrotik_ros:7.14.3
+      # Enough for RouterOS 7 with IPsec and BGP running.
+      memory: 512Mb
+
+  nodes:
+    hub1:
+      kind: mikrotik_ros
+      mgmt-ipv4: 172.30.30.11
+      startup-config: configs/hub1.rsc
+
+    spoke1:
+      kind: mikrotik_ros
+      mgmt-ipv4: 172.30.30.21
+      startup-config: configs/spoke1.rsc
+
+    spoke2:
+      kind: mikrotik_ros
+      mgmt-ipv4: 172.30.30.22
+      startup-config: configs/spoke2.rsc
+
+    # Shared L2 segment standing in for the internet. The controller treats the
+    # addresses on it as public.
+    internet:
+      kind: bridge
+
+    # Sits between spoke2 and the internet so a test can add loss and latency:
+    #   docker exec clab-sdwan-impair tc qdisc add dev eth1 root netem \
+    #       loss 30% delay 200ms
+    impair:
+      kind: linux
+      image: nicolaka/netshoot:latest
+      exec:
+        - ip link set eth1 up
+        - ip link set eth2 up
+        - ip link add br0 type bridge
+        - ip link set eth1 master br0
+        - ip link set eth2 master br0
+        - ip link set br0 up
+
+  links:
+    - endpoints: ["hub1:eth1", "internet:hub1"]
+    - endpoints: ["spoke1:eth1", "internet:spoke1"]
+    - endpoints: ["spoke2:eth1", "impair:eth1"]
+    - endpoints: ["impair:eth2", "internet:spoke2"]
