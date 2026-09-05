@@ -74,7 +74,8 @@ the API can do is reachable from the browser.
 | [Architecture](docs/architecture.md) | The RouterOS behaviours the design works around, and the bugs that shaped it |
 | [Verification](docs/verification.md) | What is tested, and what still needs real hardware |
 | [Security](SECURITY.md) | Threat model, what is enforced, and the known limitations |
-| [Plan](docs/plan.md) | The original roadmap, M1–M6 |
+| [Plan](docs/plan.md) | The original roadmap, M1–M6 — the data plane |
+| **[Plan v2](docs/plan-v2.md)** | The three pillars: telemetry, provisioning, application awareness — and an MSS-clamping defect that should be fixed first |
 | [Lab](labs/README.md) | containerlab topology and the fabric verifier |
 
 ### Prerequisites on Debian / Ubuntu
