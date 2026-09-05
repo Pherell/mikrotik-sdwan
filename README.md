@@ -61,6 +61,16 @@ degraded path instead of tearing it down, so it recovers on its own.
 - Every state-changing call writes an audit row; every apply writes a job record
   holding the diff, the log, and the outcome.
 
+## Documentation
+
+| | |
+|---|---|
+| **[Tutorial](docs/tutorial.md)** | Start here. Empty install → working fabric with app steering, worked end to end |
+| [Architecture](docs/architecture.md) | The RouterOS behaviours the design works around, and the bugs that shaped it |
+| [Verification](docs/verification.md) | What is tested, and what still needs real hardware |
+| [Plan](docs/plan.md) | The original roadmap, M1–M6 |
+| [Lab](labs/README.md) | containerlab topology and the fabric verifier |
+
 ## Quick start
 
 ```bash
