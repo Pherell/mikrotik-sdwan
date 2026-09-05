@@ -33,6 +33,7 @@ from app.drivers.base import (
     OpKind,
 )
 from app.drivers.coerce import canonical, coerce_row
+from app.drivers.identity import IdentityMismatch
 
 log = logging.getLogger(__name__)
 
@@ -54,8 +55,14 @@ class Ros6SshDriver:
         client_key: str | None = None,
         connect_timeout: float = 10.0,
         read_timeout: float = 30.0,
+        pinned_host_key: str | None = None,
+        pin: bool = True,
     ) -> None:
         self.host = host
+        self._pin = pin
+        self._pinned_host_key = pinned_host_key
+        # Set on first contact so the caller can persist it.
+        self.learned_host_key: str | None = None
         self._port = port
         self._username = username
         self._password = password
@@ -70,10 +77,24 @@ class Ros6SshDriver:
     async def connect(self) -> None:
         if self._conn is not None:
             return
-        options: dict[str, Any] = {
-            "username": self._username,
-            "known_hosts": None,  # device keys are not managed; TOFU is the norm here
-        }
+        options: dict[str, Any] = {"username": self._username}
+
+        if self._pin and self._pinned_host_key:
+            # asyncssh validates this during the handshake, before authentication
+            # -- which is the point. Verifying afterwards would mean the password
+            # had already gone to whoever answered.
+            try:
+                trusted = asyncssh.import_public_key(self._pinned_host_key)
+            except Exception as exc:  # malformed pin is an operator error
+                raise DriverError(
+                    f"{self.host}: stored SSH host key is unreadable ({exc}). "
+                    "Clear the pin on the site to re-learn it."
+                ) from exc
+            options["known_hosts"] = ([trusted], [], [])
+        else:
+            # First contact, or pinning disabled. Trusted blindly -- do this on a
+            # network you trust, then the pin protects every later connection.
+            options["known_hosts"] = None
         if self._client_key:
             options["client_keys"] = [asyncssh.import_private_key(self._client_key)]
         else:
@@ -86,8 +107,21 @@ class Ros6SshDriver:
             )
         except asyncssh.PermissionDenied as exc:
             raise DeviceAuthError(f"{self.host}: authentication rejected") from exc
+        except asyncssh.HostKeyNotVerifiable as exc:
+            raise IdentityMismatch(
+                f"{self.host}: the SSH host key does not match the one pinned for "
+                "this site. If the device was legitimately rebuilt, clear the pin "
+                "and connect again. If it was not, treat this as an active "
+                "interception: this device's credentials should be considered "
+                f"compromised. ({exc})"
+            ) from exc
         except (OSError, asyncssh.Error, TimeoutError) as exc:
             raise DeviceUnreachable(f"{self.host}: cannot connect ({exc})") from exc
+
+        if self._pin and not self._pinned_host_key:
+            key = self._conn.get_server_host_key()
+            if key is not None:
+                self.learned_host_key = key.export_public_key().decode().strip()
 
     async def close(self) -> None:
         if self._conn is not None:

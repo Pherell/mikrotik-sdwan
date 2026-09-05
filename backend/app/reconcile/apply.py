@@ -36,6 +36,12 @@ _SCHEDULER = "/system/scheduler"
 _ROLLBACK_PREFIX = "sdwan-rollback-"
 _BACKUP_PREFIX = "sdwan-pre-"
 
+# Pre-apply backups are full, unencrypted configuration files sitting on the
+# device. Keeping a couple is useful; keeping one per apply forever fills the
+# flash of a small board and leaves years of credentials readable to anyone who
+# gets at the filesystem.
+_KEEP_BACKUPS = 2
+
 
 @dataclass(slots=True)
 class ApplyOutcome:
@@ -129,6 +135,9 @@ async def safe_apply(
         await _disarm(driver, token)
         outcome.rollback_armed = False
         outcome.note("rollback disarmed")
+        pruned = await _prune_backups(driver)
+        if pruned:
+            outcome.note(f"removed {pruned} superseded backup(s)")
     except DriverError as exc:
         # Reachable but disarm failed: the router will roll back a good config.
         # Surface it loudly rather than reporting success.
@@ -200,6 +209,38 @@ async def _verify(driver: DeviceDriver) -> bool:
         log.info("post-apply verification failed: %s", exc)
         return False
     return bool(rows)
+
+
+async def _prune_backups(driver: DeviceDriver) -> int:
+    """Delete all but the most recent pre-apply backups.
+
+    Best effort: a device that will not list or delete files is not a reason to
+    fail an apply that already succeeded, so failures here are swallowed after
+    being logged.
+    """
+    try:
+        files = await driver.read("/file")
+    except DriverError as exc:
+        log.info("could not list files to prune backups: %s", exc)
+        return 0
+
+    ours = sorted(
+        (f for f in files if str(f.get("name", "")).startswith(_BACKUP_PREFIX)),
+        key=lambda f: str(f.get("creation-time", "")),
+    )
+    removed = 0
+    for stale in ours[:-_KEEP_BACKUPS] if len(ours) > _KEEP_BACKUPS else []:
+        item_id = str(stale.get(".id", ""))
+        if not item_id:
+            continue
+        try:
+            result = await driver.apply(
+                [ConfigOp(kind=OpKind.remove, path="/file", item_id=item_id)]
+            )
+            removed += 1 if result.ok else 0
+        except DriverError as exc:  # pragma: no cover - device-specific
+            log.info("could not remove %s: %s", stale.get("name"), exc)
+    return removed
 
 
 async def find_stale_rollbacks(driver: DeviceDriver) -> list[dict]:

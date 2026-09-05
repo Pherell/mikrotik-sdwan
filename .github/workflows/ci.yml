@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a new advisory against a pinned dependency surfaces without
+    # waiting for someone to push.
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is Debian 12 bookworm, the oldest supported. 3.12 is what the
+        # container runs. Both must pass or the support claim is fiction.
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Lint
+        working-directory: backend
+        run: ruff check .
+      - name: Test
+        working-directory: backend
+        run: pytest -q
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install
+        working-directory: ui
+        run: npm ci
+      - name: Typecheck
+        working-directory: ui
+        run: npm run lint
+      - name: Build
+        working-directory: ui
+        run: npm run build
+
+  docker:
+    # The stack has never been run by its author on a machine with Docker.
+    # This at least proves the images build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t sdwan-api ./backend
+      - name: Build UI image
+        run: docker build -t sdwan-ui ./ui
+      - name: Build softhub image
+        run: docker build -t sdwan-softhub ./softhub
+      - name: Validate compose
+        env:
+          POSTGRES_PASSWORD: ci
+          SDWAN_SECRET_KEY: ci-secret-key-at-least-32-characters
+          SDWAN_JWT_SECRET: ci-jwt-secret-at-least-32-characters
+          SDWAN_BOOTSTRAP_ADMIN_PASSWORD: ci
+        run: |
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.softhub.yml config --quiet
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python dependency advisories
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip install -e .
+          # Reported, not fatal: a transitive advisory with no fix available
+          # should not block a security fix from merging.
+          pip-audit --strict || echo "::warning::pip-audit reported findings"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Node dependency advisories
+        working-directory: ui
+        run: npm audit --audit-level=high || echo "::warning::npm audit reported findings"

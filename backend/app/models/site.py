@@ -38,6 +38,12 @@ class Site(Base, UUIDPk, Timestamps, Tenanted):
     ssh_key_enc: Mapped[str | None] = mapped_column(Text)
     verify_tls: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Pinned device identity, learned on first contact. A mismatch afterwards
+    # means either the device was rebuilt or someone is in the middle; the
+    # driver refuses either way and an operator has to clear it deliberately.
+    tls_fingerprint: Mapped[str | None] = mapped_column(String(95))
+    ssh_host_key: Mapped[str | None] = mapped_column(Text)
+
     # --- discovered on probe ----------------------------------------------
     ros_version: Mapped[str | None] = mapped_column(String(32))
     board_name: Mapped[str | None] = mapped_column(String(128))

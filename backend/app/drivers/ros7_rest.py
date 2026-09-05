@@ -27,6 +27,7 @@ from app.drivers.base import (
     OpKind,
 )
 from app.drivers.coerce import coerce_row, encode_payload
+from app.drivers.identity import check_pin, peer_fingerprint
 
 log = logging.getLogger(__name__)
 
@@ -50,8 +51,15 @@ class Ros7RestDriver:
         connect_timeout: float = 10.0,
         read_timeout: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        pinned_fingerprint: str | None = None,
+        pin: bool = True,
     ) -> None:
         self.host = host
+        self._port = port
+        self._pin = pin and transport is None
+        self._pinned = pinned_fingerprint
+        # Set on first contact so the caller can persist it.
+        self.learned_fingerprint: str | None = None
         self.base_url = f"{scheme}://{host}:{port}/rest"
         self._auth = (username, password)
         self._verify = verify_tls
@@ -70,6 +78,19 @@ class Ros7RestDriver:
     # -- lifecycle ---------------------------------------------------------
 
     async def connect(self) -> None:
+        # Check who is answering *before* sending credentials. Doing it after
+        # the first request would mean the password had already been handed to
+        # whoever was on the other end.
+        if self._pin:
+            presented = await peer_fingerprint(
+                self.host, self._port, self._timeout.connect or 10.0
+            )
+            check_pin(
+                self._pinned, presented, what="TLS certificate", host=self.host
+            )
+            if self._pinned is None:
+                self.learned_fingerprint = presented
+
         if self._client is None:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,

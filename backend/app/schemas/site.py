@@ -124,6 +124,10 @@ class SiteUpdate(BaseModel):
     rollback_timeout_seconds: int | None = None
     drift_action: str | None = None
     tags: dict[str, str] | None = None
+    # Set either to null to forget the pinned identity and re-learn it. Do this
+    # only when you know the device was legitimately rebuilt or re-keyed.
+    tls_fingerprint: str | None = None
+    ssh_host_key: str | None = None
 
 
 class SiteRead(SiteBase):
@@ -139,6 +143,10 @@ class SiteRead(SiteBase):
     last_seen_at: str | None = None
     last_error: str | None = None
     has_credentials: bool = False
+    # The pinned device identity. Shown so an operator can compare it against
+    # what the device reports; clearing it re-learns on the next connection.
+    tls_fingerprint: str | None = None
+    has_ssh_host_key: bool = False
     created_at: datetime
     updated_at: datetime
     wans: list[WanRead] = Field(default_factory=list)

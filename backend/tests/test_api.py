@@ -270,3 +270,87 @@ async def test_audit_row_written_for_site_creation(api) -> None:
         actions = [e.action for e in await s.scalars(select(AuditEvent))]
     assert "site.create" in actions
     assert "auth.login" in actions
+
+
+# -- login throttling, end to end -------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_throttle():
+    """The throttle is process-wide; without this, tests leak lockouts into
+    each other and fail in an order-dependent way."""
+    from app.services.throttle import get_throttle
+
+    get_throttle().reset()
+    yield
+    get_throttle().reset()
+
+
+async def test_repeated_failures_are_locked_out(api) -> None:
+    """Unlimited guessing against the service that holds every router
+    credential is not acceptable."""
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+
+    from app.services.throttle import get_throttle
+
+    limit = get_throttle().max_attempts
+
+    for _ in range(limit):
+        resp = await client.post(
+            "/auth/login", json={"email": "admin@example.com", "password": "wrong"}
+        )
+        assert resp.status_code == 401
+
+    blocked = await client.post(
+        "/auth/login", json={"email": "admin@example.com", "password": "wrong"}
+    )
+    assert blocked.status_code == 429
+    assert "Retry-After" in blocked.headers
+
+    # Even the correct password is refused while locked out -- otherwise the
+    # lockout would only slow down an attacker who is already wrong.
+    correct = await client.post(
+        "/auth/login", json={"email": "admin@example.com", "password": "correct-horse"}
+    )
+    assert correct.status_code == 429
+
+
+async def test_a_success_before_the_limit_clears_the_count(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+
+    await client.post("/auth/login", json={"email": "admin@example.com", "password": "no"})
+    await client.post("/auth/login", json={"email": "admin@example.com", "password": "no"})
+    ok = await client.post(
+        "/auth/login", json={"email": "admin@example.com", "password": "correct-horse"}
+    )
+    assert ok.status_code == 200
+
+    # The counter reset, so a fresh mistake is still just a 401.
+    again = await client.post(
+        "/auth/login", json={"email": "admin@example.com", "password": "no"}
+    )
+    assert again.status_code == 401
+
+
+async def test_lockout_is_recorded_in_the_audit_trail(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+
+    from app.services.throttle import get_throttle
+
+    for _ in range(get_throttle().max_attempts + 1):
+        await client.post(
+            "/auth/login", json={"email": "admin@example.com", "password": "wrong"}
+        )
+
+    from sqlalchemy import select
+
+    from app.models import AuditEvent
+
+    async with maker() as s:
+        actions = [e.action for e in await s.scalars(select(AuditEvent))]
+
+    assert "auth.login.failed" in actions
+    assert "auth.login.throttled" in actions

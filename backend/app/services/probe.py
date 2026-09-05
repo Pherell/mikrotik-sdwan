@@ -12,6 +12,7 @@ from ipaddress import ip_address, ip_interface, ip_network
 
 from app.drivers.base import DeviceDriver, DriverError
 from app.drivers.factory import open_driver
+from app.drivers.identity import IdentityMismatch
 from app.models.enums import SiteStatus
 from app.models.site import Site
 from app.schemas.site import ProbeResult, WanCreate
@@ -28,6 +29,10 @@ async def probe_site(site: Site, box: SecretBox | None = None) -> ProbeResult:
         async with open_driver(site, box) as driver:
             caps = await driver.capabilities()
             wans = await _suggest_wans(driver)
+    except IdentityMismatch as exc:
+        # Not a reachability problem: something answered, and it was not the
+        # device this site is pinned to.
+        return ProbeResult(reachable=False, error=str(exc))
     except DriverError as exc:
         return ProbeResult(reachable=False, error=str(exc))
     except Exception as exc:  # pragma: no cover - unexpected transport failure

@@ -20,6 +20,7 @@ from app.api.v1 import sites as sites_api
 from app.config import get_settings
 from app.db import SessionLocal, engine
 from app.drivers.base import DeviceAuthError, DeviceUnreachable, DriverError
+from app.drivers.identity import IdentityMismatch
 from app.models.enums import Role
 from app.models.user import User
 from app.security import hash_password
@@ -91,6 +92,15 @@ def create_app() -> FastAPI:
     @app.exception_handler(DriverError)
     async def _driver(_: Request, exc: DriverError) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=502)
+
+    # A pinned identity that no longer matches is not a transport failure to be
+    # retried. 409 says "the state of the thing you are addressing conflicts
+    # with what you believe", which is exactly the situation.
+    @app.exception_handler(IdentityMismatch)
+    async def _identity(_: Request, exc: IdentityMismatch) -> JSONResponse:
+        return JSONResponse(
+            {"detail": str(exc), "kind": "identity_mismatch"}, status_code=409
+        )
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:

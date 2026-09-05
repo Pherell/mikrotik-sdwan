@@ -10,26 +10,51 @@ from app.deps import CurrentUser, RequireAdmin, SessionDep, write_audit
 from app.models.user import User
 from app.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserRead, UserUpdate
 from app.security import create_access_token, hash_password, verify_password
+from app.services.throttle import get_throttle, throttle_key
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, session: SessionDep, request: Request) -> TokenResponse:
+    throttle = get_throttle()
+    source = request.client.host if request.client else None
+    key = throttle_key(body.email, source)
+
+    if (remaining := throttle.check(key)) > 0:
+        await write_audit(
+            session,
+            actor=None,
+            action="auth.login.throttled",
+            detail={"email": body.email},
+            request=request,
+            commit=True,
+        )
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            f"Too many failed attempts. Try again in {int(remaining)} seconds.",
+            headers={"Retry-After": str(int(remaining) + 1)},
+        )
+
     user = await session.scalar(select(User).where(User.email == body.email))
     # Verify even when the user is missing so the response time does not reveal
     # which addresses exist.
     ok = user is not None and verify_password(body.password, user.password_hash)
     if not ok or user is None or not user.is_active:
+        locked = throttle.record_failure(key)
         await write_audit(
             session,
             actor=None,
             action="auth.login.failed",
-            detail={"email": body.email},
+            detail={"email": body.email, "locked_out_seconds": locked or None},
             request=request,
+            commit=True,
         )
+        # The message never distinguishes a wrong password from a lockout that
+        # has just started, so it cannot be used to probe which accounts exist.
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password")
 
+    throttle.record_success(key)
     await write_audit(session, actor=user, action="auth.login", request=request)
     settings = get_settings()
     return TokenResponse(

@@ -12,7 +12,7 @@ intent.
 controller is down, the fabric keeps forwarding — BGP and netwatch on the routers
 handle convergence.
 
-> Status: **M1–M6 feature-complete**, verified by 269 automated tests that need
+> Status: **M1–M6 feature-complete**, verified by 294 automated tests that need
 > no hardware. What remains is the hardware and containerlab verification marked
 > in [docs/verification.md](docs/verification.md) — the only layer that proves
 > the rendered RouterOS syntax actually establishes. See [the plan](docs/plan.md).
@@ -73,6 +73,7 @@ the API can do is reachable from the browser.
 | **[Tutorial](docs/tutorial.md)** | Start here. Empty install → working fabric with app steering, worked end to end |
 | [Architecture](docs/architecture.md) | The RouterOS behaviours the design works around, and the bugs that shaped it |
 | [Verification](docs/verification.md) | What is tested, and what still needs real hardware |
+| [Security](SECURITY.md) | Threat model, what is enforced, and the known limitations |
 | [Plan](docs/plan.md) | The original roadmap, M1–M6 |
 | [Lab](labs/README.md) | containerlab topology and the fabric verifier |
 
@@ -139,7 +140,7 @@ over SSH.
 
 ```bash
 make install      # backend venv + npm install
-make test         # 269 tests, no hardware needed
+make test         # 294 tests, no hardware needed
 make lint
 make api-dev      # uvicorn on :8000
 make ui-dev       # vite on :5173, proxying /api to :8000
@@ -250,8 +251,14 @@ labs/             containerlab topologies for CI     (M3)
 
 ## Security notes
 
-- `SDWAN_SECRET_KEY` encrypts device credentials. **Changing it makes every
-  stored credential undecryptable.** Rotate deliberately.
+- `SDWAN_SECRET_KEY` encrypts device credentials, via a PBKDF2-derived key.
+  **Changing it makes every stored credential undecryptable.** Rotate
+  deliberately.
+- Device identity is pinned on first contact and enforced afterwards, because
+  RouterOS ships a self-signed certificate and chain validation is not
+  available. Onboard over a network you trust — first contact is the one
+  connection that cannot be verified.
+- Logins are locked out after 5 failures per account and source.
 - `SDWAN_JWT_SECRET` signs API tokens. Rotating it only logs everyone out.
 - Rendered config is redacted through `drivers/redact.py` before it reaches a
   log, a job record, or the UI.

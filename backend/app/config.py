@@ -38,6 +38,20 @@ class Settings(BaseSettings):
     device_connect_timeout: float = 10.0
     device_read_timeout: float = 30.0
     device_verify_tls: bool = False  # RouterOS ships a self-signed cert by default
+
+    # Trust-on-first-use for device identity. RouterOS ships a self-signed
+    # certificate and an unmanaged SSH host key, so chain validation is not
+    # available -- but the identity can still be *pinned*: record it the first
+    # time, refuse to talk to anything else afterwards. Without this, an
+    # attacker who can intercept traffic to a router collects its credentials
+    # and every PSK pushed through it.
+    pin_device_identity: bool = True
+
+    # Login throttling. This is the front door to a service that can decrypt
+    # every router credential you own, so unlimited guessing is not acceptable.
+    login_max_attempts: int = 5
+    login_lockout_seconds: int = 300
+
     rollback_timeout_seconds: int = 120
 
     @field_validator("cors_origins", mode="before")

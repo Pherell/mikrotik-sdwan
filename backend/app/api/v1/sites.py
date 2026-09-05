@@ -27,6 +27,9 @@ router = APIRouter(prefix="/sites", tags=["sites"])
 def _to_read(site: Site) -> SiteRead:
     model = SiteRead.model_validate(site)
     model.has_credentials = bool(site.password_enc or site.ssh_key_enc)
+    # The SSH key itself is never returned -- it is long, and only its presence
+    # is actionable in the UI.
+    model.has_ssh_host_key = bool(site.ssh_host_key)
     model.wans = [
         WanRead.model_validate({**w.__dict__, "dial_out_only": w.dial_out_only})
         for w in site.wans

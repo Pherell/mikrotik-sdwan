@@ -82,9 +82,16 @@ async def write_audit(
     object_id: str | None = None,
     detail: dict | None = None,
     request: Request | None = None,
+    commit: bool = False,
 ) -> None:
     """Append an audit row. Never raises -- an audit failure must not fail the
-    request it is recording, but it is logged."""
+    request it is recording, but it is logged.
+
+    Set ``commit`` when the caller is about to raise. A flushed row is undone by
+    the rollback that the session dependency performs on any exception, so a
+    failed login or a lockout would otherwise leave no trace at all -- losing
+    precisely the events worth auditing.
+    """
     import logging
 
     try:
@@ -101,5 +108,7 @@ async def write_audit(
             )
         )
         await session.flush()
+        if commit:
+            await session.commit()
     except Exception:  # pragma: no cover - defensive
         logging.getLogger(__name__).exception("failed to write audit event %s", action)
