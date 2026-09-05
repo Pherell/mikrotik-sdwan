@@ -1,10 +1,10 @@
 """Application settings, loaded from the environment."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -32,7 +32,16 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str = "admin@local"
     bootstrap_admin_password: str = "changeme"
 
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8080"]
+    # NoDecode is load-bearing, not decoration. Without it pydantic-settings
+    # JSON-decodes any list-typed environment variable *inside the settings
+    # source*, before field validators run -- so a plain
+    # "SDWAN_CORS_ORIGINS=http://localhost:8080" raises a JSONDecodeError at
+    # import and the process never starts. That is the form every deployment
+    # uses, so this broke the whole stack.
+    cors_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:5173",
+        "http://localhost:8080",
+    ]
 
     # Device access defaults. Per-site overrides live on the Site row.
     device_connect_timeout: float = 10.0
@@ -57,8 +66,21 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:
+        """Accept a comma-separated string, which is what an env var carries.
+
+        A JSON list is still accepted, so an existing deployment that wrote one
+        to work around the decoding bug keeps working.
+        """
         if isinstance(v, str):
-            return [o.strip() for o in v.split(",") if o.strip()]
+            text = v.strip()
+            if text.startswith("["):
+                import json
+
+                try:
+                    return json.loads(text)
+                except ValueError:
+                    pass
+            return [o.strip() for o in text.split(",") if o.strip()]
         return v
 
 
