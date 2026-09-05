@@ -133,6 +133,21 @@ Open <http://localhost:8080> and sign in with `admin@local` and the bootstrap
 password. That account is seeded **only when the user table is empty** — changing
 the variable later does nothing.
 
+### The UI at a glance
+
+| Section | What it is for |
+|---|---|
+| **Overview** | Fleet health, anything needing attention, bulk apply, drift sweep |
+| **Sites** | Devices, their uplinks, plan/apply, drift, device console |
+| **Fabrics** | Overlays: transport, topology, members, links, topology graph |
+| **Policies** | Steering rules and SLA profiles |
+| **Jobs** | Every apply, with its diff and log |
+| **Settings** | Export/import intent, application groups |
+| **Users** | Accounts and roles (admin only) |
+
+Everything the API can do is reachable from those pages; the API examples below
+exist because automation needs them, not because the UI is missing anything.
+
 ### Create real accounts
 
 The bootstrap admin is for setup. Make per-person accounts with the least role
@@ -156,6 +171,13 @@ curl -sX POST http://localhost:8080/api/v1/users \
 
 `plan` is deliberately available to `viewer`: reading a diff is how someone
 learns what a change would do without being able to make it.
+
+> **Logins are throttled.** Five failures for the same account from the same
+> address locks that combination out for five minutes, and a `429` is returned
+> with `Retry-After`. The correct password is refused during the lockout too --
+> otherwise it would only slow down someone who is already guessing wrong.
+> Locked out of your own controller? Wait it out, or restart the API container:
+> the counters are in memory and a restart forgives them.
 
 ---
 
@@ -181,12 +203,45 @@ Two things there matter:
 - **Disable `www` and `api`.** The controller only needs `www-ssl`; the others
   are attack surface.
 
-> **A note on TLS.** The controller defaults to `verify_tls: false` because
-> RouterOS ships a self-signed certificate. That means the management connection
-> is encrypted but the device end is *not authenticated*, so an attacker who can
-> intercept traffic to the router sees the credentials and any PSKs pushed
-> through it. If you sign device certificates with your own CA, set
-> `"verify_tls": true` on the site and mount the CA into the API container.
+### How the controller decides it is talking to the right device
+
+RouterOS ships a self-signed certificate and an unmanaged SSH host key, so
+ordinary certificate validation is not available and `verify_tls` defaults to
+off. On its own that would leave the connection encrypted but the far end
+*unauthenticated* — anyone able to intercept traffic to the router would collect
+its credentials and every pre-shared key pushed through it.
+
+So the controller **pins** the device identity instead:
+
+1. On first contact it records the device's TLS certificate fingerprint (or SSH
+   host key, for RouterOS 6) against the site.
+2. Every later connection checks it **before authenticating**. Checking after
+   the handshake would mean the password had already gone to whoever answered.
+3. A mismatch is refused with `409` and both values shown.
+
+You will see the pin appear on the site after the first probe:
+
+```bash
+curl -s $API/sites/$DC1 -H "$AUTH" | jq .tls_fingerprint
+# "3B:1F:...:9C"
+```
+
+> **First contact is trusted blindly.** That is inherent to trust-on-first-use
+> and cannot be avoided without a CA. Onboard devices over a network you trust.
+
+If you legitimately rebuild or re-key a device, clear the pin so it re-learns:
+
+```bash
+curl -sX PATCH $API/sites/$DC1 -H "$AUTH" -H "$JSON"   -d '{"tls_fingerprint": null}'
+```
+
+Do that only when you know why the identity changed. Turn pinning off entirely
+with `SDWAN_PIN_DEVICE_IDENTITY=false` if you must, but then nothing
+authenticates the device end at all.
+
+**Better than any of this:** sign your device certificates with your own CA, set
+`"verify_tls": true` on the site, and mount the CA into the API container. Then
+it is real validation rather than pinning.
 
 ---
 
@@ -914,6 +969,19 @@ pct start <vmid>
 To confirm the cause before touching the host, `systemctl stop apparmor &&
 systemctl restart docker` inside the container will let the build through. That
 is a diagnostic, not a fix — it drops confinement for everything on the box.
+
+**`409` — "the TLS certificate does not match the one pinned for this site"**
+
+Either the device was rebuilt or re-keyed, or something is intercepting traffic
+to it. The message shows both fingerprints. If you know why it changed, clear
+the pin (`{"tls_fingerprint": null}` for RouterOS 7, `{"ssh_host_key": null}`
+for RouterOS 6) and connect again. If you do not know why it changed, treat that
+device's credentials as compromised and rotate them.
+
+**`429` — "Too many failed attempts"**
+
+Five failed logins for that account from that address. Wait for `Retry-After`,
+or restart the API container — the counters are in memory.
 
 **A device rebooted after an apply**
 The rollback fired: the controller could not reach it after the push. The device

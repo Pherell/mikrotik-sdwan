@@ -11,6 +11,17 @@ make test
 Covers coercion, the REST driver against `tests/fakeros/`, WAN discovery,
 auth/RBAC, credential encryption, and that migrations import and apply.
 
+Also, added after each bit them reached a real deployment:
+
+- `test_security.py` — identity pinning, login throttling, key derivation, and
+  that values written under the old derivation still decrypt. Each test names
+  the attack it prevents.
+- `test_config.py` — settings built from the *environment*, the way a container
+  gets them, including the whole compose environment block together. This
+  exists because `SDWAN_CORS_ORIGINS` broke every container while 294 tests
+  passed: none of them set that variable, so the environment source was never
+  exercised and the suite only proved the defaults parse.
+
 ## 2. End-to-end lab (containerlab + CHR)  — from M3
 
 Not yet built. `labs/` will bring up 2 hubs, 3 spokes, and a WAN-impairment
