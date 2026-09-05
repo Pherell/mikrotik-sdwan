@@ -95,6 +95,40 @@ Then check it is alive:
 curl -fsS http://localhost:8080/healthz
 ```
 
+### Serving on an IP instead of a domain
+
+Most installs have no DNS name pointing at the controller. `SDWAN_DOMAIN` takes
+an IP directly:
+
+```ini
+SDWAN_DOMAIN=192.168.1.50
+HTTPS_PORT=8443
+```
+
+Caddy cannot get a public certificate for a bare IP — no CA issues those — so it
+signs one with its own internal CA. The site works at
+`https://192.168.1.50:8443`, and your browser warns once until you trust
+Caddy's root. Export it from the container if you want the warning gone:
+
+```bash
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+```
+
+To skip TLS entirely, prefix the scheme:
+
+```ini
+SDWAN_DOMAIN=http://192.168.1.50
+```
+
+> Prefer the self-signed HTTPS over plain HTTP. This controller can decrypt the
+> credentials of every router you manage. Sending its login in cleartext, even
+> on a management LAN, means anyone on that LAN can take the fleet.
+
+**You do not need to touch `SDWAN_CORS_ORIGINS`.** Caddy serves the UI and
+proxies `/api/*` from the *same* origin, so the browser never makes a
+cross-origin request and the setting has no effect here. It only matters if you
+put a separate frontend on a different host.
+
 Open <http://localhost:8080> and sign in with `admin@local` and the bootstrap
 password. That account is seeded **only when the user table is empty** — changing
 the variable later does nothing.

@@ -1,6 +1,15 @@
 # The controller holds decryptable device credentials, so it is never served
-# over plain HTTP outside a dev loopback. Set SDWAN_DOMAIN to a real hostname
-# and Caddy will provision a certificate automatically.
+# over plain HTTP outside a dev loopback.
+#
+# SDWAN_DOMAIN accepts a hostname, an IP, or an http:// prefix:
+#
+#   sdwan.example.com    public name  -> automatic Let's Encrypt certificate
+#   192.168.1.50         IP or LAN    -> Caddy's internal CA, self-signed
+#   http://192.168.1.50  explicit     -> no TLS at all
+#
+# Note that one origin serves both halves: /api/* is proxied to the API and
+# everything else to the UI. The browser therefore never makes a cross-origin
+# request, so SDWAN_CORS_ORIGINS has no effect on this deployment.
 {$SDWAN_DOMAIN:localhost} {
 	encode gzip
 
