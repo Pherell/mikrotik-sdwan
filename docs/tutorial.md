@@ -970,6 +970,37 @@ To confirm the cause before touching the host, `systemctl stop apparmor &&
 systemctl restart docker` inside the container will let the build through. That
 is a diagnostic, not a fix — it drops confinement for everything on the box.
 
+**`migrate` exits 1 with "password authentication failed for user sdwan"**
+
+Almost always the Postgres volume, not your `.env`. Postgres reads
+`POSTGRES_PASSWORD` **only when it initialises an empty data directory**. Once
+the volume exists the role's password is fixed, and later edits to `.env` are
+ignored — so regenerating secrets after the first `up` leaves the database on
+the old password.
+
+With no data worth keeping:
+
+```bash
+docker compose down -v && docker compose up -d --build
+```
+
+To keep the data, change the role instead:
+
+```bash
+docker compose exec db psql -U postgres -c "ALTER USER sdwan WITH PASSWORD 'the-value-from-your-.env';"
+```
+
+`down` without `-v` does **not** remove volumes, which is why restarting the
+stack never fixes this on its own.
+
+**`docker compose up -d` did not pick up my change**
+
+`up -d` reuses the existing image. Rebuild explicitly:
+
+```bash
+docker compose up -d --build
+```
+
 **`409` — "the TLS certificate does not match the one pinned for this site"**
 
 Either the device was rebuilt or re-keyed, or something is intercepting traffic

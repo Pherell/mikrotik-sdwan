@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
+from app.dberrors import explain
 from app.models import Base  # noqa: F401 -- registers every table on Base.metadata
 
 config = context.config
@@ -46,14 +47,26 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_migrations_online() -> None:
+    url = config.get_main_option("sqlalchemy.url")
     engine = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=NullPool,
     )
-    async with engine.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await engine.dispose()
+    try:
+        async with engine.connect() as connection:
+            await connection.run_sync(do_run_migrations)
+    except Exception as exc:
+        # This is the first thing in the stack to touch the database, so it is
+        # where a misconfigured deployment fails. SQLAlchemy raises through
+        # several layers and the useful sentence lands at the end of a sixty
+        # line traceback; for the failures we recognise, say the actionable
+        # thing instead.
+        if (advice := explain(exc, url)) is not None:
+            raise SystemExit(f"\nmigrate failed.\n\n{advice}\n") from None
+        raise
+    finally:
+        await engine.dispose()
 
 
 if context.is_offline_mode():
