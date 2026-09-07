@@ -150,7 +150,7 @@ export function AddSiteWizard({ onClose }: { onClose: () => void }) {
 
             {adopt.isError && <div className="error">{(adopt.error as Error).message}</div>}
             <div className="row" style={{ marginTop: 16, justifyContent: "flex-start" }}>
-              <div style={{ flex: 0 }}>
+              <div className="no-grow">
                 <button
                   className="primary"
                   disabled={adopt.isPending}
@@ -159,7 +159,7 @@ export function AddSiteWizard({ onClose }: { onClose: () => void }) {
                   {adopt.isPending ? "Adding…" : `Add ${selected.size} uplink(s)`}
                 </button>
               </div>
-              <div style={{ flex: 0 }}>
+              <div className="no-grow">
                 <button onClick={onClose}>Skip</button>
               </div>
             </div>
@@ -234,12 +234,12 @@ export function AddSiteWizard({ onClose }: { onClose: () => void }) {
           Probing only reads; nothing is written to the router.
         </p>
         <div className="row" style={{ justifyContent: "flex-start" }}>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" type="submit" disabled={create.isPending}>
               {create.isPending ? "Creating and probing…" : "Create and probe"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button type="button" onClick={onClose}>
               Cancel
             </button>

@@ -184,12 +184,12 @@ export function SiteSettings({ site, onDone }: { site: Site; onDone: () => void 
         )}
 
         <div className="row" style={{ justifyContent: "flex-start" }}>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" type="submit" disabled={save.isPending}>
               {save.isPending ? "Saving…" : "Save"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button type="button" onClick={onDone}>
               Cancel
             </button>

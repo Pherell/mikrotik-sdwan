@@ -25,7 +25,7 @@ export function DeviceConsole({ siteId }: { siteId: string }) {
     <div className="card">
       <div className="row" style={{ alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>Device console</h2>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button onClick={() => setOpen(!open)}>{open ? "Hide" : "Open"}</button>
         </div>
       </div>
@@ -47,7 +47,7 @@ export function DeviceConsole({ siteId }: { siteId: string }) {
                 ))}
               </select>
             </label>
-            <div style={{ flex: 0, alignSelf: "flex-end" }}>
+            <div className="no-grow" style={{ alignSelf: "flex-end" }}>
               <button onClick={() => rows.refetch()} disabled={rows.isFetching}>
                 {rows.isFetching ? "Reading…" : "Read"}
               </button>

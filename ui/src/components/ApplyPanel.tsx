@@ -41,13 +41,13 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
       <h2>Configuration</h2>
 
       <div className="row" style={{ justifyContent: "flex-start", marginBottom: 12 }}>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button onClick={() => doPlan.mutate()} disabled={doPlan.isPending}>
             {doPlan.isPending ? "Planning…" : "Plan changes"}
           </button>
         </div>
         {plan && !nothingToDo && !blocked && (
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button
               className="primary"
               disabled={doApply.isPending}

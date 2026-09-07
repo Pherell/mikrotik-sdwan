@@ -63,23 +63,23 @@ export function SiteDetailPage() {
           <h2 style={{ margin: 0 }}>
             {s.name} <span className={`badge ${s.status}`}>{s.status}</span>
           </h2>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button onClick={() => probe.mutate()} disabled={probe.isPending}>
               {probe.isPending ? "Probing…" : "Probe device"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button onClick={() => drift.mutate()} disabled={drift.isPending}>
               {drift.isPending ? "Checking…" : "Check for drift"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button onClick={() => setEditing(!editing)}>
               {editing ? "Close" : "Edit"}
             </button>
           </div>
           {me.data?.role === "admin" && (
-            <div style={{ flex: 0 }}>
+            <div className="no-grow">
               <button
                 onClick={() => {
                   if (confirm(`Delete site ${s.name}? This does not remove anything from the device.`))

@@ -110,12 +110,12 @@ function ImportPanel() {
       {run.isError && <div className="error">{(run.error as Error).message}</div>}
 
       <div className="row" style={{ justifyContent: "flex-start" }}>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button onClick={() => run.mutate(true)} disabled={!yaml || run.isPending}>
             Dry run
           </button>
         </div>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button
             className="primary"
             disabled={!yaml || run.isPending}
@@ -148,7 +148,7 @@ function AppGroupsPanel() {
     <div className="card">
       <div className="row" style={{ alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>Application groups</h2>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button onClick={() => setAdding(!adding)}>
             {adding ? "Cancel" : "New group"}
           </button>

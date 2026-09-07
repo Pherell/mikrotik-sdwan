@@ -59,22 +59,32 @@ async function request<T>(
 }
 
 async function readError(resp: Response): Promise<string> {
+  // Read once, as text. An unhandled server exception comes back as Starlette's
+  // plain-text "Internal Server Error", not JSON, so parsing first and falling
+  // back to the status meant the UI rendered the single word "500" with no clue
+  // what had happened. Text first, then try to make sense of it.
+  const raw = await resp.text().catch(() => "");
+
+  let body: unknown;
   try {
-    const body = await resp.json();
-    if (typeof body?.detail === "string") return body.detail;
-    // FastAPI validation errors arrive as a list of per-field objects.
-    if (Array.isArray(body?.detail)) {
-      return body.detail
-        .map((d: { loc?: string[]; msg?: string }) => {
-          const field = d.loc?.slice(1).join(".") ?? "";
-          return field ? `${field}: ${d.msg}` : d.msg;
-        })
-        .join("; ");
-    }
-    return JSON.stringify(body);
+    body = JSON.parse(raw);
   } catch {
-    return `${resp.status} ${resp.statusText}`;
+    // Not JSON. The body itself is the most informative thing available.
+    return raw.trim() || `${resp.status} ${resp.statusText}`.trim();
   }
+
+  const detail = (body as { detail?: unknown })?.detail;
+  if (typeof detail === "string") return detail;
+  // FastAPI validation errors arrive as a list of per-field objects.
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d: { loc?: string[]; msg?: string }) => {
+        const field = d.loc?.slice(1).join(".") ?? "";
+        return field ? `${field}: ${d.msg}` : d.msg;
+      })
+      .join("; ");
+  }
+  return raw.trim() || `${resp.status} ${resp.statusText}`.trim();
 }
 
 export const api = {

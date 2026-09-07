@@ -40,7 +40,7 @@ export function UsersPage() {
       <div className="card">
         <div className="row" style={{ alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>Users</h2>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" onClick={() => setAdding(true)}>
               New user
             </button>
@@ -203,12 +203,12 @@ function NewUserForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =>
         </label>
         <p className="muted">{ROLE_HELP[form.role as User["role"]]}</p>
         <div className="row" style={{ justifyContent: "flex-start" }}>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" type="submit" disabled={create.isPending}>
               {create.isPending ? "Creating…" : "Create"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button type="button" onClick={onCancel}>
               Cancel
             </button>

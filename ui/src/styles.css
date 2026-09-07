@@ -10,6 +10,26 @@
   --warn: #e0a83a;
   --bad: #e5484d;
   --radius: 8px;
+
+  /* Type scale. Headings were 16px against 14px body -- a heading 14% larger
+     than its paragraph is not a heading. */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-title: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+
+  /* Spacing, on 4px. Replaces ad-hoc inline marginTop: 16 and friends. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
   color-scheme: dark;
 }
 
@@ -75,8 +95,16 @@ main {
 }
 
 h2 {
-  font-size: 16px;
-  margin: 0 0 12px;
+  font-size: var(--text-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-3);
+}
+
+h3 {
+  font-size: var(--text-base);
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
 }
 
 label {
@@ -105,14 +133,32 @@ select:focus {
   outline-offset: -1px;
 }
 
+/* Buttons and links had no focus style at all, so keyboard navigation was
+   possible but untraceable on this palette. */
+a:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 button {
-  padding: 8px 14px;
+  padding: var(--space-2) var(--space-4);
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
   cursor: pointer;
+  /* A label is one line. Even if a wrapper is sized wrongly the button keeps
+     its shape instead of collapsing to the width of its longest word. */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--muted);
 }
 
 button.primary {
@@ -122,9 +168,46 @@ button.primary {
   font-weight: 600;
 }
 
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+button.danger {
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+
+button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-color: var(--bad);
+}
+
+button.sm {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+}
+
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Set while a mutation is in flight. The button keeps its width -- a spinner
+   that resizes the control it sits in moves everything next to it. */
+button[data-busy="true"] {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 table {
@@ -185,12 +268,28 @@ th {
 
 .row {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: flex-end;
 }
 
 .row > * {
   flex: 1;
+  min-width: 0;
+}
+
+/*
+ * Size to content; never stretch, never shrink.
+ *
+ * This exists because 44 call sites across 14 files used `flex: 0` to mean
+ * this, and it does not. `flex: 0` is shorthand for `0 1 0%`: basis zero and
+ * shrinking still *allowed*, so the item collapses to the widest unbreakable
+ * word inside it. Every primary button in the app rendered about 67px wide
+ * over two or three lines -- "Check all for drift" came to rest at the width
+ * of "Check". The value meant is `flex: none`, which is `0 0 auto`.
+ */
+.no-grow,
+.row > .no-grow {
+  flex: none;
 }
 
 .login {

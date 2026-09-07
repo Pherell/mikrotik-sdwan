@@ -14,7 +14,7 @@ export function SitesPage() {
       <div className="card">
         <div className="row" style={{ alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>Sites</h2>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" onClick={() => setAdding(true)}>
               Add site
             </button>

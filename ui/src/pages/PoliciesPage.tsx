@@ -41,7 +41,7 @@ export function PoliciesPage() {
       <div className="card">
         <div className="row" style={{ alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>Steering policies</h2>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" onClick={() => setAdding(true)}>
               New policy
             </button>
@@ -160,7 +160,7 @@ function SlaProfiles({ profiles }: { profiles: SlaProfile[] }) {
     <div className="card">
       <div className="row" style={{ alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>SLA profiles</h2>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button onClick={() => setAdding(!adding)}>
             {adding ? "Cancel" : "New profile"}
           </button>
@@ -370,7 +370,7 @@ function NewPolicyForm({
         </p>
 
         <div className="row" style={{ justifyContent: "flex-start" }}>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button
               className="primary"
               type="submit"
@@ -379,7 +379,7 @@ function NewPolicyForm({
               {create.isPending ? "Creating…" : "Create"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button type="button" onClick={onCancel}>
               Cancel
             </button>

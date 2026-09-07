@@ -78,7 +78,7 @@ export function FabricDetailPage() {
       <div className="card">
         <div className="row" style={{ alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{f.name}</h2>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button
               className="primary"
               onClick={() => expand.mutate()}
@@ -87,13 +87,13 @@ export function FabricDetailPage() {
               {expand.isPending ? "Expanding…" : "Recompute links"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button onClick={() => setEditing(!editing)}>
               {editing ? "Close" : "Settings"}
             </button>
           </div>
           {me.data?.role === "admin" && (
-            <div style={{ flex: 0 }}>
+            <div className="no-grow">
               <button
                 onClick={() => {
                   if (
@@ -179,7 +179,7 @@ export function FabricDetailPage() {
                 ))}
               </select>
             </label>
-            <div style={{ flex: 0, alignSelf: "flex-end" }}>
+            <div className="no-grow" style={{ alignSelf: "flex-end" }}>
               <button disabled={!addSiteId} onClick={() => addMember.mutate()}>
                 Add
               </button>

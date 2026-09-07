@@ -179,7 +179,7 @@ function FleetActions({ sites }: { sites: Site[] }) {
     <div className="card">
       <h2>Fleet actions</h2>
       <div className="row" style={{ justifyContent: "flex-start" }}>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button
             className="primary"
             disabled={applyAll.isPending || candidates.length === 0}
@@ -200,11 +200,11 @@ function FleetActions({ sites }: { sites: Site[] }) {
           </button>
         </div>
         {applyAll.isPending && (
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button onClick={() => setStop(true)}>Stop after this one</button>
           </div>
         )}
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button onClick={() => sweep.mutate()} disabled={sweep.isPending}>
             {sweep.isPending ? "Sweeping…" : "Check all for drift"}
           </button>
@@ -283,7 +283,7 @@ function RecentJobs({ jobs, sites }: { jobs: Job[]; sites: Site[] }) {
     <div className="card">
       <div className="row" style={{ alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>Recent activity</h2>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <Link to="/jobs" className="navlink">
             All jobs →
           </Link>

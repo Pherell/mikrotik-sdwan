@@ -19,7 +19,7 @@ export function FabricsPage() {
       <div className="card">
         <div className="row" style={{ alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>Fabrics</h2>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" onClick={() => setAdding(true)}>
               New fabric
             </button>
@@ -174,12 +174,12 @@ function NewFabricForm({
           links exist, because renumbering drops every tunnel on the overlay.
         </p>
         <div className="row" style={{ justifyContent: "flex-start" }}>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button className="primary" type="submit" disabled={create.isPending}>
               {create.isPending ? "Creating…" : "Create"}
             </button>
           </div>
-          <div style={{ flex: 0 }}>
+          <div className="no-grow">
             <button type="button" onClick={onCancel}>
               Cancel
             </button>

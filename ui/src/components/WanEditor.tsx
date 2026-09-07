@@ -29,7 +29,7 @@ export function WanEditor({ site }: { site: Site }) {
     <div className="card">
       <div className="row" style={{ alignItems: "center" }}>
         <h2 style={{ margin: 0 }}>Uplinks</h2>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button onClick={() => setAdding(true)}>Add uplink</button>
         </div>
       </div>
@@ -258,7 +258,7 @@ function WanForm({
       </div>
 
       <div className="row" style={{ justifyContent: "flex-start", gap: 20 }}>
-        <label style={{ flex: 0, whiteSpace: "nowrap" }}>
+        <label className="no-grow" style={{ whiteSpace: "nowrap" }}>
           <input
             type="checkbox"
             style={{ width: "auto", marginRight: 6 }}
@@ -267,7 +267,7 @@ function WanForm({
           />
           Behind NAT
         </label>
-        <label style={{ flex: 0, whiteSpace: "nowrap" }}>
+        <label className="no-grow" style={{ whiteSpace: "nowrap" }}>
           <input
             type="checkbox"
             style={{ width: "auto", marginRight: 6 }}
@@ -276,7 +276,7 @@ function WanForm({
           />
           Dynamic address
         </label>
-        <label style={{ flex: 0, whiteSpace: "nowrap" }}>
+        <label className="no-grow" style={{ whiteSpace: "nowrap" }}>
           <input
             type="checkbox"
             style={{ width: "auto", marginRight: 6 }}
@@ -296,12 +296,12 @@ function WanForm({
       )}
 
       <div className="row" style={{ justifyContent: "flex-start" }}>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button className="primary" type="submit" disabled={save.isPending}>
             {save.isPending ? "Saving…" : wan ? "Save" : "Add"}
           </button>
         </div>
-        <div style={{ flex: 0 }}>
+        <div className="no-grow">
           <button type="button" onClick={onCancel}>
             Cancel
           </button>
