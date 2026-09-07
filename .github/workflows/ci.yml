@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -172,7 +172,7 @@ jobs:
           # Reported, not fatal: a transitive advisory with no fix available
           # should not block a security fix from merging.
           pip-audit --strict || echo "::warning::pip-audit reported findings"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
