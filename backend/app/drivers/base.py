@@ -15,6 +15,10 @@ class OpKind(StrEnum):
     add = "add"
     set = "set"
     remove = "remove"
+    # Reposition an existing row. Firewall chains are evaluated top to bottom,
+    # so for those menus a row in the wrong place is as wrong as a row with the
+    # wrong properties -- and invisible in a property diff.
+    move = "move"
 
 
 # Every row the controller manages carries this prefix in its comment. Rows
@@ -64,6 +68,15 @@ class ConfigSection:
     # Device-populated properties that are not intent and must be ignored when
     # comparing, e.g. counters and dynamic state flags.
     ignore: tuple[str, ...] = ()
+    # Position intent, for menus RouterOS evaluates in order.
+    #
+    # When set, every row this section owns must appear -- in section order --
+    # before the first device row matching this predicate. That is how a NAT
+    # bypass gets above the operator's masquerade rule: appended at the end it
+    # would never match, and the property diff would still read as clean.
+    #
+    # None means position is not managed, which is every other menu.
+    before: dict[str, Any] | None = None
     ordered: bool = False           # firewall/mangle care about position
     order: int = 50                 # apply order; see app.render.engine.ORDER
 
@@ -80,6 +93,8 @@ class ConfigOp:
     props: dict[str, Any] = field(default_factory=dict)
     item_id: str | None = None      # RouterOS .id, resolved just before apply
     comment: str = ""
+    # For add: create the row before this .id. For move: put it there.
+    # None on a move means "to the end of the menu".
     place_before: str | None = None
 
     def redacted(self) -> ConfigOp:

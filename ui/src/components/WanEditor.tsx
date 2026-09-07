@@ -151,6 +151,7 @@ function WanForm({
     bandwidth_mbps: wan?.bandwidth_mbps?.toString() ?? "",
     cost: wan?.cost?.toString() ?? "1",
     enabled: wan?.enabled ?? true,
+    masquerade: wan?.masquerade ?? true,
     tags: Object.keys(wan?.tags ?? {}).join(", "),
   });
 
@@ -167,6 +168,7 @@ function WanForm({
         bandwidth_mbps: form.bandwidth_mbps ? Number(form.bandwidth_mbps) : null,
         cost: Number(form.cost),
         enabled: form.enabled,
+        masquerade: form.masquerade,
         // Stored as a map so a tag can carry a value later; the UI only needs
         // the names, so everything gets "yes".
         tags: Object.fromEntries(
@@ -280,12 +282,29 @@ function WanForm({
           <input
             type="checkbox"
             style={{ width: "auto", marginRight: 6 }}
+            checked={form.masquerade}
+            onChange={(e) => setForm({ ...form, masquerade: e.target.checked })}
+          />
+          NAT outbound traffic
+        </label>
+        <label className="no-grow" style={{ whiteSpace: "nowrap" }}>
+          <input
+            type="checkbox"
+            style={{ width: "auto", marginRight: 6 }}
             checked={form.enabled}
             onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
           />
           Enabled
         </label>
       </div>
+
+      {!form.masquerade && (
+        <p className="muted">
+          Traffic steered onto this uplink will keep its original source address.
+          Correct for private transit — MPLS, a partner link — and wrong for an
+          internet connection, where it will be dropped upstream.
+        </p>
+      )}
 
       {dialOutOnly && (
         <p className="warn">

@@ -896,3 +896,99 @@ async def test_an_sla_profile_in_use_cannot_be_deleted(api) -> None:
 
     assert resp.status_code == 409
     assert "voice" in resp.json()["detail"]
+
+
+# -- firewall ---------------------------------------------------------------
+
+
+async def test_apply_writes_the_nat_bypass_and_input_rules(api) -> None:
+    """Without these an overlay builds and then passes no traffic: the tunnel
+    gets masqueraded on its way out and a default-drop input chain never lets
+    the peer in."""
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _dual_homed_fabric(client, headers)
+
+    await client.post(
+        f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
+    )
+
+    device = routers["203.0.113.1"]
+    nat = [r for r in device.menus["ip/firewall/nat"] if "sdwan:" in str(r.get("comment"))]
+    filt = [
+        r for r in device.menus["ip/firewall/filter"] if "sdwan:" in str(r.get("comment"))
+    ]
+
+    assert any(r["action"] == "accept" for r in nat), nat
+    assert any(r["action"] == "masquerade" for r in nat), nat
+    assert any(r["protocol"] == "ipsec-esp" for r in filt), filt
+
+
+async def test_a_second_apply_leaves_the_firewall_alone(api) -> None:
+    """Position is diffed now, so an ordering bug would show up here as a plan
+    that never empties."""
+    client, _, _ = api
+    headers = await _auth(client)
+    _, sites = await _dual_homed_fabric(client, headers)
+
+    await client.post(
+        f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
+    )
+    plan = (await client.post(f"/sites/{sites['spoke1']}/plan", headers=headers)).json()
+
+    assert plan["empty"] is True, plan["text"]
+
+
+async def test_an_uplink_with_masquerade_off_gets_no_nat_rule(api) -> None:
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _dual_homed_fabric(client, headers)
+
+    site = (await client.get(f"/sites/{sites['spoke1']}", headers=headers)).json()
+    for wan in site["wans"]:
+        await client.patch(
+            f"/sites/{sites['spoke1']}/wans/{wan['id']}",
+            headers=headers,
+            json={"masquerade": False},
+        )
+    await client.post(
+        f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
+    )
+
+    device = routers["203.0.113.1"]
+    masq = [
+        r
+        for r in device.menus["ip/firewall/nat"]
+        if "sdwan:" in str(r.get("comment")) and r["action"] == "masquerade"
+    ]
+    assert masq == []
+
+
+async def test_the_operators_own_firewall_rules_are_never_touched(api) -> None:
+    """The anchor is read, not managed. This is the whole ownership model."""
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _dual_homed_fabric(client, headers)
+
+    device = routers["203.0.113.1"]
+    device.menus["ip/firewall/nat"].append(
+        {
+            ".id": "*900",
+            "chain": "srcnat",
+            "action": "masquerade",
+            "out-interface": "ether1",
+            "comment": "put here by a human",
+        }
+    )
+    device.menus["ip/firewall/filter"].append(
+        {".id": "*901", "chain": "input", "action": "drop", "comment": "theirs too"}
+    )
+
+    await client.post(
+        f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
+    )
+
+    assert any(
+        r.get("comment") == "put here by a human" for r in device.menus["ip/firewall/nat"]
+    )
+    assert any(r.get("comment") == "theirs too" for r in device.menus["ip/firewall/filter"])

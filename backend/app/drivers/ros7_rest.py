@@ -225,6 +225,15 @@ class Ros7RestDriver:
                 if not op.item_id:
                     raise DriverError(f"remove on {op.path} without an item id")
                 await self._request("DELETE", f"{op.path}/{op.item_id}")
+            case OpKind.move:
+                if not op.item_id:
+                    raise DriverError(f"move on {op.path} without an item id")
+                # RouterOS exposes move as a command on the menu, not as a
+                # property of the row. Omitting destination moves to the end.
+                body: dict[str, Any] = {".id": op.item_id}
+                if op.place_before:
+                    body["destination"] = op.place_before
+                await self._request("POST", f"{op.path}/move", json=body)
 
     async def capabilities(self) -> DeviceCaps:
         if self._caps is not None:

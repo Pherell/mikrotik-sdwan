@@ -32,6 +32,9 @@ class WanBase(BaseModel):
     bandwidth_mbps: int | None = Field(default=None, ge=1)
     cost: float = 1.0
     enabled: bool = True
+    # NAT traffic leaving on this uplink. True for an internet connection;
+    # false for private transit, where NAT would break the far end.
+    masquerade: bool = True
     tags: dict[str, str] = Field(default_factory=dict)
 
     _check_public_ip = field_validator("public_ip")(_valid_ip)
@@ -55,6 +58,7 @@ class WanUpdate(BaseModel):
     bandwidth_mbps: int | None = None
     cost: float | None = None
     enabled: bool | None = None
+    masquerade: bool | None = None
     tags: dict[str, str] | None = None
 
 

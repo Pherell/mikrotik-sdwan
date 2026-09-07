@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import true as sa_true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -98,6 +99,16 @@ class Wan(Base, UUIDPk, Timestamps):
     bandwidth_mbps: Mapped[int | None] = mapped_column(Integer)
     cost: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Whether the controller should NAT traffic leaving on this uplink.
+    #
+    # Steering routes traffic out an interface the site's own firewall was
+    # never written for, so without a masquerade rule matching it the packets
+    # leave with a private source and die at the first upstream router. True
+    # for an internet uplink; false for private transit -- MPLS, a partner
+    # link -- where NAT would break the far end.
+    masquerade: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=sa_true()
+    )
     tags: Mapped[dict | None] = mapped_column(JSONCol, default=dict)
 
     site: Mapped[Site] = relationship(back_populates="wans")

@@ -117,6 +117,7 @@ export interface Wan {
   bandwidth_mbps: number | null;
   cost: number;
   enabled: boolean;
+  masquerade: boolean;
   dial_out_only: boolean;
   tags: Record<string, string>;
 }

@@ -236,6 +236,13 @@ class Ros6SshDriver:
                 if not op.item_id:
                     raise DriverError(f"remove on {op.path} without an item id")
                 return f"/{menu} remove {op.item_id}"
+            case OpKind.move:
+                if not op.item_id:
+                    raise DriverError(f"move on {op.path} without an item id")
+                where = (
+                    f" destination={_quote(op.place_before)}" if op.place_before else ""
+                )
+                return f"/{menu} move numbers={op.item_id}{where}"
         raise DriverError(f"unsupported op {op.kind}")
 
     async def capabilities(self) -> DeviceCaps:

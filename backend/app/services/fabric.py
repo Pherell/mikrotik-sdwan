@@ -24,6 +24,7 @@ from app.models.site import Site, Wan
 from app.reconcile.merge import merge_sections
 from app.render.engine import ORDER
 from app.render.fabric import SiteFabricView, render_fabric
+from app.render.firewall import FirewallView, UplinkNat, render_firewall
 from app.render.policy import PathOption, SitePolicyView, render_policies
 from app.render.site import render_site
 from app.security import SecretBox
@@ -154,6 +155,14 @@ async def render_device(session: AsyncSession, site: Site) -> list[ConfigSection
         by_fabric.setdefault(link.fabric_id, []).append(link)
 
     box = SecretBox()
+    firewall = FirewallView(
+        site_name=site.name,
+        uplinks=[
+            UplinkNat(interface=w.interface, masquerade=w.masquerade)
+            for w in site.wans
+            if w.enabled
+        ],
+    )
     for fabric_id, fabric_links in by_fabric.items():
         fabric = await load_fabric(session, fabric_id)
         if fabric is None or not fabric.enabled:
@@ -162,7 +171,17 @@ async def render_device(session: AsyncSession, site: Site) -> list[ConfigSection
         view = await _site_fabric_view(session, site, fabric, fabric_links, box)
         if view.links:
             sections.extend(render_fabric(view, transport))
+            # A peer with no address dials out and needs no inbound rule; there
+            # is also nothing to write on the NAT bypass for it.
+            peers = firewall.peers_by_transport.setdefault(fabric.transport, set())
+            peers.update(
+                link.remote.public_ip for link in view.links if link.remote.public_ip
+            )
+            port = (fabric.transport_params or {}).get("listen_port")
+            if port:
+                firewall.wireguard_ports.add(str(port))
 
+    sections.extend(render_firewall(firewall))
     sections.extend(render_policies(await policy_view(session, site)))
 
     return merge_sections(sections)

@@ -77,6 +77,13 @@ class FakeRouterOS:
                 {"name": "security", "version": version.split()[0], "disabled": False},
             ],
         }
+        # Menus every RouterOS has, empty until something is added to them.
+        # Without these the firewall sections read as 404 and the reconciler
+        # correctly refuses to apply -- which is right behaviour against a
+        # device that genuinely lacks a menu, and wrong as a model of a real
+        # router, where /ip/firewall/nat always exists.
+        for always_present in ("ip/firewall/nat", "ip/firewall/filter"):
+            self.menus[always_present] = []
         if wireguard:
             self.menus["interface/wireguard"] = []
         for path, rows in (menus or {}).items():
