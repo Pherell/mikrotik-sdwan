@@ -193,6 +193,11 @@ export function FabricDetailPage() {
 
       <div className="card">
         <h2>Links</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Computed from this fabric's members and topology — there is no button to add
+          one, and editing them by hand is not a thing. Change who is a member, or the
+          topology, and recompute.
+        </p>
         {(links.data ?? []).length === 0 ? (
           <p className="muted">
             No links yet. Recompute to build them from the topology, then apply each

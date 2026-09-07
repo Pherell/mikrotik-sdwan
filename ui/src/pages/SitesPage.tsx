@@ -28,7 +28,10 @@ export function SitesPage() {
         {sites.isError && <div className="error">{(sites.error as Error).message}</div>}
         {sites.data?.length === 0 && (
           <p className="muted">
-            No sites yet. Add one to probe a RouterOS device and discover its uplinks.
+            No sites yet. A site is one location and the RouterOS device that serves
+            it. Add one and the controller connects, reads its version and interfaces,
+            and works out which of them are uplinks — everything else is built on top
+            of these.
           </p>
         )}
         {sites.data && sites.data.length > 0 && (

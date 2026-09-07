@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
+import { GettingStarted } from "../components/GettingStarted";
+import { HowItWorks } from "../components/HowItWorks";
 import { endpoints, type Job, type Site } from "../lib/api";
 
 /**
@@ -21,6 +23,7 @@ export function DashboardPage() {
     queryFn: () => endpoints.jobs(),
     refetchInterval: 15_000,
   });
+  const fabrics = useQuery({ queryKey: ["fabrics"], queryFn: endpoints.fabrics });
 
   const all = sites.data ?? [];
   const byStatus = count(all.map((s) => s.status));
@@ -29,6 +32,27 @@ export function DashboardPage() {
     (s) => s.status === "unreachable" || s.status === "error",
   );
   const armed = (jobs.data ?? []).filter((j) => j.rollback_token);
+
+  // The checklist stays until the fleet has actually been configured once, not
+  // until the first site exists -- otherwise it disappears the moment step one
+  // is done and its ticks are never seen.
+  const hasApplied = (jobs.data ?? []).some(
+    (j) => j.kind === "apply" && j.state === "succeeded",
+  );
+  const setUp = sites.isLoading || hasApplied;
+
+  if (!sites.isLoading && all.length === 0) {
+    return (
+      <>
+        <GettingStarted
+          sites={all}
+          fabrics={fabrics.data ?? []}
+          jobs={jobs.data ?? []}
+        />
+        <HowItWorks />
+      </>
+    );
+  }
 
   return (
     <>
@@ -62,6 +86,14 @@ export function DashboardPage() {
           tone={armed.length ? "bad" : undefined}
         />
       </div>
+
+      {!setUp && (
+        <GettingStarted
+          sites={all}
+          fabrics={fabrics.data ?? []}
+          jobs={jobs.data ?? []}
+        />
+      )}
 
       <FleetActions sites={all} />
 

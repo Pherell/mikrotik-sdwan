@@ -72,7 +72,11 @@ export function PoliciesPage() {
       <div className="card">
         {policies.isLoading && <p className="muted">Loading…</p>}
         {policies.data?.length === 0 && (
-          <p className="muted">No policies. All traffic follows the routing table.</p>
+          <p className="muted">
+            No policies yet, so every packet follows the device's own routing table. A
+            policy overrides that for traffic you name: prefer this uplink, and move to
+            the next one when it degrades past a threshold.
+          </p>
         )}
         {policies.data && policies.data.length > 0 && (
           <table>

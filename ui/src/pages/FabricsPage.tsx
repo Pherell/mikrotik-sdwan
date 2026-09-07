@@ -42,8 +42,10 @@ export function FabricsPage() {
         {fabrics.isError && <div className="error">{(fabrics.error as Error).message}</div>}
         {fabrics.data?.length === 0 && (
           <p className="muted">
-            No fabrics yet. A fabric is one overlay: a transport, a topology, and the
-            sites that take part.
+            No fabrics yet. A fabric joins your sites to each other over whatever
+            internet they have. You choose which sites take part and how they connect
+            — IPsec, WireGuard, plain GRE — and the controller works out every tunnel,
+            allocates the addresses and generates the keys.
           </p>
         )}
         {fabrics.data && fabrics.data.length > 0 && (

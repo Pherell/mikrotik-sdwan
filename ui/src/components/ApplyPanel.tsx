@@ -39,6 +39,14 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
   return (
     <div className="card">
       <h2>Configuration</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        <strong>Plan</strong> reads the device and shows the exact difference between
+        what it runs and what your configuration says. Nothing is written.{" "}
+        <strong>Apply</strong> saves a backup on the device, schedules it to restore
+        that backup shortly, pushes the change, then reconnects to confirm management
+        still works and cancels the restore. If it cannot reconnect, the device rolls
+        itself back and reboots.
+      </p>
 
       <div className="row" style={{ justifyContent: "flex-start", marginBottom: 12 }}>
         <div className="no-grow">

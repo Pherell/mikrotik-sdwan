@@ -866,3 +866,113 @@ input[type="file"] {
   background: var(--surface-2);
   border-radius: 0 6px 6px 0;
 }
+
+/* -- getting started ------------------------------------------------------ */
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+}
+
+.step:first-child {
+  border-top: none;
+}
+
+.step-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.step.done .step-mark {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-title {
+  font-weight: 600;
+}
+
+.step.done .step-title {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.step-what {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  margin-top: 2px;
+  max-width: 78ch;
+}
+
+.step-cta {
+  white-space: nowrap;
+}
+
+/* -- how it works --------------------------------------------------------- */
+
+.pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.pipeline-node {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pipe {
+  font-weight: 600;
+}
+
+/* Links are computed, not authored. A dashed edge says so before the text does. */
+.pipe.derived {
+  border-style: dashed;
+}
+
+.pipe.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.pipe-arrow {
+  color: var(--muted);
+}
+
+.pipe-detail,
+.pipe-hint {
+  border-left: 2px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.pipe-detail {
+  border-left-color: var(--accent);
+}
