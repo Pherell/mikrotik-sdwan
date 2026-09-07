@@ -1157,3 +1157,151 @@ tr.selected {
     }
   }
 }
+
+/* -- narrow screens: tables ------------------------------------------------ */
+
+/*
+ * Two treatments, on purpose.
+ *
+ * The list pages -- sites, jobs, users -- are what someone opens on a phone to
+ * answer "is everything up?", so their rows stack into cards with the column
+ * name beside each value. That needs a data-label on every cell, which is why
+ * it is not applied to all thirteen tables in the app.
+ *
+ * Everything else scrolls sideways inside its own box. A six-column diff or a
+ * link matrix is not readable stacked either, and a scrollbar is honest about
+ * that where a reflow would just be slower to give up on.
+ */
+
+@media (max-width: 720px) {
+  table:not(.stack) {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  table.stack,
+  table.stack tbody,
+  table.stack tr,
+  table.stack td {
+    display: block;
+    width: 100%;
+  }
+
+  table.stack thead {
+    /* Hidden from sight, kept for screen readers via the cell labels below. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  table.stack tr {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--space-2);
+    margin-bottom: var(--space-3);
+    background: var(--surface-2);
+  }
+
+  table.stack tr.selected {
+    border-color: var(--accent);
+  }
+
+  table.stack td {
+    display: flex;
+    gap: var(--space-3);
+    align-items: baseline;
+    border-bottom: none;
+    padding: var(--space-1) var(--space-2);
+  }
+
+  table.stack td::before {
+    content: attr(data-label);
+    flex: none;
+    width: 96px;
+    color: var(--muted);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* The checkbox column has no useful label and should sit at the top right. */
+  table.stack td.tick {
+    justify-content: flex-end;
+    padding-bottom: 0;
+  }
+
+  table.stack td.tick::before {
+    content: none;
+  }
+}
+
+/* -- accessibility -------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 50;
+  padding: var(--space-2) var(--space-4);
+  background: var(--accent);
+  color: #08101f;
+  font-weight: 600;
+  border-radius: 0 0 var(--radius) 0;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+.shortcuts-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgb(0 0 0 / 55%);
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+
+.shortcuts {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+  max-width: 420px;
+  width: 100%;
+}
+
+.shortcuts dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.shortcuts dt {
+  white-space: nowrap;
+}
+
+.shortcuts dd {
+  margin: 0;
+  color: var(--muted);
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font:
+    12px/1.6 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}

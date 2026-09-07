@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { ArmedIndicator } from "./components/ArmedIndicator";
+import { Shortcuts } from "./components/Shortcuts";
 import { MobileBar, Sidebar, readCollapsed, writeCollapsed } from "./components/Sidebar";
 import { endpoints, getToken, setToken } from "./lib/api";
 import "./styles.css";
@@ -34,6 +35,12 @@ export function App() {
 
   return (
     <div className="layout" data-collapsed={collapsed}>
+      {/* First tab stop on the page: 240px of navigation is a lot to walk
+          through with a keyboard before reaching the thing you came for. */}
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+      <Shortcuts onEscape={() => setMobileOpen(false)} />
       <Sidebar
         user={user}
         collapsed={collapsed}
@@ -48,7 +55,7 @@ export function App() {
       <div className="content">
         <MobileBar onOpen={() => setMobileOpen(true)} />
         <ArmedIndicator />
-        <main>
+        <main id="main" tabIndex={-1}>
           <Outlet />
         </main>
       </div>

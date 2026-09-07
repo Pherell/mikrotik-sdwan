@@ -69,7 +69,7 @@ export function UsersPage() {
         {users.isError && <div className="error">{(users.error as Error).message}</div>}
         {update.isError && <div className="error">{(update.error as Error).message}</div>}
         {users.data && (
-          <table>
+          <table className="stack">
             <thead>
               <tr>
                 <th>Email</th>
@@ -81,12 +81,12 @@ export function UsersPage() {
             <tbody>
               {users.data.map((u) => (
                 <tr key={u.id}>
-                  <td>
+                  <td data-label="Email">
                     {u.email}
                     {u.id === me.data?.id && <span className="muted"> · you</span>}
                   </td>
-                  <td className="muted">{u.full_name ?? "—"}</td>
-                  <td>
+                  <td className="muted" data-label="Name">{u.full_name ?? "—"}</td>
+                  <td data-label="Role">
                     <select
                       value={u.role}
                       onChange={(e) =>
@@ -98,7 +98,7 @@ export function UsersPage() {
                       <option value="admin">admin</option>
                     </select>
                   </td>
-                  <td>
+                  <td data-label="Active">
                     <input
                       type="checkbox"
                       style={{ width: "auto" }}

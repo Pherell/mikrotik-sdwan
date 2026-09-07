@@ -54,7 +54,7 @@ export function SitesPage() {
           </p>
         )}
         {sites.data && sites.data.length > 0 && (
-          <table>
+          <table className="stack">
             <thead>
               <tr>
                 <th className="tick">
@@ -111,17 +111,17 @@ function SiteRow({
           onChange={onToggle}
         />
       </td>
-      <td>
+      <td data-label="Name">
         <Link to={`/sites/${site.id}`}>{site.name}</Link>
         {site.region && <div className="muted">{site.region}</div>}
       </td>
-      <td>{site.role}</td>
-      <td className="muted">{site.mgmt_host}</td>
-      <td>
+      <td data-label="Role">{site.role}</td>
+      <td className="muted" data-label="Management">{site.mgmt_host}</td>
+      <td data-label="RouterOS">
         {site.ros_version ?? <span className="muted">unknown</span>}
         {site.board_name && <div className="muted">{site.board_name}</div>}
       </td>
-      <td>
+      <td data-label="Uplinks">
         {site.wans.length === 0 ? (
           <span className="muted">none</span>
         ) : (
@@ -133,7 +133,7 @@ function SiteRow({
           ))
         )}
       </td>
-      <td>
+      <td data-label="Status">
         <span className={`badge ${site.status}`}>{site.status}</span>
       </td>
     </tr>

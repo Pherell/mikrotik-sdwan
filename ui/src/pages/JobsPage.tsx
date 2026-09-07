@@ -23,7 +23,7 @@ export function JobsPage() {
           <p className="muted">Nothing has been applied yet.</p>
         )}
         {jobs.data && jobs.data.length > 0 && (
-          <table>
+          <table className="stack">
             <thead>
               <tr>
                 <th>When</th>
@@ -62,18 +62,20 @@ function JobRow({
   return (
     <>
       <tr>
-        <td className="muted">{new Date(job.created_at).toLocaleString()}</td>
-        <td>{job.kind}</td>
-        <td>
+        <td className="muted" data-label="When">
+          {new Date(job.created_at).toLocaleString()}
+        </td>
+        <td data-label="Kind">{job.kind}</td>
+        <td data-label="State">
           <span className={`badge ${job.state === "succeeded" ? "reachable" : job.state === "rolled_back" ? "drifted" : "unreachable"}`}>
             {job.state}
           </span>
         </td>
-        <td className="muted">
+        <td className="muted" data-label="Changes">
           {String(job.result?.applied ?? 0)} applied
           {job.rollback_token ? " · rollback armed" : ""}
         </td>
-        <td>
+        <td data-label="">
           <button onClick={onToggle}>{open ? "Hide" : "Details"}</button>
         </td>
       </tr>
