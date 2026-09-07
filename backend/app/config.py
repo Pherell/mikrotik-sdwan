@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from app.schemas.email import AccountEmail
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -28,8 +30,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 60 * 12
 
-    # Seeded on first boot when the user table is empty.
-    bootstrap_admin_email: str = "admin@local"
+    # Seeded on first boot when the user table is empty. Validated with the
+    # same type the login form uses, so a value that could never log in fails
+    # at startup with a reason rather than seeding an unusable account.
+    bootstrap_admin_email: AccountEmail = "admin@local"
     bootstrap_admin_password: str = "changeme"
 
     # NoDecode is load-bearing, not decoration. Without it pydantic-settings

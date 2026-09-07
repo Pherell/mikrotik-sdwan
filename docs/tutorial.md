@@ -970,6 +970,14 @@ If the warning has *no* "proceed anyway" button, HSTS is pinned for that name.
 Set `SDWAN_HSTS_MAX_AGE=0`, restart, and clear the pin in the browser
 (`chrome://net-internals/#hsts` deletes it for one host).
 
+**Sign in says "value is not a valid email address"**
+Fixed — pull and rebuild. The default admin is `admin@local`, and the login
+schema used to validate it as a *deliverable internet address*: `.local` is
+reserved under RFC 6762, so the stack seeded an account it then refused to
+authenticate. Account identifiers are now validated as identifiers, so local
+and single-label domains work. Your existing `admin@local` row is fine and
+needs no re-seeding.
+
 **`docker compose ps` shows the worker as `unhealthy`**
 Fixed — but if you are on an older checkout, that is cosmetic. All three
 backend containers share one image, and the image's healthcheck polls the API's

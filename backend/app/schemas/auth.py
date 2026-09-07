@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import Role
+from app.schemas.email import AccountEmail
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: AccountEmail
     password: str = Field(repr=False)
 
 
@@ -21,7 +22,7 @@ class TokenResponse(BaseModel):
 
 
 class UserCreate(BaseModel):
-    email: EmailStr
+    email: AccountEmail
     password: str = Field(min_length=8, repr=False)
     full_name: str | None = None
     role: Role = Role.viewer
@@ -40,7 +41,10 @@ class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    email: EmailStr
+    # Deliberately unvalidated: this renders a row that is already stored and
+    # already normalised. Re-validating on the way out turns any address the
+    # rules no longer like into a 500 on a plain GET.
+    email: str
     full_name: str | None
     role: Role
     is_active: bool
