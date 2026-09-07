@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from app.deps import RequireAdmin, RequireOperator, RequireViewer, SessionDep, write_audit
 from app.drivers.factory import open_driver
 from app.models.site import Site, Wan
+from app.schemas.ports import PortRead
 from app.schemas.site import (
     ProbeResult,
     SiteCreate,
@@ -19,6 +20,7 @@ from app.schemas.site import (
     WanUpdate,
 )
 from app.security import SecretBox
+from app.services.ports import read_ports
 from app.services.probe import apply_probe, probe_site
 
 router = APIRouter(prefix="/sites", tags=["sites"])
@@ -261,6 +263,8 @@ READABLE_PATHS = frozenset(
         "system/routerboard",
         "interface",
         "interface/bridge",
+        "interface/bridge/port",
+        "interface/ethernet",
         "interface/gre",
         "interface/wireguard",
         "ip/address",
@@ -285,6 +289,20 @@ READABLE_PATHS = frozenset(
 
 # Properties to strip from a passthrough response even on an allowed path.
 _SENSITIVE = frozenset({"secret", "private-key", "password", "ipsec-secret", "preshared-key"})
+
+
+@router.get("/{site_id}/ports", response_model=list[PortRead])
+async def list_ports(
+    site_id: str, session: SessionDep, _: RequireViewer
+) -> list[PortRead]:
+    """The device's interfaces, classified and ready to draw.
+
+    Read-only, and a viewer may run it: it changes nothing and answers the
+    question people otherwise answer by walking to the rack.
+    """
+    site = await _get_or_404(session, site_id)
+    async with open_driver(site) as driver:
+        return await read_ports(driver, site)
 
 
 @router.get("/{site_id}/device/{device_path:path}")

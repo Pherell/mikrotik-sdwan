@@ -355,6 +355,28 @@ export const DEVICE_MENUS = [
   "tool/netwatch",
 ] as const;
 
+export type PortRole = "wan" | "lan" | "unused" | "bridge" | "tunnel" | "other";
+
+export interface Port {
+  name: string;
+  type: string;
+  running: boolean;
+  disabled: boolean;
+  comment: string | null;
+  mac: string | null;
+  mtu: number | null;
+  speed: string | null;
+  default_name: string | null;
+  addresses: string[];
+  rx_bytes: number | null;
+  tx_bytes: number | null;
+  bridge: string | null;
+  role: PortRole;
+  wan_name: string | null;
+  wan_enabled: boolean | null;
+  managed: boolean;
+}
+
 export const endpoints = {
   login: (email: string, password: string) =>
     api.post<{ access_token: string; expires_in: number }>("/auth/login", {
@@ -367,6 +389,7 @@ export const endpoints = {
   createSite: (body: unknown) => api.post<Site>("/sites", body),
   deleteSite: (id: string) => api.del(`/sites/${id}`),
   probe: (id: string) => api.post<ProbeResult>(`/sites/${id}/probe`),
+  ports: (id: string) => api.get<Port[]>(`/sites/${id}/ports`),
   addWan: (siteId: string, body: unknown) => api.post<Wan>(`/sites/${siteId}/wans`, body),
   plan: (siteId: string) => api.post<Plan>(`/sites/${siteId}/plan`),
   apply: (siteId: string, body: { confirm?: boolean; dry_run?: boolean }) =>

@@ -679,3 +679,190 @@ input[type="file"] {
 .tile-bad .tile-value {
   color: var(--bad);
 }
+
+/* -- port panel ----------------------------------------------------------- */
+
+.port-faceplate {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+.port {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 72px;
+  padding: var(--space-2) var(--space-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* The socket, drawn as the notched rectangle on the front of the box. Fill
+   means a link is up; an outline means the cable is out. */
+.port-socket {
+  width: 26px;
+  height: 16px;
+  border-radius: 2px;
+  border: 1.5px solid var(--muted);
+  position: relative;
+}
+
+.port-socket::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  transform: translateX(-50%);
+  width: 8px;
+  height: 4px;
+  border: 1.5px solid var(--muted);
+  border-top: none;
+  border-radius: 0 0 2px 2px;
+}
+
+.port-up.port-wan .port-socket,
+.port-up.port-wan .port-socket::after {
+  border-color: var(--accent);
+}
+.port-up.port-wan .port-socket {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.port-up.port-lan .port-socket,
+.port-up.port-lan .port-socket::after {
+  border-color: var(--ok);
+}
+.port-up.port-lan .port-socket {
+  background: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+.port-off .port-socket,
+.port-off .port-socket::after {
+  border-color: var(--bad);
+  border-style: dashed;
+}
+
+.port-name {
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+.port-sub {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.port.selected {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
+.port-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-3);
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 1px solid var(--muted);
+}
+
+.swatch.port-wan {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-color: var(--accent);
+}
+.swatch.port-lan {
+  background: color-mix(in srgb, var(--ok) 40%, transparent);
+  border-color: var(--ok);
+}
+.swatch.port-unused {
+  background: transparent;
+}
+
+.port-logical {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.port-chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs);
+  background: var(--surface-2);
+}
+
+.port-chip.selected {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.port-managed {
+  color: var(--accent);
+}
+
+.port-detail {
+  margin-top: var(--space-3);
+}
+
+/* -- policy presets ------------------------------------------------------- */
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.preset {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  text-align: left;
+  padding: var(--space-3);
+  /* The blurb is a sentence and must wrap; the button base sets nowrap for the
+     usual single-word label, so opt out here rather than globally. */
+  white-space: normal;
+}
+
+.preset-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.preset-blurb {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.preset.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.preset-why {
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  border-left: 2px solid var(--accent);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-4);
+  background: var(--surface-2);
+  border-radius: 0 6px 6px 0;
+}

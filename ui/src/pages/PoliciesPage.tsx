@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 
+import { POLICY_PRESETS, type PolicyPreset } from "../lib/presets";
+
 import { endpoints, type Policy, type SlaProfile } from "../lib/api";
 
 export function PoliciesPage() {
@@ -236,24 +238,58 @@ function NewPolicyForm({
     fallback: "any",
   });
   const [prefer, setPrefer] = useState<string[]>([]);
+  const [preset, setPreset] = useState<PolicyPreset | null>(null);
+
+  function applyPreset(chosen: PolicyPreset | null) {
+    setPreset(chosen);
+    if (!chosen) return;
+    const existing = chosen.sla
+      ? slas.find((s) => s.name === chosen.sla!.name)
+      : undefined;
+    setForm((current) => ({
+      ...current,
+      name: current.name || chosen.id,
+      priority: chosen.policy.priority,
+      protocol: chosen.policy.protocol,
+      dst_ports: chosen.policy.dst_ports,
+      fallback: chosen.policy.fallback,
+      sla_profile_id: existing?.id ?? "",
+    }));
+  }
 
   const create = useMutation({
-    mutationFn: () =>
-      endpoints.createPolicy({
+    mutationFn: async () => {
+      // A preset may name an SLA profile nobody has created yet. Making it
+      // here is the whole point: the operator picked "voice", not a jitter
+      // budget in milliseconds.
+      let slaId = form.sla_profile_id || null;
+      if (!slaId && preset?.sla) {
+        const existing = slas.find((s) => s.name === preset.sla!.name);
+        slaId = existing
+          ? existing.id
+          : (await endpoints.createSla({ ...preset.sla, description: preset.blurb })).id;
+      }
+      return endpoints.createPolicy({
         name: form.name,
         priority: form.priority,
         dst_prefixes: splitList(form.dst_prefixes),
         protocol: form.protocol || null,
         dst_ports: form.dst_ports || null,
         prefer_tags: prefer,
-        sla_profile_id: form.sla_profile_id || null,
+        sla_profile_id: slaId,
         fallback: form.fallback,
-      }),
+      });
+    },
     onSuccess: onDone,
   });
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    // Guarded here as well as on the button. requestSubmit() and implicit
+    // submission both bypass a disabled control, and a preset creates its SLA
+    // profile *before* the policy -- so a policy the server then rejects would
+    // leave an unreferenced profile behind.
+    if (prefer.length === 0) return;
     create.mutate();
   }
 
@@ -267,6 +303,41 @@ function NewPolicyForm({
     <div className="card">
       <h2>New policy</h2>
       {create.isError && <div className="error">{(create.error as Error).message}</div>}
+
+      <p className="muted" style={{ marginTop: 0 }}>
+        Start from what the traffic is. Every field stays editable afterwards.
+      </p>
+      <div className="preset-grid">
+        {POLICY_PRESETS.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            className={`preset${preset?.id === option.id ? " selected" : ""}`}
+            onClick={() => applyPreset(preset?.id === option.id ? null : option)}
+            aria-pressed={preset?.id === option.id}
+          >
+            <span className="preset-title">{option.title}</span>
+            <span className="preset-blurb">{option.blurb}</span>
+          </button>
+        ))}
+      </div>
+      {preset && (
+        <div className="preset-why muted">
+          <strong>{preset.title}.</strong> {preset.reasoning}
+          {preset.sla && (
+            <>
+              {" "}Uses an SLA of {preset.sla.loss_percent}% loss /{" "}
+              {preset.sla.latency_ms} ms
+              {preset.sla.jitter_ms !== null && ` / ${preset.sla.jitter_ms} ms jitter`},
+              probed every {preset.sla.probe_interval_seconds} s
+              {slas.some((s) => s.name === preset.sla!.name)
+                ? "."
+                : ` — the profile "${preset.sla.name}" will be created when you save.`}
+            </>
+          )}
+        </div>
+      )}
+
       <form onSubmit={submit}>
         <div className="row">
           <label>
