@@ -17,6 +17,7 @@ import { endpoints, type Port, type PortRole } from "../lib/api";
 
 const ROLE_LABEL: Record<PortRole, string> = {
   wan: "Uplink",
+  candidate: "Looks like an uplink",
   lan: "LAN",
   unused: "Free",
   bridge: "Bridge",
@@ -24,7 +25,16 @@ const ROLE_LABEL: Record<PortRole, string> = {
   other: "Other",
 };
 
-const PHYSICAL: PortRole[] = ["wan", "lan", "unused"];
+const PHYSICAL: PortRole[] = ["wan", "candidate", "lan", "unused"];
+
+/** Why the device appears to be using a port as an uplink. */
+function signals(port: Port): string {
+  const found = [
+    port.dhcp_client && "a DHCP client",
+    port.default_route && "a default route",
+  ].filter(Boolean) as string[];
+  return found.join(" and ");
+}
 
 function bytes(value: number | null): string {
   if (value === null) return "—";
@@ -75,6 +85,12 @@ function Detail({ port }: { port: Port }) {
       <dt>Role</dt>
       <dd>
         {ROLE_LABEL[port.role]}
+        {port.role === "candidate" && (
+          <div className="muted">
+            The device has {signals(port)} on this port, but no uplink is declared
+            for it. Add one under Uplinks below and the fabric can use it.
+          </div>
+        )}
         {port.wan_name && (
           <>
             {" · "}
@@ -175,6 +191,9 @@ export function PortPanel({ siteId }: { siteId: string }) {
               <i className="swatch port-wan" /> uplink
             </span>
             <span>
+              <i className="swatch port-candidate" /> looks like an uplink
+            </span>
+            <span>
               <i className="swatch port-lan" /> LAN
             </span>
             <span>
@@ -182,6 +201,20 @@ export function PortPanel({ siteId }: { siteId: string }) {
             </span>
             <span>no fill = no link</span>
           </div>
+
+          {physical.some((p) => p.role === "candidate") && (
+            <div className="warn">
+              {physical
+                .filter((p) => p.role === "candidate")
+                .map((p) => p.name)
+                .join(", ")}{" "}
+              {physical.filter((p) => p.role === "candidate").length > 1
+                ? "are carrying"
+                : "is carrying"}{" "}
+              internet access the controller does not know about. Declare them as
+              uplinks below to use them in a fabric.
+            </div>
+          )}
 
           {logical.length > 0 && (
             <div className="port-logical">

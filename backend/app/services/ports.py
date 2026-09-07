@@ -18,6 +18,7 @@ from __future__ import annotations
 from app.drivers.base import DeviceDriver
 from app.models.site import Site
 from app.schemas.ports import PortRead
+from app.services.probe import _DEFAULT_ROUTE, _interface_for
 
 # Interface types RouterOS reports that are physical front-panel ports.
 _PHYSICAL = frozenset({"ether", "wlan", "sfp", "sfp-plus", "qsfp", "wifi"})
@@ -40,17 +41,25 @@ def _classify(
     wan_interfaces: set[str],
     bridge_ports: set[str],
     has_address: bool,
+    looks_like_uplink: bool,
 ) -> str:
     """The one piece of judgement in this module.
 
     Ordered so the most specific answer wins: a WAN that also happens to be a
     bridge port is still a WAN, because that is the fact the operator cares
     about.
+
+    "candidate" sits above the LAN rules deliberately. A port running a DHCP
+    client has an address, so the has_address rule below would otherwise call
+    an obvious uplink a LAN port -- reporting what the controller has been told
+    instead of what the device is doing.
     """
     if name in wan_interfaces:
         return "wan"
     if kind in _TUNNEL:
         return "tunnel"
+    if looks_like_uplink:
+        return "candidate"
     if kind == "bridge":
         return "bridge"
     if name in bridge_ports:
@@ -60,6 +69,33 @@ def _classify(
     if kind in _PHYSICAL:
         return "unused"
     return "other"
+
+
+def _interfaces_with_default_route(
+    routes: list[dict], addresses: list[dict]
+) -> set[str]:
+    """Which interfaces carry an active default route.
+
+    Shares probe's resolution rules on purpose: the panel calling something a
+    candidate and the wizard suggesting it must not disagree about what an
+    uplink looks like. RouterOS reports the gateway either as "1.2.3.4%ether1"
+    or as a bare address that has to be matched back to the subnet it sits in.
+    """
+    found: set[str] = set()
+    for route in routes:
+        if str(route.get("dst-address", "")) not in _DEFAULT_ROUTE:
+            continue
+        if route.get("disabled") or route.get("inactive"):
+            continue
+        raw = str(route.get("immediate-gw") or route.get("gateway") or "")
+        gateway, _, named = raw.partition("%")
+        if named:
+            found.add(named)
+        elif gateway:
+            owner = _interface_for(gateway, addresses)
+            if owner:
+                found.add(owner)
+    return found
 
 
 async def _safe_read(driver: DeviceDriver, path: str) -> list[dict]:
@@ -80,15 +116,28 @@ async def read_ports(driver: DeviceDriver, site: Site) -> list[PortRead]:
     ethernet = await _safe_read(driver, "/interface/ethernet")
     addresses = await _safe_read(driver, "/ip/address")
     bridge_ports = await _safe_read(driver, "/interface/bridge/port")
+    # The same two signals probe uses to suggest uplinks. Reading them here
+    # means the panel can say "the device is using this as an uplink and you
+    # have not told me about it" rather than silently calling it a LAN port.
+    dhcp_clients = await _safe_read(driver, "/ip/dhcp-client")
+    routes = await _safe_read(driver, "/ip/route")
 
     # site.wans is loaded by the caller; this module does no IO of its own.
     wan_by_interface = {w.interface: w for w in site.wans}
     in_bridge = {
         str(p.get("interface", "")): str(p.get("bridge", "")) for p in bridge_ports
     }
-    speed_by_name = {
-        str(e.get("name", "")): (e.get("speed") or e.get("rate") or None) for e in ethernet
+    dhcp_on = {
+        str(c.get("interface", "")) for c in dhcp_clients if not c.get("disabled")
     }
+    default_route_on = _interfaces_with_default_route(routes, addresses)
+    # str(None) is "None", which is truthy, which is how every port in the panel
+    # came to be labelled "None" where its speed should be. Keep the value out
+    # of str() until it is known to be something.
+    speed_by_name: dict[str, str | None] = {}
+    for e in ethernet:
+        raw = e.get("speed") or e.get("rate")
+        speed_by_name[str(e.get("name", ""))] = str(raw) if raw else None
     default_name_by_name = {
         str(e.get("name", "")): e.get("default-name") for e in ethernet
     }
@@ -118,7 +167,7 @@ async def read_ports(driver: DeviceDriver, site: Site) -> list[PortRead]:
                 comment=comment,
                 mac=row.get("mac-address") or None,
                 mtu=_int(row.get("mtu")),
-                speed=(str(speed_by_name[name]) or None) if name in speed_by_name else None,
+                speed=speed_by_name.get(name),
                 default_name=(
                     str(default_name_by_name.get(name) or "") or None
                     if name in default_name_by_name
@@ -134,9 +183,15 @@ async def read_ports(driver: DeviceDriver, site: Site) -> list[PortRead]:
                     wan_interfaces=set(wan_by_interface),
                     bridge_ports=set(in_bridge),
                     has_address=bool(addresses_by_interface.get(name)),
+                    looks_like_uplink=(
+                        name not in wan_by_interface
+                        and (name in dhcp_on or name in default_route_on)
+                    ),
                 ),
                 wan_name=wan.name if wan else None,
                 wan_enabled=wan.enabled if wan else None,
+                dhcp_client=name in dhcp_on,
+                default_route=name in default_route_on,
                 # Anything the reconciler owns carries this tag. Showing it
                 # means nobody has to guess whether a change here will be
                 # reverted on the next apply.
@@ -146,5 +201,13 @@ async def read_ports(driver: DeviceDriver, site: Site) -> list[PortRead]:
 
     # Physical ports first and in device order, then bridges, then tunnels --
     # which is roughly how someone looking at the box reads it.
-    order = {"wan": 0, "lan": 1, "unused": 2, "bridge": 3, "tunnel": 4, "other": 5}
+    order = {
+        "wan": 0,
+        "candidate": 1,
+        "lan": 2,
+        "unused": 3,
+        "bridge": 4,
+        "tunnel": 5,
+        "other": 6,
+    }
     return sorted(ports, key=lambda p: (order.get(p.role, 9), p.name))

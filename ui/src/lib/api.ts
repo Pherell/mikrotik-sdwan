@@ -355,7 +355,14 @@ export const DEVICE_MENUS = [
   "tool/netwatch",
 ] as const;
 
-export type PortRole = "wan" | "lan" | "unused" | "bridge" | "tunnel" | "other";
+export type PortRole =
+  | "wan"
+  | "candidate"
+  | "lan"
+  | "unused"
+  | "bridge"
+  | "tunnel"
+  | "other";
 
 export interface Port {
   name: string;
@@ -374,7 +381,23 @@ export interface Port {
   role: PortRole;
   wan_name: string | null;
   wan_enabled: boolean | null;
+  dhcp_client: boolean;
+  default_route: boolean;
   managed: boolean;
+}
+
+export interface DeviceHealth {
+  cpu_load_percent: number | null;
+  cpu_count: number | null;
+  cpu_frequency_mhz: number | null;
+  free_memory_bytes: number | null;
+  total_memory_bytes: number | null;
+  free_disk_bytes: number | null;
+  total_disk_bytes: number | null;
+  uptime: string | null;
+  version: string | null;
+  board_name: string | null;
+  architecture: string | null;
 }
 
 export const endpoints = {
@@ -390,6 +413,7 @@ export const endpoints = {
   deleteSite: (id: string) => api.del(`/sites/${id}`),
   probe: (id: string) => api.post<ProbeResult>(`/sites/${id}/probe`),
   ports: (id: string) => api.get<Port[]>(`/sites/${id}/ports`),
+  health: (id: string) => api.get<DeviceHealth>(`/sites/${id}/health`),
   addWan: (siteId: string, body: unknown) => api.post<Wan>(`/sites/${siteId}/wans`, body),
   plan: (siteId: string) => api.post<Plan>(`/sites/${siteId}/plan`),
   apply: (siteId: string, body: { confirm?: boolean; dry_run?: boolean }) =>

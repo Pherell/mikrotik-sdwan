@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from app.deps import RequireAdmin, RequireOperator, RequireViewer, SessionDep, write_audit
 from app.drivers.factory import open_driver
 from app.models.site import Site, Wan
+from app.schemas.health import DeviceHealth
 from app.schemas.ports import PortRead
 from app.schemas.site import (
     ProbeResult,
@@ -20,6 +21,7 @@ from app.schemas.site import (
     WanUpdate,
 )
 from app.security import SecretBox
+from app.services.health import read_health
 from app.services.ports import read_ports
 from app.services.probe import apply_probe, probe_site
 
@@ -289,6 +291,16 @@ READABLE_PATHS = frozenset(
 
 # Properties to strip from a passthrough response even on an allowed path.
 _SENSITIVE = frozenset({"secret", "private-key", "password", "ipsec-secret", "preshared-key"})
+
+
+@router.get("/{site_id}/health", response_model=DeviceHealth)
+async def site_health(
+    site_id: str, session: SessionDep, _: RequireViewer
+) -> DeviceHealth:
+    """CPU, memory, disk and uptime, straight from the device. Read-only."""
+    site = await _get_or_404(session, site_id)
+    async with open_driver(site) as driver:
+        return await read_health(driver)
 
 
 @router.get("/{site_id}/ports", response_model=list[PortRead])

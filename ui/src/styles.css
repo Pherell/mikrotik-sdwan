@@ -1305,3 +1305,65 @@ kbd {
     Consolas,
     monospace;
 }
+
+/* A port the device is using as an uplink that nobody has declared. Amber
+   rather than green or blue: it is neither correct nor broken, it is pending. */
+.port-up.port-candidate .port-socket,
+.port-up.port-candidate .port-socket::after {
+  border-color: var(--warn);
+}
+.port-up.port-candidate .port-socket {
+  background: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.swatch.port-candidate {
+  background: color-mix(in srgb, var(--warn) 40%, transparent);
+  border-color: var(--warn);
+}
+
+/* -- device health -------------------------------------------------------- */
+
+.meters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.meter-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-1);
+}
+
+.meter-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--ok);
+  transition: width 0.2s ease;
+}
+
+.meter-fill.warn {
+  background: var(--warn);
+}
+.meter-fill.bad {
+  background: var(--bad);
+}
+
+.meter-detail {
+  font-size: var(--text-xs);
+  margin-top: var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter-fill {
+    transition: none;
+  }
+}

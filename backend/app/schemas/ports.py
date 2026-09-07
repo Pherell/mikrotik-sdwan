@@ -6,7 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-PortRole = Literal["wan", "lan", "unused", "bridge", "tunnel", "other"]
+# "candidate" is an interface the *device* is using as an uplink -- it holds a
+# DHCP client or a default route -- that the controller has no Wan record for.
+# Without it such a port reads as "LAN", which is what the panel knows rather
+# than what is true.
+PortRole = Literal[
+    "wan", "candidate", "lan", "unused", "bridge", "tunnel", "other"
+]
 
 
 class PortRead(BaseModel):
@@ -28,6 +34,9 @@ class PortRead(BaseModel):
     # Set when this interface is one of the site's configured uplinks.
     wan_name: str | None = None
     wan_enabled: bool | None = None
+    # Why the device looks like it is using this port as an uplink.
+    dhcp_client: bool = False
+    default_route: bool = False
     # True when the reconciler owns this interface, so an edit made by hand
     # here will be reverted on the next apply.
     managed: bool = False

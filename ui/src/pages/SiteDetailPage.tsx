@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ApplyPanel } from "../components/ApplyPanel";
 import { DeviceConsole, RollbackPanel } from "../components/DeviceConsole";
+import { DeviceHealthCard } from "../components/DeviceHealth";
 import { PortPanel } from "../components/PortPanel";
 import { SiteSettings } from "../components/SiteSettings";
 import { WanEditor } from "../components/WanEditor";
@@ -136,6 +137,8 @@ export function SiteDetailPage() {
       <RollbackPanel siteId={s.id} />
 
       <ApplyPanel siteId={s.id} />
+
+      <DeviceHealthCard siteId={s.id} />
 
       <PortPanel siteId={s.id} />
 

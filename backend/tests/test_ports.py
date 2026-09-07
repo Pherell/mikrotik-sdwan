@@ -169,3 +169,117 @@ async def test_nothing_is_written(panel_ros: FakeRouterOS, panel_driver) -> None
     before = {k: list(v) for k, v in panel_ros.menus.items()}
     await read_ports(panel_driver, site_with_uplinks())
     assert panel_ros.menus == before
+
+
+# -- what a screenshot from a real device showed --------------------------
+
+
+async def test_a_port_with_no_reported_speed_says_nothing(panel_driver) -> None:
+    """Every port in the panel was labelled "None".
+
+    RouterOS does not return `speed` from /interface/ethernet print -- it comes
+    from monitor -- so the value was absent for every row, and `str(None)` is
+    the string "None", which is truthy and rendered happily.
+    """
+    ports = {p.name: p for p in await read_ports(panel_driver, site_with_uplinks())}
+
+    assert ports["ether4"].speed is None
+    assert ports["ether5"].speed is None
+    assert all(p.speed != "None" for p in ports.values())
+
+
+def _uplink_signals_ros() -> FakeRouterOS:
+    """A device using ether2 as an uplink without the controller being told."""
+    return FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "ether1", "type": "ether", "running": True, "disabled": False},
+                {"name": "ether2", "type": "ether", "running": True, "disabled": False},
+                {"name": "ether3", "type": "ether", "running": True, "disabled": False},
+            ],
+            "ip/address": [
+                {"address": "10.10.10.29/24", "interface": "ether2", "disabled": False},
+                {"address": "192.168.5.1/24", "interface": "ether3", "disabled": False},
+            ],
+            "ip/dhcp-client": [
+                {"interface": "ether2", "gateway": "10.10.10.1", "disabled": False}
+            ],
+            "ip/route": [],
+        },
+    )
+
+
+async def _ports_of(ros: FakeRouterOS, site: Site) -> dict[str, object]:
+    d = Ros7RestDriver(
+        "test-router", "admin", "secret", transport=httpx.ASGITransport(app=ros.app)
+    )
+    await d.connect()
+    try:
+        return {p.name: p for p in await read_ports(d, site)}
+    finally:
+        await d.close()
+
+
+def _bare_site() -> Site:
+    site = Site(id="s2", name="branch", mgmt_host="10.0.0.1", username="admin")
+    site.wans = []
+    return site
+
+
+async def test_a_dhcp_client_port_is_a_candidate_not_a_lan_port() -> None:
+    """It has an address, so the LAN rule would otherwise claim it -- reporting
+    what the controller has been told instead of what the device is doing."""
+    ports = await _ports_of(_uplink_signals_ros(), _bare_site())
+
+    assert ports["ether2"].role == "candidate"
+    assert ports["ether2"].dhcp_client is True
+    assert ports["ether3"].role == "lan", "a plain addressed port is still LAN"
+
+
+async def test_a_default_route_also_makes_a_candidate() -> None:
+    ros = _uplink_signals_ros()
+    ros.menus["ip/dhcp-client"] = []
+    ros.menus["ip/route"] = [
+        {
+            "dst-address": "0.0.0.0/0",
+            "gateway": "10.10.10.1",
+            "disabled": False,
+            "inactive": False,
+        }
+    ]
+
+    ports = await _ports_of(ros, _bare_site())
+
+    assert ports["ether2"].role == "candidate"
+    assert ports["ether2"].default_route is True
+    assert ports["ether2"].dhcp_client is False
+
+
+async def test_declaring_the_uplink_promotes_it_out_of_candidate() -> None:
+    """Once there is a Wan record the panel should stop nagging about it."""
+    site = _bare_site()
+    site.wans = [Wan(name="wan-lte", interface="ether2", enabled=True)]
+
+    ports = await _ports_of(_uplink_signals_ros(), site)
+
+    assert ports["ether2"].role == "wan"
+    assert ports["ether2"].wan_name == "wan-lte"
+    assert ports["ether2"].dhcp_client is True, "the signal is still reported"
+
+
+async def test_an_inactive_default_route_is_not_a_signal() -> None:
+    ros = _uplink_signals_ros()
+    ros.menus["ip/dhcp-client"] = []
+    ros.menus["ip/route"] = [
+        {
+            "dst-address": "0.0.0.0/0",
+            "gateway": "10.10.10.1",
+            "disabled": True,
+            "inactive": True,
+        }
+    ]
+
+    ports = await _ports_of(ros, _bare_site())
+
+    assert ports["ether2"].role == "lan"
