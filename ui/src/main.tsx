@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { App } from "./App";
+import { ToastProvider } from "./components/Toaster";
 import { ApiError } from "./lib/api";
 import { DashboardPage } from "./pages/DashboardPage";
 import { FabricDetailPage } from "./pages/FabricDetailPage";
@@ -33,7 +34,8 @@ if (!root) throw new Error("missing #root");
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={client}>
-      <BrowserRouter>
+      <ToastProvider>
+        <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route element={<App />}>
@@ -49,7 +51,8 @@ createRoot(root).render(
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
-      </BrowserRouter>
+        </BrowserRouter>
+      </ToastProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

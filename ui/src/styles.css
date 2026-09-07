@@ -1058,3 +1058,102 @@ tr.selected {
 .bulk-fail {
   color: var(--bad);
 }
+
+/* -- toasts --------------------------------------------------------------- */
+
+.toaster {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: min(460px, calc(100vw - var(--space-8)));
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-close {
+  flex: none;
+  padding: 0 var(--space-1);
+  line-height: 1.2;
+}
+
+.toast-ok {
+  border-left: 3px solid var(--ok);
+}
+.toast-bad {
+  border-left: 3px solid var(--bad);
+}
+.toast-info {
+  border-left: 3px solid var(--accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .toast {
+    animation: toast-in 0.14s ease-out;
+  }
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+}
+
+/* -- armed rollback ------------------------------------------------------- */
+
+.armed-strip {
+  padding: var(--space-3) var(--space-6);
+  background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--bad) 50%, transparent);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* -- loading skeletons ---------------------------------------------------- */
+
+.skeleton {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    color-mix(in srgb, var(--surface-2) 60%, var(--border)) 37%,
+    var(--surface-2) 63%
+  );
+  background-size: 400% 100%;
+  margin-bottom: var(--space-3);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton {
+    animation: shimmer 1.3s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: 0 0;
+    }
+  }
+}

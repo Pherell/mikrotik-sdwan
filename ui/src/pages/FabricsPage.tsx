@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { endpoints } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
+import { Skeleton } from "../components/Skeleton";
 
 export function FabricsPage() {
   const queryClient = useQueryClient();
@@ -38,7 +39,7 @@ export function FabricsPage() {
       )}
 
       <div className="card">
-        {fabrics.isLoading && <p className="muted">Loading…</p>}
+        {fabrics.isLoading && <Skeleton rows={3} />}
         {fabrics.isError && <div className="error">{(fabrics.error as Error).message}</div>}
         {fabrics.data?.length === 0 && (
           <p className="muted">

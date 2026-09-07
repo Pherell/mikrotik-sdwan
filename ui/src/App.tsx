@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { ArmedIndicator } from "./components/ArmedIndicator";
 import { MobileBar, Sidebar, readCollapsed, writeCollapsed } from "./components/Sidebar";
 import { endpoints, getToken, setToken } from "./lib/api";
 import "./styles.css";
@@ -46,6 +47,7 @@ export function App() {
       />
       <div className="content">
         <MobileBar onOpen={() => setMobileOpen(true)} />
+        <ArmedIndicator />
         <main>
           <Outlet />
         </main>

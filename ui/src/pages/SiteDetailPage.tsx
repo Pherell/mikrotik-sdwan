@@ -8,6 +8,7 @@ import { PortPanel } from "../components/PortPanel";
 import { SiteSettings } from "../components/SiteSettings";
 import { WanEditor } from "../components/WanEditor";
 import { endpoints } from "../lib/api";
+import { Skeleton } from "../components/Skeleton";
 
 export function SiteDetailPage() {
   const { siteId = "" } = useParams();
@@ -47,7 +48,7 @@ export function SiteDetailPage() {
     },
   });
 
-  if (site.isLoading) return <p className="muted">Loading…</p>;
+  if (site.isLoading) return <div className="card"><Skeleton rows={5} /></div>;
   if (site.isError) return <div className="error">{(site.error as Error).message}</div>;
   if (!site.data) return null;
 

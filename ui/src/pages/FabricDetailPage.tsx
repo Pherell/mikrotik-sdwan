@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { FabricSettings } from "../components/FabricSettings";
 import { TopologyGraph } from "../components/TopologyGraph";
 import { endpoints, type Expansion } from "../lib/api";
+import { Skeleton } from "../components/Skeleton";
 
 export function FabricDetailPage() {
   const { fabricId = "" } = useParams();
@@ -61,7 +62,7 @@ export function FabricDetailPage() {
     onSuccess: refresh,
   });
 
-  if (fabric.isLoading) return <p className="muted">Loading…</p>;
+  if (fabric.isLoading) return <div className="card"><Skeleton rows={5} /></div>;
   if (fabric.isError) return <div className="error">{(fabric.error as Error).message}</div>;
   if (!fabric.data) return null;
 

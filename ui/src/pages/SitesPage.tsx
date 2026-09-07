@@ -6,6 +6,7 @@ import { AddSiteWizard } from "../components/AddSiteWizard";
 import { BulkSiteBar } from "../components/BulkSiteBar";
 import { endpoints, type Site } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
+import { Skeleton } from "../components/Skeleton";
 
 export function SitesPage() {
   const [adding, setAdding] = useState(false);
@@ -42,7 +43,7 @@ export function SitesPage() {
       )}
 
       <div className="card">
-        {sites.isLoading && <p className="muted">Loading…</p>}
+        {sites.isLoading && <Skeleton rows={4} />}
         {sites.isError && <div className="error">{(sites.error as Error).message}</div>}
         {sites.data?.length === 0 && (
           <p className="muted">

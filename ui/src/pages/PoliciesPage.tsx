@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 import { POLICY_PRESETS, type PolicyPreset } from "../lib/presets";
 
 import { endpoints, type Policy, type SlaProfile } from "../lib/api";
+import { Skeleton } from "../components/Skeleton";
 
 export function PoliciesPage() {
   const queryClient = useQueryClient();
@@ -70,7 +71,7 @@ export function PoliciesPage() {
       )}
 
       <div className="card">
-        {policies.isLoading && <p className="muted">Loading…</p>}
+        {policies.isLoading && <Skeleton rows={3} />}
         {policies.data?.length === 0 && (
           <p className="muted">
             No policies yet, so every packet follows the device's own routing table. A

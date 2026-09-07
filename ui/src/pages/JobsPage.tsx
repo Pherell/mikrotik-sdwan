@@ -4,6 +4,7 @@ import { useState } from "react";
 import { JobResult } from "../components/JobResult";
 import { endpoints, type Job } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
+import { Skeleton } from "../components/Skeleton";
 
 export function JobsPage() {
   const [open, setOpen] = useState<string | null>(null);
@@ -16,7 +17,7 @@ export function JobsPage() {
         description="Every configuration push, with the diff it applied and how it ended. This is the audit trail."
       />
       <div className="card">
-        {jobs.isLoading && <p className="muted">Loading…</p>}
+        {jobs.isLoading && <Skeleton rows={4} />}
         {jobs.isError && <div className="error">{(jobs.error as Error).message}</div>}
         {jobs.data?.length === 0 && (
           <p className="muted">Nothing has been applied yet.</p>

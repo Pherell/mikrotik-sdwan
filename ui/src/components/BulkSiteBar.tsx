@@ -17,6 +17,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { endpoints, type Plan, type Site } from "../lib/api";
+import { useToast } from "./Toaster";
 
 type PlanOutcome = {
   site: Site;
@@ -39,6 +40,7 @@ export function BulkSiteBar({
   onClear: () => void;
 }) {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [mode, setMode] = useState<"none" | "edit">("none");
   const [field, setField] = useState<string>("role");
   const [value, setValue] = useState<string>("hub");
@@ -58,9 +60,11 @@ export function BulkSiteBar({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sites"] });
+      toast.ok(`Updated ${chosen.length} site${chosen.length > 1 ? "s" : ""}.`);
       setMode("none");
       onClear();
     },
+    onError: (e) => toast.bad(`Bulk edit stopped: ${(e as Error).message}`),
   });
 
   const plan = useMutation({
@@ -92,9 +96,11 @@ export function BulkSiteBar({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sites"] });
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      toast.ok("Applied to every site that had changes.");
       setPlans(null);
       onClear();
     },
+    onError: (e) => toast.bad(`Bulk apply stopped: ${(e as Error).message}`),
   });
 
   const busy = edit.isPending || plan.isPending || apply.isPending;

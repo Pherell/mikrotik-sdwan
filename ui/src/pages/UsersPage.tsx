@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 
 import { endpoints, type User } from "../lib/api";
+import { Skeleton } from "../components/Skeleton";
 
 const ROLE_HELP: Record<User["role"], string> = {
   viewer: "Reads everything and can run plan and export. Never changes a device.",
@@ -64,7 +65,7 @@ export function UsersPage() {
       )}
 
       <div className="card">
-        {users.isLoading && <p className="muted">Loading…</p>}
+        {users.isLoading && <Skeleton rows={3} />}
         {users.isError && <div className="error">{(users.error as Error).message}</div>}
         {update.isError && <div className="error">{(update.error as Error).message}</div>}
         {users.data && (

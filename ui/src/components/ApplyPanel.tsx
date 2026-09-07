@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { endpoints, type Job, type Plan } from "../lib/api";
 import { DiffView } from "./DiffView";
+import { useToast } from "./Toaster";
 import { JobResult } from "./JobResult";
 
 /**
@@ -12,6 +13,7 @@ import { JobResult } from "./JobResult";
  */
 export function ApplyPanel({ siteId }: { siteId: string }) {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [plan, setPlan] = useState<Plan | null>(null);
   const [job, setJob] = useState<Job | null>(null);
 
@@ -20,7 +22,13 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
     onSuccess: (result) => {
       setPlan(result);
       setJob(null);
+      toast.info(
+        result.empty
+          ? "The device already matches the configuration."
+          : `${result.counts.add} to add, ${result.counts.set} to change, ${result.counts.remove} to remove.`,
+      );
     },
+    onError: (e) => toast.bad(`Plan failed: ${(e as Error).message}`),
   });
 
   const doApply = useMutation({
@@ -30,7 +38,12 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
       setPlan(null);
       queryClient.invalidateQueries({ queryKey: ["jobs", siteId] });
       queryClient.invalidateQueries({ queryKey: ["site", siteId] });
+      if (result.state === "succeeded") toast.ok("Applied, and the device confirmed it.");
+      else if (result.state === "rolled_back")
+        toast.bad("Verification failed — the device restored its backup.");
+      else toast.bad(`Apply finished as ${result.state}.`);
     },
+    onError: (e) => toast.bad(`Apply failed: ${(e as Error).message}`),
   });
 
   const blocked = plan ? Object.keys(plan.unreadable).length > 0 : false;
