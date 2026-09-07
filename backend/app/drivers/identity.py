@@ -19,6 +19,8 @@ import hashlib
 import socket
 import ssl
 
+from app.drivers.base import DeviceUnreachable
+
 
 class IdentityMismatch(Exception):
     """The device presented a different identity than the one pinned.
@@ -56,6 +58,30 @@ def _fetch_peer_certificate(host: str, port: int, timeout: float) -> bytes:
     return der
 
 
+def _handshake_advice(host: str, port: int, exc: Exception) -> str:
+    """Say what to check on the device.
+
+    This runs before authentication and before any httpx request, so a failure
+    here escapes every driver error path unless it is caught right here. It
+    used to surface in the API as a bare 500 with no message at all.
+    """
+    return f"""{host}:{port}: TLS handshake failed ({exc}).
+
+The controller speaks HTTPS to the RouterOS REST API. On the device:
+
+    /ip service print
+        www-ssl must be enabled, and on this port.
+
+    /ip service set www-ssl certificate=<name>
+        RouterOS refuses the handshake outright when www-ssl has no
+        certificate assigned, which is the usual cause on a device that has
+        just been enabled. Make one with /certificate if there is none.
+
+If www-ssl is enabled and has a certificate, the device may be offering only
+TLS versions this controller no longer accepts. Regenerating the certificate,
+or upgrading RouterOS, fixes that."""
+
+
 async def peer_fingerprint(
     host: str, port: int, connect_timeout: float = 10.0
 ) -> str:
@@ -65,7 +91,15 @@ async def peer_fingerprint(
     handshake runs in a worker thread, and cancelling the await would return
     control while leaking the thread. The socket deadline actually stops it.
     """
-    der = await asyncio.to_thread(_fetch_peer_certificate, host, port, connect_timeout)
+    try:
+        der = await asyncio.to_thread(
+            _fetch_peer_certificate, host, port, connect_timeout
+        )
+    except ssl.SSLError as exc:
+        raise DeviceUnreachable(_handshake_advice(host, port, exc)) from exc
+    except OSError as exc:
+        # socket.timeout, refused, unresolvable -- all OSError subclasses.
+        raise DeviceUnreachable(f"{host}:{port}: cannot connect ({exc})") from exc
     return certificate_fingerprint(der)
 
 
