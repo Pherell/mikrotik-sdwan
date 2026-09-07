@@ -45,6 +45,10 @@ services:
     build: ./backend
     environment: *backend-env
     command: ["alembic", "upgrade", "head"]
+    # The image's HEALTHCHECK polls the API's /healthz. This container runs one
+    # command and exits, so there is nothing to poll.
+    healthcheck:
+      disable: true
     depends_on:
       db:
         condition: service_healthy
@@ -68,6 +72,17 @@ services:
     build: ./backend
     environment: *backend-env
     command: ["arq", "app.tasks.worker.WorkerSettings"]
+    # Same image as the api, so it inherits a HEALTHCHECK that curls
+    # http://localhost:8000/healthz -- an HTTP server this container does not
+    # run. Left inherited it is unhealthy forever, which is what made
+    # `docker compose up --wait` sit there and then fail. arq keeps its own
+    # liveness key in Redis; --check reads it and exits non-zero if it is stale.
+    healthcheck:
+      test: ["CMD", "arq", "app.tasks.worker.WorkerSettings", "--check"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
     depends_on:
       redis:
         condition: service_healthy
@@ -87,13 +102,19 @@ services:
   caddy:
     image: caddy:2-alpine
     environment:
-      # The Caddyfile reads {$SDWAN_DOMAIN}. Without this the variable never
-      # reaches the container, it silently falls back to localhost, and no
-      # certificate is ever provisioned for the real hostname.
+      # Every {$VAR} the Caddyfile reads has to be listed here. Miss one and it
+      # silently falls back to its default -- which is how the whole stack ended
+      # up answering only to "localhost".
       SDWAN_DOMAIN: ${SDWAN_DOMAIN:-localhost}
+      SDWAN_HTTP_PORT: ${HTTP_PORT:-80}
+      SDWAN_HTTPS_PORT: ${HTTPS_PORT:-443}
+      SDWAN_HSTS_MAX_AGE: ${SDWAN_HSTS_MAX_AGE:-0}
     ports:
-      - "${HTTP_PORT:-8080}:80"
-      - "${HTTPS_PORT:-8443}:443"
+      # Published 1:1 rather than onto 80/443, because Caddy builds its
+      # redirects from the port it is listening on. Map 8443->443 and it sends
+      # browsers to https://host:443, where nothing is listening.
+      - "${HTTP_PORT:-80}:${HTTP_PORT:-80}"
+      - "${HTTPS_PORT:-443}:${HTTPS_PORT:-443}"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data

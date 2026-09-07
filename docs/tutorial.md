@@ -83,55 +83,82 @@ SDWAN_BOOTSTRAP_ADMIN_PASSWORD=<generated>
 >
 > `make doctor` reports which tools it can find.
 
-Bring it up:
+### Decide what address it answers to — before the first `up`
 
-```bash
-docker compose up -d --build
-```
+`SDWAN_DOMAIN` is not decoration. Caddy matches the incoming `Host` header
+against it *and* picks the TLS certificate by it, so a mismatch does not
+degrade gracefully: the handshake fails and the browser shows
+`ERR_SSL_PROTOCOL_ERROR` with nothing in the access log.
 
-Then check it is alive:
-
-```bash
-curl -fsS http://localhost:8080/healthz
-```
-
-### Serving on an IP instead of a domain
-
-Most installs have no DNS name pointing at the controller. `SDWAN_DOMAIN` takes
-an IP directly:
+Leave it at `localhost` only if you will browse from the controller itself.
+Otherwise put the address other machines will type:
 
 ```ini
-SDWAN_DOMAIN=192.168.1.50
-HTTPS_PORT=8443
+SDWAN_DOMAIN=10.10.10.179
+HTTP_PORT=80
+HTTPS_PORT=443
 ```
 
-Caddy cannot get a public certificate for a bare IP — no CA issues those — so it
-signs one with its own internal CA. The site works at
-`https://192.168.1.50:8443`, and your browser warns once until you trust
-Caddy's root. Export it from the container if you want the warning gone:
+No CA issues certificates for a bare IP, so Caddy signs one with its own
+internal CA. It works everywhere; browsers warn once until the root is trusted.
+A publicly resolvable name gets a real Let's Encrypt certificate instead, with
+no warning — but only on ports 80 and 443, because that is where the ACME
+challenge arrives.
 
-```bash
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
-```
+> **Leave `SDWAN_HSTS_MAX_AGE=0` while the certificate is self-signed.** HSTS
+> tells the browser to refuse plain HTTP for that name — and it also removes the
+> "proceed anyway" button on the certificate warning. Turn it on once, on a
+> self-signed name, and you have locked yourself out of your own controller
+> until you clear the browser's HSTS state by hand. Set `31536000` only when
+> `SDWAN_DOMAIN` is a public name with a real certificate.
 
-To skip TLS entirely, prefix the scheme:
+Changing ports is supported but rarely worth it. They are published straight
+through — `HTTPS_PORT=8443` means Caddy itself listens on 8443 — so redirects
+and links stay correct, but you type the port in every URL and Let's Encrypt
+stops being possible.
 
-```ini
-SDWAN_DOMAIN=http://192.168.1.50
-```
-
-> Prefer the self-signed HTTPS over plain HTTP. This controller can decrypt the
-> credentials of every router you manage. Sending its login in cleartext, even
-> on a management LAN, means anyone on that LAN can take the fleet.
+There is no plain-HTTP option. This controller can decrypt the credentials of
+every router you manage; a login sent in cleartext, even on a management LAN,
+hands the fleet to anyone on that LAN. If you genuinely need it anyway, change
+the `https://` site in `Caddyfile` to `http://` and delete the redirect block —
+deliberately, and knowing what it costs.
 
 **You do not need to touch `SDWAN_CORS_ORIGINS`.** Caddy serves the UI and
 proxies `/api/*` from the *same* origin, so the browser never makes a
 cross-origin request and the setting has no effect here. It only matters if you
 put a separate frontend on a different host.
 
-Open <http://localhost:8080> and sign in with `admin@local` and the bootstrap
-password. That account is seeded **only when the user table is empty** — changing
-the variable later does nothing.
+### Bring it up
+
+```bash
+docker compose up -d --build
+```
+
+Then check it is alive. `-k` because the certificate is Caddy's own:
+
+```bash
+curl -fsSk https://localhost/healthz
+```
+
+### Trust Caddy's root, once
+
+Everything below uses `curl` against the API. Rather than passing `-k` to each
+one — which turns off exactly the check that makes the connection worth
+anything — export Caddy's root certificate and point curl at it:
+
+```bash
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+export CURL_CA_BUNDLE=$PWD/caddy-root.crt
+```
+
+The same file is what you install in a browser's trust store to make the
+warning go away for good. It is generated once and lives in the `caddydata`
+volume, so it survives restarts and is stable across the whole fleet's
+operators.
+
+Open <https://localhost> — or whatever `SDWAN_DOMAIN` you set — and sign in with
+`admin@local` and the bootstrap password. That account is seeded **only when the
+user table is empty**; changing the variable later does nothing.
 
 ### The UI at a glance
 
@@ -160,11 +187,11 @@ that works:
 | `admin` | Everything above, plus manage users and delete sites and fabrics |
 
 ```bash
-TOKEN=$(curl -sX POST http://localhost:8080/api/v1/auth/login \
+TOKEN=$(curl -sX POST https://localhost/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"admin@local","password":"<bootstrap>"}' | jq -r .access_token)
 
-curl -sX POST http://localhost:8080/api/v1/users \
+curl -sX POST https://localhost/api/v1/users \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"email":"nina@example.com","password":"a-long-passphrase","role":"operator"}'
 ```
@@ -261,7 +288,7 @@ Tick the ones that are real, untick the rest, and **Add uplinks**.
 ### Through the API
 
 ```bash
-API=http://localhost:8080/api/v1
+API=https://localhost/api/v1
 AUTH="Authorization: Bearer $TOKEN"
 JSON='Content-Type: application/json'
 
@@ -847,7 +874,7 @@ rebuild its links.
 ## Part 11 — Monitoring
 
 ```bash
-curl -s http://localhost:8080/api/v1/metrics
+curl -s https://localhost/api/v1/metrics
 ```
 
 ```
@@ -907,6 +934,47 @@ What you give up:
 ---
 
 ## Troubleshooting
+
+**"Client sent an HTTP request to an HTTPS server."**
+You typed `http://host:443` (or `http://host:8443`). That port speaks TLS. Put
+`https://` in front. Browsers default to `http` when you type a bare
+`host:port`, so this is easy to hit and means nothing is actually wrong.
+
+**`ERR_SSL_PROTOCOL_ERROR`, or "sent an invalid response"**
+Two causes, and they look identical in the browser:
+
+- You spoke TLS to the *plain* port — `https://host:80`. Drop the `s`, or use
+  the HTTPS port.
+- `SDWAN_DOMAIN` does not match what you typed. Caddy has a certificate for the
+  name you configured and no other, and a browser sends no SNI at all for a bare
+  IP, so the handshake fails before any HTTP happens — which is why the access
+  log shows nothing. Set `SDWAN_DOMAIN` to the exact address you type, then
+  `docker compose up -d` to restart Caddy.
+
+Check what Caddy thinks it is serving:
+
+```bash
+docker compose exec caddy env | grep SDWAN
+docker compose logs caddy --tail 30
+```
+
+**The browser warns about the certificate**
+Expected on an IP or a private name — no CA issues certificates for those, so
+Caddy signs its own. Click through, or install its root permanently:
+
+```bash
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt
+```
+
+If the warning has *no* "proceed anyway" button, HSTS is pinned for that name.
+Set `SDWAN_HSTS_MAX_AGE=0`, restart, and clear the pin in the browser
+(`chrome://net-internals/#hsts` deletes it for one host).
+
+**`docker compose ps` shows the worker as `unhealthy`**
+Fixed — but if you are on an older checkout, that is cosmetic. All three
+backend containers share one image, and the image's healthcheck polls the API's
+`/healthz`, which the worker does not serve. It also made `up --wait` fail on a
+stack that was working. Pull and rebuild.
 
 **"Refusing to apply: could not read /ip/ipsec/peer"**
 The menu is missing or the package is not installed. The controller will not
@@ -1063,7 +1131,7 @@ All paths are prefixed `/api/v1`. Roles are the minimum required.
 | GET | `/jobs/{id}` | viewer | One job with diff and log |
 | GET | `/metrics` | — | Prometheus |
 
-Interactive docs are at <http://localhost:8080/docs>.
+Interactive docs are at <https://localhost/docs>.
 
 ---
 

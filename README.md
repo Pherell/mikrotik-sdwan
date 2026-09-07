@@ -119,9 +119,17 @@ docker compose up -d --build
 find. Only Docker is required for the stack itself — the venv targets are for
 local development.
 
-Open <http://localhost:8080> and sign in with `SDWAN_BOOTSTRAP_ADMIN_EMAIL` and
-`SDWAN_BOOTSTRAP_ADMIN_PASSWORD`. The bootstrap admin is seeded only when the
-user table is empty.
+**Set `SDWAN_DOMAIN` to the address you will actually type in the browser.**
+Caddy matches the request's `Host` against it and picks the TLS certificate by
+it, so leaving it at `localhost` while browsing to an IP fails the handshake
+(`ERR_SSL_PROTOCOL_ERROR`) rather than degrading to something that works. An IP
+or private name gets a certificate from Caddy's internal CA — a one-time browser
+warning; a publicly resolvable name gets Let's Encrypt automatically, on ports
+80 and 443.
+
+Open <https://localhost> — or your `SDWAN_DOMAIN` — and sign in with
+`SDWAN_BOOTSTRAP_ADMIN_EMAIL` and `SDWAN_BOOTSTRAP_ADMIN_PASSWORD`. The
+bootstrap admin is seeded only when the user table is empty.
 
 ### Preparing a RouterOS device
 

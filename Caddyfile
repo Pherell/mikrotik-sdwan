@@ -1,16 +1,39 @@
-# The controller holds decryptable device credentials, so it is never served
-# over plain HTTP outside a dev loopback.
+# The controller can decrypt the credentials of every router it manages, so it
+# is served over TLS. There is no plaintext option here on purpose; if you truly
+# need one, change the https:// site below to http:// and delete the redirect.
 #
-# SDWAN_DOMAIN accepts a hostname, an IP, or an http:// prefix:
+# SDWAN_DOMAIN takes a name or a bare IP:
 #
-#   sdwan.example.com    public name  -> automatic Let's Encrypt certificate
-#   192.168.1.50         IP or LAN    -> Caddy's internal CA, self-signed
-#   http://192.168.1.50  explicit     -> no TLS at all
+#   sdwan.example.com   publicly resolvable  -> automatic Let's Encrypt cert.
+#                       Requires ports 80 and 443, because that is where the
+#                       ACME challenge arrives. Non-standard ports cannot work.
+#   192.168.1.50        IP or private name   -> Caddy's own internal CA signs
+#                       it. Every browser warns until you trust that root.
 #
-# Note that one origin serves both halves: /api/* is proxied to the API and
-# everything else to the UI. The browser therefore never makes a cross-origin
-# request, so SDWAN_CORS_ORIGINS has no effect on this deployment.
-{$SDWAN_DOMAIN:localhost} {
+# One origin serves both halves: /api/* goes to the API, everything else to the
+# UI. The browser therefore never makes a cross-origin request, which is why
+# SDWAN_CORS_ORIGINS does nothing in this deployment.
+
+{
+	# Caddy binds these ports *and assumes clients reach it on the same
+	# numbers*. That assumption only holds because docker-compose.yml publishes
+	# ${PORT}:${PORT} rather than mapping some high port onto 80/443.
+	http_port {$SDWAN_HTTP_PORT:80}
+	https_port {$SDWAN_HTTPS_PORT:443}
+
+	# A browser sends no SNI when the URL is a bare IP address. Without a name
+	# to select a certificate by, the handshake fails before any HTTP happens --
+	# the browser says ERR_SSL_PROTOCOL_ERROR and the access log stays empty.
+	# This tells Caddy which name to assume for those connections.
+	default_sni {$SDWAN_DOMAIN:localhost}
+
+	# Caddy's built-in HTTP->HTTPS redirect drops the port whenever it is
+	# non-standard: from :8080 it sends you to https://host with no port, which
+	# is not listening. Ours, below, keeps it.
+	auto_https disable_redirects
+}
+
+(sdwan) {
 	encode gzip
 
 	handle /api/* {
@@ -26,9 +49,22 @@
 	}
 
 	header {
-		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "same-origin"
+		# HSTS is opt-in because it is a trap on a self-signed certificate: the
+		# browser remembers the pin and then refuses to offer the "proceed
+		# anyway" button it would otherwise show, locking you out of your own
+		# controller until you clear the browser's HSTS state by hand. Set
+		# SDWAN_HSTS_MAX_AGE=31536000 once the name has a publicly trusted cert.
+		Strict-Transport-Security "max-age={$SDWAN_HSTS_MAX_AGE:0}"
 	}
+}
+
+http://{$SDWAN_DOMAIN:localhost} {
+	redir https://{host}:{$SDWAN_HTTPS_PORT:443}{uri} 308
+}
+
+https://{$SDWAN_DOMAIN:localhost} {
+	import sdwan
 }

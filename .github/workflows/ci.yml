@@ -77,9 +77,17 @@ jobs:
           SDWAN_SECRET_KEY: ci-secret-key-at-least-32-characters
           SDWAN_JWT_SECRET: ci-jwt-secret-at-least-32-characters
           SDWAN_BOOTSTRAP_ADMIN_PASSWORD: ci-bootstrap-password
+          # Deliberately NOT the shipped default of 80/443. Non-standard ports
+          # are where Caddy's redirect and certificate selection actually go
+          # wrong, so that is the case worth exercising on every push.
+          HTTP_PORT: 8080
+          HTTPS_PORT: 8443
         run: |
           docker compose config --quiet
           docker compose -f docker-compose.yml -f docker-compose.softhub.yml config --quiet
+          # And again without the overrides, so the defaults .env.example ships
+          # with are validated too.
+          env -u HTTP_PORT -u HTTPS_PORT docker compose config --quiet
 
       # Building the images proves they compile. Only running them proves the
       # stack starts -- which is how SDWAN_CORS_ORIGINS broke every deployment
@@ -95,22 +103,49 @@ jobs:
           docker compose logs migrate --no-log-prefix
           test "$code" = "0" || { echo "::error::migrate exited $code"; exit 1; }
 
-      - name: API answers
+      # -k because SDWAN_DOMAIN is localhost, so the certificate is signed by
+      # Caddy's internal CA. The body is checked, not just the exit status:
+      # curl -f treats a 308 as success and hands back an empty body, so this
+      # step used to pass while every request was being redirected into a port
+      # nothing was listening on.
+      - name: API answers over HTTPS
+        env: *stack_env
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8080/healthz; then echo; exit 0; fi
+            if curl -fsSk https://localhost:8443/healthz | jq -e '.status == "ok"'; then
+              exit 0
+            fi
             sleep 2
           done
           echo "::error::/healthz never answered"
+          docker compose logs caddy api --no-log-prefix --tail 50
           exit 1
+
+      # Caddy builds its redirect from the port it is listening on, so a
+      # published port that differs from the bound one sends browsers to a
+      # closed door. This asserts the port survives the redirect.
+      - name: HTTP redirects to HTTPS on the published port
+        run: |
+          location=$(curl -sSI http://localhost:8080/ | tr -d '\r' \
+            | awk 'tolower($1) == "location:" { print $2 }')
+          echo "redirect -> $location"
+          case "$location" in
+            https://localhost:8443/*) ;;
+            *) echo "::error::expected https://localhost:8443/..., got '$location'"
+               exit 1 ;;
+          esac
 
       - name: Bootstrap admin can log in
         env: *stack_env
         run: |
-          token=$(curl -fsS -X POST http://localhost:8080/api/v1/auth/login             -H 'Content-Type: application/json'             -d '{"email":"admin@local","password":"ci-bootstrap-password"}'             | jq -r .access_token)
+          token=$(curl -fsSk -X POST https://localhost:8443/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@local","password":"ci-bootstrap-password"}' \
+            | jq -r .access_token)
           test -n "$token" && test "$token" != "null" || {
             echo "::error::login returned no token"; exit 1; }
-          curl -fsS http://localhost:8080/api/v1/sites             -H "Authorization: Bearer $token" | jq -e 'type == "array"'
+          curl -fsSk https://localhost:8443/api/v1/sites \
+            -H "Authorization: Bearer $token" | jq -e 'type == "array"'
 
       - name: Logs on failure
         if: failure()

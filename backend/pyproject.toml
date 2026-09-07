@@ -53,6 +53,11 @@ known-first-party = ["app", "tests"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# conftest.py imports `tests.fakeros`, which needs this directory importable.
+# `python -m pytest` puts it on sys.path for free; the bare `pytest` console
+# script does not. The Makefile used the first form and CI the second, so the
+# suite was green locally and red on every push for want of this line.
+pythonpath = ["."]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

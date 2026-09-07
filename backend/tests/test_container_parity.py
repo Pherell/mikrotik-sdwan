@@ -189,3 +189,109 @@ def test_dockerignore_excludes_nothing_runtime_needs() -> None:
     }
     for needed in ("app", "alembic", "alembic.ini", "pyproject.toml"):
         assert needed not in ignored, f".dockerignore excludes {needed}"
+
+
+# -- the edge: Caddy and compose have to agree -------------------------------
+#
+# `SDWAN_DOMAIN` reached the Caddy container only because someone remembered to
+# list it in compose. Nothing checked, so the next variable added to the
+# Caddyfile would have silently taken its default and the stack would have gone
+# on answering to the wrong name.
+
+CADDYFILE = ROOT / "Caddyfile"
+ENV_EXAMPLE = ROOT / ".env.example"
+
+# "${HTTP_PORT:-80}:${HTTP_PORT:-80}" -- both halves captured so they can be
+# compared. A port mapping is not a plain "a:b" split; the ":-" inside the
+# default makes that ambiguous.
+_PORT_MAPPING = re.compile(r"^\$\{(\w+):-(\d+)\}:\$\{(\w+):-(\d+)\}$")
+
+
+def _compose() -> dict:
+    return yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+
+
+def test_every_caddyfile_variable_is_supplied_by_compose() -> None:
+    """A {$VAR} the compose file forgets does not fail -- it quietly falls back
+    to its default, which is how the whole stack ended up reachable only as
+    'localhost' regardless of what the operator configured."""
+    used = set(re.findall(r"\{\$([A-Za-z_][A-Za-z0-9_]*)", CADDYFILE.read_text(encoding="utf-8")))
+    supplied = set(_compose()["services"]["caddy"].get("environment", {}))
+    missing = sorted(used - supplied)
+    assert not missing, f"Caddyfile reads variables compose never sets: {missing}"
+
+
+def test_the_published_port_equals_the_port_caddy_binds() -> None:
+    """Caddy builds its redirects and its links from the port it is listening
+    on, with no idea a mapping happened. Publish 8443->443 and it sends browsers
+    to https://host:443, where nothing is listening."""
+    for mapping in _compose()["services"]["caddy"]["ports"]:
+        m = _PORT_MAPPING.match(mapping)
+        assert m, f"port mapping {mapping!r} is not ${{VAR:-default}} on both sides"
+        outside_var, outside_default, inside_var, inside_default = m.groups()
+        assert outside_var == inside_var, (
+            f"{mapping}: published and bound ports use different variables"
+        )
+        assert outside_default == inside_default, f"{mapping}: published and bound defaults differ"
+
+
+def test_the_redirect_carries_the_configured_https_port() -> None:
+    """Caddy's own HTTP->HTTPS redirect drops any non-standard port, so the
+    Caddyfile turns it off and writes its own. Removing either half without the
+    other silently breaks plain-http arrivals."""
+    caddyfile = CADDYFILE.read_text(encoding="utf-8")
+    assert "auto_https disable_redirects" in caddyfile
+    assert re.search(r"redir\s+https://\{host\}:\{\$SDWAN_HTTPS_PORT", caddyfile), (
+        "the manual redirect must carry the configured HTTPS port"
+    )
+
+
+def test_compose_port_defaults_match_the_documented_ones() -> None:
+    """Someone reading .env.example and someone reading docker-compose.yml must
+    not come away with different answers."""
+    documented = dict(
+        re.findall(r"^(HTTP_PORT|HTTPS_PORT)=(\d+)$", ENV_EXAMPLE.read_text(encoding="utf-8"), re.M)
+    )
+    defaults = {
+        m.group(1): m.group(2)
+        for mapping in _compose()["services"]["caddy"]["ports"]
+        if (m := _PORT_MAPPING.match(mapping))
+    }
+    assert documented == defaults, f".env.example says {documented}, compose defaults to {defaults}"
+
+
+def test_a_service_that_serves_no_http_does_not_inherit_the_api_healthcheck() -> None:
+    """One image, three containers. The Dockerfile's HEALTHCHECK curls
+    /healthz, which only the api serves -- so the worker reported unhealthy
+    forever and `docker compose up --wait` failed on a stack that was fine."""
+    for name, service in _compose()["services"].items():
+        if service.get("build") != "./backend":
+            continue
+        command = service.get("command") or []
+        if command and command[0] == "uvicorn":
+            continue  # this one really does serve HTTP
+        if not command:
+            continue  # no override: runs the image's uvicorn CMD
+        healthcheck = service.get("healthcheck")
+        assert healthcheck, (
+            f"{name} runs {command[0]}, not uvicorn, but inherits the HTTP healthcheck"
+        )
+        if healthcheck.get("disable"):
+            continue
+        assert "healthz" not in " ".join(healthcheck["test"]), (
+            f"{name} runs {command[0]} but its healthcheck still polls the API's /healthz"
+        )
+
+
+# -- the suite has to behave the same wherever it is invoked from -----------
+
+
+def test_pytest_can_import_the_tests_package_without_python_dash_m() -> None:
+    """`python -m pytest` puts the rootdir on sys.path; the bare `pytest`
+    console script does not. conftest.py imports tests.fakeros, so the Makefile
+    (which used the first form) passed while CI (which used the second) failed
+    to collect anything at all, on every push."""
+    pyproject = (BACKEND / "pyproject.toml").read_text(encoding="utf-8")
+    assert re.search(r"^pythonpath = \[\".\"\]$", pyproject, re.M), (
+        "pytest needs pythonpath = [\".\"] or the console script cannot import tests.fakeros"
+    )
