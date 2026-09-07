@@ -3,12 +3,26 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { AddSiteWizard } from "../components/AddSiteWizard";
+import { BulkSiteBar } from "../components/BulkSiteBar";
 import { endpoints, type Site } from "../lib/api";
 import { PageHeader } from "../components/PageHeader";
 
 export function SitesPage() {
   const [adding, setAdding] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
   const sites = useQuery({ queryKey: ["sites"], queryFn: endpoints.sites });
+
+  const all = sites.data ?? [];
+  // A selection that survives a refetch would let you act on a site that is
+  // no longer there.
+  const live = selected.filter((id) => all.some((s) => s.id === id));
+  const allSelected = all.length > 0 && live.length === all.length;
+
+  function toggle(id: string) {
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
 
   return (
     <>
@@ -22,6 +36,10 @@ export function SitesPage() {
       </PageHeader>
 
       {adding && <AddSiteWizard onClose={() => setAdding(false)} />}
+
+      {live.length > 0 && (
+        <BulkSiteBar selected={live} sites={all} onClear={() => setSelected([])} />
+      )}
 
       <div className="card">
         {sites.isLoading && <p className="muted">Loading…</p>}
@@ -38,6 +56,16 @@ export function SitesPage() {
           <table>
             <thead>
               <tr>
+                <th className="tick">
+                  <input
+                    type="checkbox"
+                    aria-label="Select every site"
+                    checked={allSelected}
+                    onChange={() =>
+                      setSelected(allSelected ? [] : all.map((s) => s.id))
+                    }
+                  />
+                </th>
                 <th>Name</th>
                 <th>Role</th>
                 <th>Management</th>
@@ -47,8 +75,13 @@ export function SitesPage() {
               </tr>
             </thead>
             <tbody>
-              {sites.data.map((site) => (
-                <SiteRow key={site.id} site={site} />
+              {all.map((site) => (
+                <SiteRow
+                  key={site.id}
+                  site={site}
+                  selected={live.includes(site.id)}
+                  onToggle={() => toggle(site.id)}
+                />
               ))}
             </tbody>
           </table>
@@ -58,9 +91,25 @@ export function SitesPage() {
   );
 }
 
-function SiteRow({ site }: { site: Site }) {
+function SiteRow({
+  site,
+  selected,
+  onToggle,
+}: {
+  site: Site;
+  selected: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <tr>
+    <tr className={selected ? "selected" : undefined}>
+      <td className="tick">
+        <input
+          type="checkbox"
+          aria-label={`Select ${site.name}`}
+          checked={selected}
+          onChange={onToggle}
+        />
+      </td>
       <td>
         <Link to={`/sites/${site.id}`}>{site.name}</Link>
         {site.region && <div className="muted">{site.region}</div>}

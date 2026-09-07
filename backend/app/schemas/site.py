@@ -121,13 +121,26 @@ class SiteUpdate(BaseModel):
     verify_tls: bool | None = None
     loopback_ip: str | None = None
     local_prefixes: list[str] | None = None
-    rollback_timeout_seconds: int | None = None
+    rollback_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
     drift_action: str | None = None
     tags: dict[str, str] | None = None
     # Set either to null to forget the pinned identity and re-learn it. Do this
     # only when you know the device was legitimately rebuilt or re-keyed.
     tls_fingerprint: str | None = None
     ssh_host_key: str | None = None
+
+    # SiteUpdate does not inherit SiteBase, so it inherited none of its
+    # validation either. An unconstrained drift_action was accepted, written to
+    # the row, and only rejected when the *response* was serialised against
+    # SiteRead -- leaving the site holding a value the rest of the system
+    # refuses to read. The bounds on rollback_timeout_seconds went missing the
+    # same way.
+    @field_validator("drift_action")
+    @classmethod
+    def _check_drift_update(cls, v: str | None) -> str | None:
+        if v is not None and v not in {"alert", "auto-remediate"}:
+            raise ValueError("drift_action must be 'alert' or 'auto-remediate'")
+        return v
 
 
 class SiteRead(SiteBase):

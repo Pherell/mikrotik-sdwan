@@ -29,10 +29,21 @@ class Timestamps:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # onupdate is computed in Python, deliberately, rather than func.now().
+    #
+    # A SQL-side onupdate means the database generates the value, so SQLAlchemy
+    # expires the attribute after the UPDATE and must SELECT it back on the next
+    # access. Under asyncio that lazy read is not allowed -- it raises
+    # MissingGreenlet rather than quietly fetching. So every PATCH endpoint
+    # serialising a model that carries updated_at returned a 500: the row was
+    # written correctly and the response died on the way out.
+    #
+    # created_at keeps its server_default, so a row inserted outside the
+    # application still gets a timestamp.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=func.now(),
+        onupdate=utcnow,
         nullable=False,
     )
 

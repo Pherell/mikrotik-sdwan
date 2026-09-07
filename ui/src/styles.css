@@ -976,3 +976,85 @@ input[type="file"] {
 .pipe-detail {
   border-left-color: var(--accent);
 }
+
+/* -- bulk selection ------------------------------------------------------- */
+
+th.tick,
+td.tick {
+  width: 32px;
+  padding-right: 0;
+}
+
+.tick input {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+tr.selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.bulk-bar {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.bulk-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.bulk-row > strong {
+  flex: 1;
+}
+
+.bulk-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.bulk-note {
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 0;
+}
+
+.bulk-edit {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.bulk-plans {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+
+.bulk-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.bulk-list li {
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.bulk-site {
+  display: inline-block;
+  min-width: 160px;
+  font-weight: 500;
+}
+
+.bulk-fail {
+  color: var(--bad);
+}
