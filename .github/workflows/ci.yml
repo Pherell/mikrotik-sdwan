@@ -169,14 +169,27 @@ jobs:
         run: |
           python -m pip install --upgrade pip pip-audit
           pip install -e .
+          # --skip-editable excludes this project itself: it is installed
+          # editable and is not on PyPI, so pip-audit reported "Dependency not
+          # found on PyPI" on every single run. A real advisory would have been
+          # indistinguishable from that standing noise.
+          #
+          # --strict is deliberately gone rather than combined with it: strict
+          # counts a *skipped* package as un-audited and re-raises the same
+          # false finding. Verified both ways -- clean tree exits 0, a planted
+          # vulnerable jinja2 still exits 1.
+          #
           # Reported, not fatal: a transitive advisory with no fix available
           # should not block a security fix from merging.
-          pip-audit --strict || echo "::warning::pip-audit reported findings"
+          pip-audit --skip-editable || echo "::warning::pip-audit reported findings"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: ui/package-lock.json
+      # moderate, not high. The two react-router advisories this job exists to
+      # surface were both moderate, so --audit-level=high exited 0 and printed
+      # them into a log nobody reads.
       - name: Node dependency advisories
         working-directory: ui
-        run: npm audit --audit-level=high || echo "::warning::npm audit reported findings"
+        run: npm audit --audit-level=moderate || echo "::warning::npm audit reported findings"
