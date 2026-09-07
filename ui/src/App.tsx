@@ -1,12 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, Navigate, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { MobileBar, Sidebar, readCollapsed, writeCollapsed } from "./components/Sidebar";
 import { endpoints, getToken, setToken } from "./lib/api";
 import "./styles.css";
 
 export function App() {
   const navigate = useNavigate();
+  const location = useLocation();
   const hasToken = Boolean(getToken());
+
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // A drawer that survived navigation would cover the page you just asked for.
+  useEffect(() => setMobileOpen(false), [location.pathname]);
 
   const { data: user, isError } = useQuery({
     queryKey: ["me"],
@@ -16,41 +25,31 @@ export function App() {
 
   if (!hasToken || isError) return <Navigate to="/login" replace />;
 
+  const toggleCollapsed = () =>
+    setCollapsed((previous) => {
+      writeCollapsed(!previous);
+      return !previous;
+    });
+
   return (
-    <div className="layout">
-      <header className="topbar">
-        <h1>
-          <Link to="/" style={{ color: "inherit", textDecoration: "none" }}>
-            SD-WAN Controller
-          </Link>
-        </h1>
-        <Link to="/" className="navlink">Overview</Link>
-        <Link to="/sites" className="navlink">Sites</Link>
-        <Link to="/fabrics" className="navlink">Fabrics</Link>
-        <Link to="/policies" className="navlink">Policies</Link>
-        <Link to="/jobs" className="navlink">Jobs</Link>
-        <Link to="/settings" className="navlink">Settings</Link>
-        {user?.role === "admin" && (
-          <Link to="/users" className="navlink">Users</Link>
-        )}
-        <span className="spacer" />
-        {user && (
-          <span className="muted">
-            {user.email} · {user.role}
-          </span>
-        )}
-        <button
-          onClick={() => {
-            setToken(null);
-            navigate("/login", { replace: true });
-          }}
-        >
-          Sign out
-        </button>
-      </header>
-      <main>
-        <Outlet />
-      </main>
+    <div className="layout" data-collapsed={collapsed}>
+      <Sidebar
+        user={user}
+        collapsed={collapsed}
+        onToggleCollapsed={toggleCollapsed}
+        mobileOpen={mobileOpen}
+        onCloseMobile={() => setMobileOpen(false)}
+        onSignOut={() => {
+          setToken(null);
+          navigate("/login", { replace: true });
+        }}
+      />
+      <div className="content">
+        <MobileBar onOpen={() => setMobileOpen(true)} />
+        <main>
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { endpoints } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
 
 export function FabricsPage() {
   const queryClient = useQueryClient();
@@ -16,16 +17,14 @@ export function FabricsPage() {
 
   return (
     <>
-      <div className="card">
-        <div className="row" style={{ alignItems: "center" }}>
-          <h2 style={{ margin: 0 }}>Fabrics</h2>
-          <div className="no-grow">
-            <button className="primary" onClick={() => setAdding(true)}>
-              New fabric
-            </button>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        title="Fabrics"
+        description="A fabric connects your sites to each other over whatever internet they have. Choose how they connect and which sites take part; the controller works out the tunnels."
+      >
+        <button className="primary" onClick={() => setAdding(true)}>
+          New fabric
+        </button>
+      </PageHeader>
 
       {adding && (
         <NewFabricForm

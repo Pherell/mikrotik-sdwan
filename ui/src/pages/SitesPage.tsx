@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { AddSiteWizard } from "../components/AddSiteWizard";
 import { endpoints, type Site } from "../lib/api";
+import { PageHeader } from "../components/PageHeader";
 
 export function SitesPage() {
   const [adding, setAdding] = useState(false);
@@ -11,16 +12,14 @@ export function SitesPage() {
 
   return (
     <>
-      <div className="card">
-        <div className="row" style={{ alignItems: "center" }}>
-          <h2 style={{ margin: 0 }}>Sites</h2>
-          <div className="no-grow">
-            <button className="primary" onClick={() => setAdding(true)}>
-              Add site
-            </button>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        title="Sites"
+        description="A site is a location and the RouterOS device that serves it, with its uplinks. Everything else is built on top of these."
+      >
+        <button className="primary" onClick={() => setAdding(true)}>
+          Add site
+        </button>
+      </PageHeader>
 
       {adding && <AddSiteWizard onClose={() => setAdding(false)} />}
 
