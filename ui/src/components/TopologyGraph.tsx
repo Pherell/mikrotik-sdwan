@@ -1,4 +1,4 @@
-import type { Fabric, FabricLink, Site } from "../lib/api";
+import type { Fabric, FabricLink, Site, SiteRole } from "../lib/api";
 
 /**
  * The fabric as a picture: hubs in the middle, spokes on a ring around them,
@@ -27,19 +27,27 @@ export function TopologyGraph({
     for (const wan of site.wans) wanOwner.set(wan.id, site.id);
   }
 
+  // The role that counts is the membership's, not the device's. A device is a
+  // spoke by default and is promoted to hub *in one network* through
+  // role_override -- which is exactly what the expander reads. Drawing
+  // site.role instead meant a device you had made a hub here still appeared as
+  // a spoke, and the picture disagreed with the tunnels beneath it.
   const memberSites = fabric.members
-    .map((m) => byId.get(m.site_id))
-    .filter((s): s is Site => Boolean(s));
+    .map((m) => {
+      const site = byId.get(m.site_id);
+      return site ? { site, role: m.role_override ?? site.role } : null;
+    })
+    .filter((m): m is { site: Site; role: SiteRole } => m !== null);
 
-  const hubs = memberSites.filter((s) => s.role === "hub");
-  const spokes = memberSites.filter((s) => s.role !== "hub");
+  const hubs = memberSites.filter((m) => m.role === "hub");
+  const spokes = memberSites.filter((m) => m.role !== "hub");
 
   const pos = new Map<string, { x: number; y: number }>();
-  hubs.forEach((site, i) => {
+  hubs.forEach(({ site }, i) => {
     const spread = hubs.length === 1 ? 0 : (i - (hubs.length - 1) / 2) * 140;
     pos.set(site.id, { x: cx + spread, y: cy });
   });
-  spokes.forEach((site, i) => {
+  spokes.forEach(({ site }, i) => {
     const angle = (i / Math.max(spokes.length, 1)) * Math.PI * 2 - Math.PI / 2;
     pos.set(site.id, {
       x: cx + Math.cos(angle) * 165,
@@ -48,7 +56,11 @@ export function TopologyGraph({
   });
 
   if (memberSites.length === 0) {
-    return <p className="muted">No members yet. Add sites to see the topology.</p>;
+    return (
+      <p className="muted">
+        No devices in this network yet. Add some to see the shape.
+      </p>
+    );
   }
 
   // Several links can join the same pair of sites (one per WAN). Collapse them
@@ -65,7 +77,11 @@ export function TopologyGraph({
   }
 
   return (
-    <svg
+    <>
+      {edges.size === 0 && (
+        <div className="warn">{explainNoTunnels(fabric, hubs.length, memberSites.length)}</div>
+      )}
+      <svg
       viewBox={`0 0 ${width} ${height}`}
       style={{ width: "100%", height: "auto", maxHeight: 420 }}
       role="img"
@@ -100,9 +116,9 @@ export function TopologyGraph({
         );
       })}
 
-      {memberSites.map((site) => {
+      {memberSites.map(({ site, role }) => {
         const p = pos.get(site.id)!;
-        const isHub = site.role === "hub";
+        const isHub = role === "hub";
         return (
           <g key={site.id}>
             <circle
@@ -135,6 +151,34 @@ export function TopologyGraph({
         );
       })}
     </svg>
+    </>
+  );
+}
+
+/**
+ * Why the picture has no lines in it.
+ *
+ * A graph of unconnected circles is an accurate drawing of nothing and a
+ * useless answer to "did this work?". Every reason below is one somebody hits
+ * on their first network, and each has a different fix, so naming the specific
+ * one is the whole value.
+ */
+function explainNoTunnels(fabric: Fabric, hubCount: number, memberCount: number): string {
+  if (memberCount < 2) {
+    return "A tunnel needs two devices. Add another to this network.";
+  }
+  if (fabric.topology !== "full_mesh" && hubCount === 0) {
+    return (
+      "No tunnels: this network is hub and spoke, every device in it is a " +
+      "spoke, and spokes are never linked to each other. Open a member below " +
+      "and set its role to hub — or change the network to full mesh, where " +
+      "every pair is linked regardless of role."
+    );
+  }
+  return (
+    "No tunnels yet. Use Rebuild tunnels to compute them, and read the " +
+    "skipped list it returns — a pair where neither end has a public IP " +
+    "cannot be linked, because neither can accept the connection."
   );
 }
 
