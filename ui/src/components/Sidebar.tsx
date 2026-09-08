@@ -110,6 +110,12 @@ const icons = {
       <rect x="2" y="13" width="5" height="6" rx="1" />
     </Icon>
   ),
+  logs: (
+    <Icon>
+      <path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+      <path d="M14 4v5h5M8 13h8M8 17h5" />
+    </Icon>
+  ),
   diagnostics: (
     <Icon>
       <path d="M3 12h3l2.5-6 3 12 2.5-6H21" />
@@ -178,6 +184,7 @@ const GROUPS: { heading: string; items: Item[] }[] = [
     heading: "System",
     items: [
       { to: "/jobs", label: "Jobs", icon: icons.jobs },
+      { to: "/logs", label: "Logs", icon: icons.logs },
       { to: "/settings", label: "Settings", icon: icons.settings },
       { to: "/users", label: "Users", icon: icons.users },
     ],

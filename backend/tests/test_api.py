@@ -354,3 +354,114 @@ async def test_lockout_is_recorded_in_the_audit_trail(api) -> None:
 
     assert "auth.login.failed" in actions
     assert "auth.login.throttled" in actions
+
+
+# -- the audit trail, read back ---------------------------------------------
+
+
+async def test_audit_lists_what_happened_newest_first(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+
+    await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={"name": "one", "mgmt_host": "10.0.0.1", "username": "admin",
+              "password": "pw", "local_prefixes": ["10.1.0.0/24"]},
+    )
+    await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={"name": "two", "mgmt_host": "10.0.0.2", "username": "admin",
+              "password": "pw", "local_prefixes": ["10.2.0.0/24"]},
+    )
+
+    resp = await client.get("/audit", headers=_auth(token))
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    creates = [r for r in rows if r["action"] == "site.create"]
+    assert len(creates) == 2
+    assert creates[0]["detail"]["name"] == "two"  # newest first
+    assert creates[0]["actor_email"] == "admin@example.com"
+
+
+async def test_the_audit_trail_is_admin_only(api) -> None:
+    """It reports on people, not devices: source addresses, and -- because
+    failed logins are audited -- which email addresses exist. An operator does
+    not need that, and a viewer with it has an account-enumeration endpoint."""
+    client, maker = api
+    await _seed(maker, Role.operator, "op@example.com")
+    token = await _token(client, "op@example.com")
+
+    assert (await client.get("/audit", headers=_auth(token))).status_code == 403
+    assert (await client.get("/audit/actions", headers=_auth(token))).status_code == 403
+
+
+async def test_audit_can_be_filtered_to_one_object(api) -> None:
+    """The question people actually ask is "who touched this site", not "show
+    me everything"."""
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+
+    first = await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={"name": "one", "mgmt_host": "10.0.0.1", "username": "admin",
+              "password": "pw", "local_prefixes": ["10.1.0.0/24"]},
+    )
+    await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={"name": "two", "mgmt_host": "10.0.0.2", "username": "admin",
+              "password": "pw", "local_prefixes": ["10.2.0.0/24"]},
+    )
+    site_id = first.json()["id"]
+
+    resp = await client.get(f"/audit?object_id={site_id}", headers=_auth(token))
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert rows
+    assert all(r["object_id"] == site_id for r in rows)
+
+
+async def test_the_action_filter_list_comes_from_the_data(api) -> None:
+    """A hardcoded list of action names goes stale the first time an endpoint
+    is added, and a stale filter hides events rather than failing."""
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+    await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={"name": "one", "mgmt_host": "10.0.0.1", "username": "admin",
+              "password": "pw", "local_prefixes": ["10.1.0.0/24"]},
+    )
+
+    resp = await client.get("/audit/actions", headers=_auth(token))
+
+    assert resp.status_code == 200
+    actions = resp.json()
+    assert "site.create" in actions
+    assert actions == sorted(actions)
+    assert len(actions) == len(set(actions))
+
+
+async def test_a_failed_login_is_audited_without_storing_the_password(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    await client.post(
+        "/auth/login",
+        json={"email": "admin@example.com", "password": "hunter2-is-wrong"},
+    )
+    token = await _token(client, "admin@example.com")
+
+    resp = await client.get("/audit", headers=_auth(token))
+
+    rows = resp.json()
+    serialised = str(rows)
+    assert "hunter2-is-wrong" not in serialised
+    assert any("login" in r["action"] for r in rows)

@@ -91,6 +91,8 @@ class FakeRouterOS:
             "ip/firewall/nat",
             "ip/firewall/filter",
             "ip/firewall/address-list",
+            # Every router has a log, even a freshly booted one.
+            "log",
         ):
             self.menus[always_present] = []
         if wireguard:

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from app.api.v1 import auth as auth_api
 from app.api.v1 import fabrics as fabrics_api
 from app.api.v1 import jobs as jobs_api
+from app.api.v1 import logs as logs_api
 from app.api.v1 import ops as ops_api
 from app.api.v1 import policies as policies_api
 from app.api.v1 import sites as sites_api
@@ -113,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(fabrics_api.router, prefix="/api/v1")
     app.include_router(policies_api.router, prefix="/api/v1")
     app.include_router(ops_api.router, prefix="/api/v1")
+    app.include_router(logs_api.router, prefix="/api/v1")
     return app
 
 

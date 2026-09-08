@@ -496,6 +496,9 @@ def patched_sites_driver(routers, monkeypatch):
             await d.close()
 
     monkeypatch.setattr("app.api.v1.sites.open_driver", fake)
+    # The device log is a passthrough too, and it opens its own driver in its
+    # own module -- patching one and not the other silently tests nothing.
+    monkeypatch.setattr("app.api.v1.logs.open_driver", fake)
 
 
 async def test_passthrough_reads_an_allowed_menu(api, patched_sites_driver) -> None:
@@ -1231,3 +1234,66 @@ async def test_an_unreachable_device_makes_tunnels_unknown_not_down(
         assert row["bgp_established"] is None
         # What the controller intended is still known, and still worth showing.
         assert row["peer_site_name"] in {"spoke1", "spoke2"}
+
+
+# -- the device's own log ---------------------------------------------------
+
+
+async def test_device_log_reads_the_routers_own_log(api, patched_sites_driver) -> None:
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    routers["198.51.100.5"].rows("log").extend([
+        {"time": "sep/07 09:00:01", "topics": "system,info", "message": "router rebooted"},
+        {"time": "sep/07 09:03:44", "topics": "ipsec,error",
+         "message": "phase1 negotiation failed due to time up"},
+    ])
+
+    resp = await client.get(f"/sites/{sites['hub1']}/log", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert [r["message"] for r in rows][0].startswith("phase1")  # newest first
+    assert rows[0]["topics"] == ["ipsec", "error"]
+    assert rows[0]["severity"] == "error"
+    assert rows[1]["severity"] == "info"
+
+
+async def test_device_log_can_be_filtered_by_topic(api, patched_sites_driver) -> None:
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    routers["198.51.100.5"].rows("log").extend([
+        {"time": "1", "topics": "system,info", "message": "router rebooted"},
+        {"time": "2", "topics": "ipsec,error", "message": "phase1 failed"},
+    ])
+
+    resp = await client.get(f"/sites/{sites['hub1']}/log?topic=error", headers=headers)
+
+    assert resp.status_code == 200
+    assert [r["message"] for r in resp.json()] == ["phase1 failed"]
+
+
+async def test_an_unreachable_device_has_no_log_to_show(api, monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+
+    from app.drivers.base import DriverError
+
+    client, _, _ = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    @asynccontextmanager
+    async def unreachable(site, _box=None):
+        raise DriverError("connection refused")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("app.api.v1.logs.open_driver", unreachable)
+
+    resp = await client.get(f"/sites/{sites['hub1']}/log", headers=headers)
+
+    # 502, not 500: the controller is fine, the device is not.
+    assert resp.status_code == 502
+    assert "connection refused" in resp.json()["detail"]

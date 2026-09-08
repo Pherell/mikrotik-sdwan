@@ -243,16 +243,27 @@ Straightforward and overdue. The port panel already reads every interface; the
 uplink form should offer that list instead of a free-text field where a typo
 produces a policy that silently matches nothing.
 
-### Logging
+### Logging — done
 
 Three different things wearing one word:
 
-- **audit** — who changed what in the controller. Exists in the database, has no
-  UI.
-- **job log** — what happened during an apply. Exists, shown per job.
-- **device log** — RouterOS's own log, read from `/log`. Does not exist.
+- **audit** — who changed what in the controller. Existed in the database with
+  no UI; now `GET /audit`, admin only, on a Logs page.
+- **job log** — what happened during an apply. Existed; the Logs page links to
+  it rather than showing a worse copy.
+- **device log** — RouterOS's own log, read from `/log`. New.
 
-All three should be visible; only the third is new work.
+Three tabs, not one merged stream: they answer different questions and belong
+to different owners, and merging them produces a feed where nothing can be
+found.
+
+Two things the work turned up. The audit trail is **admin only** — it carries
+source addresses and, because failed logins are audited, the email addresses of
+accounts that do and do not exist, which makes it an account-enumeration
+endpoint in anyone else's hands. And audit rows needed a Python-generated
+`created_at`: `func.now()` is `CURRENT_TIMESTAMP`, which SQLite resolves to
+whole seconds, so two events in the same second came back in UUID order — in no
+order at all. For an append-only trail the order *is* the content.
 
 ### API documentation and tokens
 
@@ -272,7 +283,7 @@ V1   Vocabulary and menu split            cheap, and every later screen inherits
 U1   Interface dropdowns                  small, removes a whole class of typo
 S1   SD-WAN groups + traffic rules        the model change; needs V1's words
 D1   Diagnostics                          done
-L1   Logs                                 independent
+L1   Logs                                 done
 A1   API tokens and scopes                independent
 S2   Load balancing via PCC               needs F1a and S1
 C1   Interactive SSH console              last; largest security decision

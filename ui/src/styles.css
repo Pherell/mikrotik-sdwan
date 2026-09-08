@@ -1419,3 +1419,58 @@ kbd {
   line-height: 1.45;
   margin-top: var(--space-1);
 }
+
+/* Tabs.
+   Used where one page holds several views of genuinely different things --
+   the audit trail and the router's own log are not two filters over one
+   stream, so they are not one table with a dropdown. */
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+button.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  padding: var(--space-2) var(--space-4);
+  /* Sits on the container's border, so the active underline replaces it
+     rather than stacking below it. */
+  margin-bottom: -1px;
+}
+
+button.tab:hover:not(:disabled) {
+  color: var(--text);
+  border-color: transparent;
+}
+
+button.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* A link that has to sit next to buttons and look like one. */
+a.button {
+  display: inline-block;
+  padding: var(--space-2) var(--space-4);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.button:hover {
+  border-color: var(--muted);
+}
+
+/* A timestamp that must not wrap mid-date. */
+.nowrap {
+  white-space: nowrap;
+}

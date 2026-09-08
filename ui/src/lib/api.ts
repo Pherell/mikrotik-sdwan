@@ -406,6 +406,27 @@ export interface Port {
   managed: boolean;
 }
 
+// -- logs -------------------------------------------------------------------
+
+export interface AuditEvent {
+  id: string;
+  created_at: string;
+  actor_id: string | null;
+  actor_email: string | null;
+  action: string;
+  object_type: string | null;
+  object_id: string | null;
+  detail: Record<string, unknown> | null;
+  source_ip: string | null;
+}
+
+export interface DeviceLogEntry {
+  time: string | null;
+  topics: string[];
+  message: string;
+  severity: "info" | "warning" | "error";
+}
+
 // -- diagnostics ------------------------------------------------------------
 
 export interface PingProbe {
@@ -549,6 +570,32 @@ export const endpoints = {
   users: () => api.get<User[]>("/users"),
   createUser: (body: unknown) => api.post<User>("/users", body),
   updateUser: (id: string, body: unknown) => api.patch<User>(`/users/${id}`, body),
+
+  // -- logs ----------------------------------------------------------------
+  audit: (params: {
+    action?: string;
+    object_id?: string;
+    actor_email?: string;
+    limit?: number;
+  }) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const suffix = query.toString();
+    return api.get<AuditEvent[]>(`/audit${suffix ? `?${suffix}` : ""}`);
+  },
+  auditActions: () => api.get<string[]>("/audit/actions"),
+  deviceLog: (siteId: string, params: { topic?: string; contains?: string }) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const suffix = query.toString();
+    return api.get<DeviceLogEntry[]>(
+      `/sites/${siteId}/log${suffix ? `?${suffix}` : ""}`,
+    );
+  },
 
   // -- diagnostics ---------------------------------------------------------
   ping: (

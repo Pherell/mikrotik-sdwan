@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, Tenanted, Timestamps, UUIDPk
+from app.models.base import Base, Tenanted, Timestamps, UUIDPk, utcnow
 from app.models.enums import JobKind, JobState
 from app.models.site import JSONCol
 
@@ -56,6 +56,16 @@ class AuditEvent(Base, UUIDPk, Timestamps, Tenanted):
     state-changing API call."""
 
     __tablename__ = "audit_events"
+
+    # created_at is generated in Python here, overriding the mixin's
+    # server_default. func.now() is CURRENT_TIMESTAMP, which SQLite resolves to
+    # whole seconds -- so two events written in the same second came back in
+    # UUID order, which is to say in no order at all. For an append-only trail
+    # the order *is* the content. No migration: the column is unchanged, only
+    # who fills it in.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=utcnow, nullable=False
+    )
 
     actor_id: Mapped[str | None] = mapped_column(String(36), index=True)
     actor_email: Mapped[str | None] = mapped_column(String(255))
