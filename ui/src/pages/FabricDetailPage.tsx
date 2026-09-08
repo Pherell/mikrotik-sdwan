@@ -4,7 +4,13 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { FabricSettings } from "../components/FabricSettings";
 import { TopologyGraph } from "../components/TopologyGraph";
-import { endpoints, type Expansion } from "../lib/api";
+import {
+  endpoints,
+  type Expansion,
+  type FabricLink,
+  type Site,
+  type Wan,
+} from "../lib/api";
 import { Skeleton } from "../components/Skeleton";
 
 export function FabricDetailPage() {
@@ -100,7 +106,7 @@ export function FabricDetailPage() {
                   if (
                     confirm(
                       `Delete fabric ${f.name}? Tunnels stay on the devices until ` +
-                        `each member site is applied again.`,
+                        `each member device is applied again.`,
                     )
                   )
                     removeFabric.mutate();
@@ -146,7 +152,7 @@ export function FabricDetailPage() {
           <table>
             <thead>
               <tr>
-                <th>Site</th>
+                <th>Device</th>
                 <th>Loopback</th>
                 <th />
               </tr>
@@ -202,36 +208,21 @@ export function FabricDetailPage() {
         {(links.data ?? []).length === 0 ? (
           <p className="muted">
             No links yet. Recompute to build them from the topology, then apply each
-            member site to push the tunnels.
+            member device to push the tunnels.
           </p>
         ) : (
-          <table>
+          <table className="stack">
             <thead>
               <tr>
-                <th>Link</th>
-                <th>Subnet</th>
-                <th>Addresses</th>
-                <th>Dials</th>
+                <th>Between</th>
+                <th>Outside — where it dials</th>
+                <th>Inside — the tunnel itself</th>
                 <th>Keys</th>
               </tr>
             </thead>
             <tbody>
               {(links.data ?? []).map((l) => (
-                <tr key={l.id}>
-                  <td>{l.slug}</td>
-                  <td className="muted">{l.subnet}</td>
-                  <td className="muted">
-                    {l.a_tunnel_ip} ↔ {l.b_tunnel_ip}
-                  </td>
-                  <td>{l.initiator === "a" ? "side A" : "side B"}</td>
-                  <td>
-                    {l.has_secrets ? (
-                      <span className="badge reachable">generated</span>
-                    ) : (
-                      <span className="badge unreachable">missing</span>
-                    )}
-                  </td>
-                </tr>
+                <TunnelRow key={l.id} link={l} sites={sites.data ?? []} />
               ))}
             </tbody>
           </table>
@@ -261,10 +252,93 @@ function ExpansionResult({ result }: { result: Expansion }) {
       )}
       {(result.created > 0 || result.removed > 0) && (
         <p className="muted">
-          Nothing has been pushed yet. Apply each affected site to put these changes on
+          Nothing has been pushed yet. Apply each affected device to put these changes on
           the devices.
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * One tunnel, described by where it goes rather than by its slug.
+ *
+ * The table used to show the slug, the /31 and the two tunnel addresses — all
+ * of which are *inside* the tunnel. Nothing said which two devices it joined
+ * (except through a truncated slug) or which public address each end dials,
+ * which is the question anyone looking at this actually has, and the one that
+ * explains a tunnel that never comes up.
+ *
+ * The join happens here rather than on the server because the sites, with
+ * their uplinks, are already loaded on this page for the topology graph.
+ */
+function TunnelRow({ link, sites }: { link: FabricLink; sites: Site[] }) {
+  const end = (wanId: string) => {
+    for (const site of sites) {
+      const wan = site.wans.find((w) => w.id === wanId);
+      if (wan) return { site, wan };
+    }
+    return null;
+  };
+
+  const a = end(link.a_wan_id);
+  const b = end(link.b_wan_id);
+  const dialsFromA = link.initiator === "a";
+
+  return (
+    <tr>
+      <td data-label="Between">
+        <Endpoint end={a} /> ↔ <Endpoint end={b} />
+      </td>
+      <td data-label="Outside">
+        {/* The destination is the *responder's* public address. There is no
+            destination field on a tunnel because it is not a property of the
+            tunnel -- it is the far uplink's Public IP, and this is the only
+            place the two are shown together. */}
+        {(() => {
+          const responder = dialsFromA ? b : a;
+          const dialer = dialsFromA ? a : b;
+          if (!responder?.wan.public_ip) {
+            return (
+              <span className="badge unreachable">
+                neither end has a public address
+              </span>
+            );
+          }
+          return (
+            <>
+              <span className="muted">{dialer?.site.name ?? "?"} dials </span>
+              <code>{responder.wan.public_ip}</code>
+              <div className="muted">
+                on {responder.site.name}/{responder.wan.name}
+              </div>
+            </>
+          );
+        })()}
+      </td>
+      <td data-label="Inside" className="muted">
+        <code>
+          {link.a_tunnel_ip} ↔ {link.b_tunnel_ip}
+        </code>
+        <div>out of {link.subnet}</div>
+      </td>
+      <td data-label="Keys">
+        {link.has_secrets ? (
+          <span className="badge reachable">generated</span>
+        ) : (
+          <span className="badge unreachable">missing</span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function Endpoint({ end }: { end: { site: Site; wan: Wan } | null }) {
+  if (!end) return <span className="muted">unknown uplink</span>;
+  return (
+    <>
+      <Link to={`/devices/${end.site.id}`}>{end.site.name}</Link>
+      <span className="muted">/{end.wan.name}</span>
+    </>
   );
 }

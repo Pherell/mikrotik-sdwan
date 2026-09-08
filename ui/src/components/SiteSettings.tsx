@@ -196,7 +196,7 @@ export function SiteSettings({ site, onDone }: { site: Site; onDone: () => void 
           </div>
         </div>
         <p className="muted">
-          Changing addressing or prefixes only updates intent. Apply the site to put
+          Changing addressing or prefixes only updates intent. Apply the device to put
           it on the device.
         </p>
       </form>

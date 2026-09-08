@@ -39,7 +39,7 @@ export function UplinksPage() {
     <>
       <PageHeader
         title="Uplinks"
-        description="One uplink is one internet connection on one device. Tunnels are built per uplink, not per device, so a device with two uplinks joins a tunnel network twice — which is what lets one fail without taking the site down."
+        description="One uplink is one internet connection on one device. Tunnels are built per uplink, not per device, so a device with two uplinks joins a tunnel network twice — which is what lets one fail without taking the device offline."
       />
 
       <div className="card">

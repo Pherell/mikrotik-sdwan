@@ -106,7 +106,7 @@ export function AddSiteWizard({ onClose }: { onClose: () => void }) {
             <h2 style={{ marginTop: 20 }}>Discovered uplinks</h2>
             {probe.suggested_wans.length === 0 ? (
               <p className="muted">
-                No default route or DHCP client found. Add uplinks by hand on the site
+                No default route or DHCP client found. Add uplinks by hand on the device
                 page.
               </p>
             ) : (

@@ -32,7 +32,7 @@ export function ArmedIndicator() {
         backup and reboot.
       </strong>{" "}
       The controller could not confirm management access after a push. If the
-      configuration is actually fine, disarm it from the site page before it fires.{" "}
+      configuration is actually fine, disarm it from the device page before it fires.{" "}
       <Link to="/jobs">See the jobs →</Link>
     </div>
   );

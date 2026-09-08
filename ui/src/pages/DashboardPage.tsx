@@ -156,7 +156,7 @@ function ArmedBanner({ jobs, sites }: { jobs: Job[]; sites: Site[] }) {
           a backup and reboot.
         </strong>{" "}
         The controller could not confirm management access after a push. If the
-        configuration is actually fine, disarm the rollback from the site page
+        configuration is actually fine, disarm the rollback from the device page
         before it fires.
         <ul>
           {jobs.map((j) => (

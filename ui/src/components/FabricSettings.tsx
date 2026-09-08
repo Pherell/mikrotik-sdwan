@@ -136,7 +136,7 @@ export function FabricSettings({ fabric, onDone }: { fabric: Fabric; onDone: () 
             Switching from <strong>{fabric.transport}</strong> to{" "}
             <strong>{form.transport}</strong> re-keys every link — the old key
             material cannot carry over. Nothing changes on the devices until you
-            apply each member site, and the old stack is swept off then.
+            apply each member device, and the old stack is swept off then.
           </p>
         )}
 
