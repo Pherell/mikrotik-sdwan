@@ -179,6 +179,9 @@ class WireGuardTransport:
 
         return [interface, peers, address]
 
+    def defaults(self) -> dict[str, object]:
+        return {}  # nothing to negotiate
+
     def interface_name(self, slug: str) -> str:
         return iface_name("wg", slug)
 

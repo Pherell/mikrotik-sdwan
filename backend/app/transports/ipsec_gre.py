@@ -218,6 +218,9 @@ class IpsecGreTransport:
 
     # -- shared ------------------------------------------------------------
 
+    def defaults(self) -> dict[str, object]:
+        return dict(DEFAULT_PARAMS)
+
     def interface_name(self, slug: str) -> str:
         return iface_name("gre", slug)
 

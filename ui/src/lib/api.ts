@@ -250,11 +250,32 @@ export interface FabricLink {
   has_secrets: boolean;
 }
 
+/**
+ * One thing a transport lets you change.
+ *
+ * The list travels with the transport rather than being written out again
+ * here: a second copy of a list of ciphers goes stale the first time one is
+ * added, and a stale list silently hides a setting.
+ */
+export interface TransportOption {
+  key: string;
+  label: string;
+  why: string;
+  kind: "choice" | "int" | "duration" | "text";
+  choices: string[];
+  minimum: number | null;
+  maximum: number | null;
+  default: string | number | null;
+}
+
 export interface TransportInfo {
   name: string;
   supported_ros: number[];
   requires_reachable_responder: boolean;
   supports_dynamic_mesh: boolean;
+  // Empty for transports with nothing to negotiate: GRE and IPIP have no
+  // ciphers to agree on, and WireGuard's are not selectable by design.
+  options: TransportOption[];
 }
 
 export interface Expansion {

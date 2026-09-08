@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from ipaddress import ip_network
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.enums import SiteRole, Topology, Transport
 from app.schemas.time import UtcDatetime
+from app.transports.params import validate as validate_params
 
 
 def _valid_cidr(v: str) -> str:
@@ -29,6 +30,23 @@ class FabricBase(BaseModel):
 
     _check_pool = field_validator("ip_pool")(_valid_cidr)
     _check_loopback_pool = field_validator("loopback_pool")(_valid_cidr)
+
+    @model_validator(mode="after")
+    def _check_transport_params(self) -> FabricBase:
+        """Reject overrides the transport does not understand.
+
+        Both failures this prevents are silent ones. A misspelled key is
+        ignored, so the fabric builds with the default exactly as if nothing
+        had been set. A bad value renders, applies cleanly, and the tunnel
+        never establishes -- IKE mismatches do not report themselves as
+        configuration errors.
+        """
+        problems = validate_params(str(self.transport), self.transport_params or {})
+        if problems:
+            raise ValueError(
+                "; ".join(f"{p.key}: {p.message}" for p in problems)
+            )
+        return self
 
     @field_validator("ip_pool")
     @classmethod

@@ -210,16 +210,37 @@ sessions too — this is not MikroTik being worse, but nobody should choose
 
 ## Part 4 — Everything else, honestly sized
 
-### User-defined tunnels rather than templates
+### User-defined tunnels rather than templates — done
 
 > user can config the vpn using their own prefrence not setup by template
 
-Fair. Today a tunnel network picks a transport and the crypto comes from a
-profile. Exposing IKE proposal, DH group, PFS, lifetimes, and letting someone
-bring their own pre-shared key or certificate, is a real need for anyone with a
-security standard to meet. It is also the fastest way to build a fabric that
-silently fails to establish, so it belongs behind Advanced with validation and a
-clear "these must match on both ends" warning.
+The mechanism already existed: `Fabric.transport_params` is merged over each
+transport's defaults at render time. What was missing was that the field was an
+untyped `dict` nothing validated, and no way to reach it from the UI.
+
+Each transport now declares its options — key, allowed values, and a sentence
+saying what the option is for — and the fabric schema validates against that.
+Both failures this prevents are silent ones. A misspelled key was *ignored*, so
+the fabric built with the default exactly as if nothing had been set. A bad
+value rendered, applied cleanly, and the tunnel never established, because IKE
+mismatches do not report themselves as configuration errors. Either way it
+surfaced as "the VPN is broken", days later, with nothing pointing at the
+cause.
+
+The UI draws the Advanced section from the same declaration rather than
+carrying a second list: a copy of a list of ciphers goes stale the first time
+one is added, and a stale list silently hides a setting. Only values changed
+away from the default are stored, so a fabric created today still follows this
+build's chosen default tomorrow.
+
+GRE, IPIP and WireGuard declare no options, and the UI says so rather than
+drawing an empty section that looks broken — they have no ciphers to agree on,
+and WireGuard's are not selectable by design.
+
+Still template-driven: bringing your own certificate. The PSK is generated per
+link and stored encrypted; certificate-based IKE is a different credential
+lifecycle (issue, distribute, renew, revoke) and belongs with a decision about
+where the CA lives.
 
 ### Diagnostics — done
 

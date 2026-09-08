@@ -110,6 +110,14 @@ class TransportDriver(Protocol):
         """Sections for ``link.local``. Called once per side."""
         ...
 
+    def defaults(self) -> dict[str, object]:
+        """This transport's parameter defaults, for the UI to draw against.
+
+        On the protocol rather than read from each module's DEFAULT_PARAMS by
+        name, so a transport that has none simply says so.
+        """
+        ...
+
     def interface_name(self, slug: str) -> str:
         """The interface this transport creates for a link with ``slug``.
 

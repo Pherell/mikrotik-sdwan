@@ -90,6 +90,9 @@ class VxlanTransport(_L2Stretch):
     prefix = "vxlan"
     supported_ros = {7}
 
+    def defaults(self) -> dict[str, object]:
+        return dict(DEFAULT_PARAMS)
+
     def interface_name(self, slug: str) -> str:
         # "vxl", not the class prefix: the rendered name predates it and
         # renaming an interface on a live device tears the tunnel down.
@@ -152,6 +155,9 @@ class EoipTransport(_L2Stretch):
     menu = "/interface/eoip"
     prefix = "eoip"
     supported_ros = {6, 7}
+
+    def defaults(self) -> dict[str, object]:
+        return dict(DEFAULT_PARAMS)
 
     def interface_name(self, slug: str) -> str:
         return iface_name("eoip", slug)

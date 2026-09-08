@@ -32,6 +32,9 @@ class _PointToPoint:
     def allocate(self) -> dict[str, str]:
         return {}  # nothing to key
 
+    def defaults(self) -> dict[str, object]:
+        return {}  # nothing to negotiate
+
     def interface_name(self, slug: str) -> str:
         return iface_name(self.prefix, slug)
 

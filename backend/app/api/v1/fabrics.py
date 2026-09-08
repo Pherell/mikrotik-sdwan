@@ -21,6 +21,8 @@ from app.schemas.fabric import (
 )
 from app.services.fabric import expand_fabric, load_fabric, reallocate_secrets
 from app.transports.base import TransportDriver, TransportError, available, get_transport
+from app.transports.params import describe
+from app.transports.params import validate as validate_params
 
 router = APIRouter(prefix="/fabrics", tags=["fabrics"])
 
@@ -57,7 +59,13 @@ async def _to_read(session: SessionDep, fabric: Fabric) -> FabricRead:
 
 @router.get("/transports")
 async def list_transports(_: RequireViewer) -> list[dict]:
-    """Which overlays this build can render, and what each one requires."""
+    """Which overlays this build can render, what each requires, and what each
+    lets you change.
+
+    The options travel with the transport rather than being a second list in
+    the UI: a copy of a list of ciphers is a copy that goes stale the first
+    time one is added, and a stale list silently hides a setting.
+    """
     out = []
     for name in available():
         driver = get_transport(name)
@@ -67,6 +75,7 @@ async def list_transports(_: RequireViewer) -> list[dict]:
                 "supported_ros": sorted(driver.supported_ros),
                 "requires_reachable_responder": driver.requires_reachable_responder,
                 "supports_dynamic_mesh": driver.supports_dynamic_mesh,
+                "options": describe(name, driver.defaults()).options,
             }
         )
     return out
@@ -159,6 +168,20 @@ async def update_fabric(
                 f"{data['transport']} transport (needs RouterOS "
                 f"{sorted(switched_to.supported_ros)}). Probe those sites, or "
                 "move them to their own fabric.",
+            )
+
+    # Params are validated against the *effective* transport: the one being
+    # switched to if this request switches, otherwise the stored one. Checking
+    # against the stored transport while the request changes it would accept
+    # settings the new transport has never heard of.
+    if "transport_params" in data or "transport" in data:
+        effective = str(data.get("transport", fabric.transport))
+        params = data.get("transport_params", fabric.transport_params) or {}
+        problems = validate_params(effective, params)
+        if problems:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "; ".join(f"{p.key}: {p.message}" for p in problems),
             )
 
     # Renumbering a live overlay drops every tunnel on it.
