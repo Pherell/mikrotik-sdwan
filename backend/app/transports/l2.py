@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from app.drivers.base import ConfigItem, ConfigSection
 from app.render.engine import section
-from app.transports.base import LinkView, register
+from app.transports.base import LinkView, iface_name, register
 
 DEFAULT_PARAMS: dict[str, object] = {
     # The bridge each stretched segment lands on. The operator is expected to
@@ -90,9 +90,14 @@ class VxlanTransport(_L2Stretch):
     prefix = "vxlan"
     supported_ros = {7}
 
+    def interface_name(self, slug: str) -> str:
+        # "vxl", not the class prefix: the rendered name predates it and
+        # renaming an interface on a live device tears the tunnel down.
+        return iface_name("vxl", slug)
+
     def render(self, link: LinkView) -> list[ConfigSection]:
         params = {**DEFAULT_PARAMS, **link.fabric.params}
-        iface = link.iface_name("vxl")
+        iface = self.interface_name(link.slug)
         tag = f"{link.tag}:vxlan"
 
         vxlan = section(
@@ -148,9 +153,12 @@ class EoipTransport(_L2Stretch):
     prefix = "eoip"
     supported_ros = {6, 7}
 
+    def interface_name(self, slug: str) -> str:
+        return iface_name("eoip", slug)
+
     def render(self, link: LinkView) -> list[ConfigSection]:
         params = {**DEFAULT_PARAMS, **link.fabric.params}
-        iface = link.iface_name("eoip")
+        iface = self.interface_name(link.slug)
         tag = f"{link.tag}:eoip"
 
         eoip = section(

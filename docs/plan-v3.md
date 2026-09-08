@@ -205,12 +205,25 @@ security standard to meet. It is also the fastest way to build a fabric that
 silently fails to establish, so it belongs behind Advanced with validation and a
 clear "these must match on both ends" warning.
 
-### Diagnostics
+### Diagnostics — done
 
-Ping, traceroute and a path test from a device, run through the existing
-allowlisted command runner. Plus, per tunnel: is the SA up, is BGP established,
-what does netwatch currently measure. This is the tool that answers "why is this
-tunnel down" without SSH.
+Ping, traceroute and a path test from a device. Plus, per tunnel: is the SA up,
+is BGP established, what does netwatch currently measure. This is the tool that
+answers "why is this tunnel down" without SSH.
+
+The plan said "run through the existing allowlisted command runner". There was
+no command runner -- `READABLE_PATHS` is a *read* allowlist, and the device
+console is menu browsing, not command execution. So ping and traceroute are the
+first endpoints that ask a device to do anything outside the reconciler. They
+are safe because RouterOS ping writes no configuration and leaves no rows, but
+the target still gets a strict validator in front of both drivers: the REST
+driver sends it as JSON while the SSH driver builds a console line out of it,
+and only one rule in front of both stays true when a third driver arrives.
+
+Three-state everywhere, not two. A GRE fabric has no IPsec SA; a device that
+was never applied has no interface; an unreachable device has no opinion about
+any of its tunnels. All three are `null`, drawn grey. Collapsing them into
+"down" turns one unreachable router into what looks like a total outage.
 
 ### Web console
 
@@ -258,7 +271,7 @@ F1b  NAT and filter management            correctness; makes steering actually w
 V1   Vocabulary and menu split            cheap, and every later screen inherits it
 U1   Interface dropdowns                  small, removes a whole class of typo
 S1   SD-WAN groups + traffic rules        the model change; needs V1's words
-D1   Diagnostics                          needs S1 to have something to diagnose
+D1   Diagnostics                          done
 L1   Logs                                 independent
 A1   API tokens and scopes                independent
 S2   Load balancing via PCC               needs F1a and S1

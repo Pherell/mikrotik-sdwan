@@ -1062,3 +1062,172 @@ async def test_the_operators_own_firewall_rules_are_never_touched(api) -> None:
         r.get("comment") == "put here by a human" for r in device.menus["ip/firewall/nat"]
     )
     assert any(r.get("comment") == "theirs too" for r in device.menus["ip/firewall/filter"])
+
+
+# -- diagnostics -------------------------------------------------------------
+
+
+async def test_ping_runs_on_the_device_and_is_audited(api, patched_sites_driver) -> None:
+    client, maker, routers = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/diagnostics/ping",
+        headers=headers,
+        json={"target": "8.8.8.8", "count": 3},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sent"] == 3
+    assert body["received"] == 3
+    assert body["loss_percent"] == 0.0
+    assert len(body["probes"]) == 3
+
+    # It ran on the right router, not on whichever one answered first.
+    assert routers["198.51.100.5"].commands[-1][0] == "ping"
+
+    from sqlalchemy import select
+
+    from app.models import AuditEvent
+
+    async with maker() as s:
+        actions = [e.action for e in await s.scalars(select(AuditEvent))]
+    assert "site.ping" in actions
+
+
+async def test_a_target_that_could_end_a_console_command_is_rejected(
+    api, patched_sites_driver
+) -> None:
+    """422 at the edge, so the string never reaches a driver."""
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/diagnostics/ping",
+        headers=headers,
+        json={"target": "8.8.8.8; /system reboot"},
+    )
+
+    assert resp.status_code == 422
+    assert routers["198.51.100.5"].commands == []
+
+
+async def test_a_viewer_may_not_ping_from_someone_elses_router(
+    api, patched_sites_driver
+) -> None:
+    client, maker, _ = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    async with maker() as s:
+        s.add(
+            User(
+                email="viewer@example.com",
+                role=Role.viewer,
+                password_hash=hash_password("correct-horse"),
+            )
+        )
+        await s.commit()
+    resp = await client.post(
+        "/auth/login",
+        json={"email": "viewer@example.com", "password": "correct-horse"},
+    )
+    viewer = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/diagnostics/ping",
+        headers=viewer,
+        json={"target": "8.8.8.8"},
+    )
+    assert resp.status_code == 403
+
+    # Reading tunnel state is a different matter: it changes nothing.
+    resp = await client.get(f"/sites/{sites['hub1']}/tunnels", headers=viewer)
+    assert resp.status_code == 200
+
+
+async def test_traceroute_returns_the_path(api, patched_sites_driver) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/diagnostics/traceroute",
+        headers=headers,
+        json={"target": "8.8.8.8", "seconds": 2},
+    )
+
+    assert resp.status_code == 200, resp.text
+    hops = resp.json()["hops"]
+    assert [h["hop"] for h in hops] == [1, 2]
+    assert hops[-1]["address"] == "8.8.8.8"
+
+
+async def test_tunnel_health_reports_a_tunnel_the_device_actually_has(
+    api, patched_sites_driver
+) -> None:
+    """The join the product exists to make: the controller's link, the
+    device's interface, and the BGP session over it, in one row."""
+    client, _, routers = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+    await client.post(
+        f"/sites/{sites['hub1']}/apply", headers=headers, json={"confirm": True}
+    )
+
+    hub = routers["198.51.100.5"]
+    gre = hub.rows("interface/gre")
+    assert gre, "apply should have created the tunnels"
+    hub.rows("routing/bgp/session").append(
+        {"remote.address": "10.255.0.1", "established": True, "prefix-count": 2}
+    )
+
+    resp = await client.get(f"/sites/{sites['hub1']}/tunnels", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len(rows) == 2  # one per spoke
+    names = {r["interface"] for r in rows}
+    assert names == {r["name"] for r in gre}
+    # The interface exists and is up, so this is not the never-applied case.
+    assert all(r["interface_running"] is True for r in rows)
+    assert all(r["peer_site_name"] in {"spoke1", "spoke2"} for r in rows)
+
+
+async def test_an_unreachable_device_makes_tunnels_unknown_not_down(
+    api, monkeypatch
+) -> None:
+    """"We could not ask" and "the tunnel is down" are different answers, and
+    conflating them turns one unreachable router into a total outage."""
+    from contextlib import asynccontextmanager
+
+    from app.drivers.base import DriverError
+
+    client, _, _ = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+
+    @asynccontextmanager
+    async def unreachable(site, _box=None):
+        raise DriverError("connection refused")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("app.api.v1.sites.open_driver", unreachable)
+
+    resp = await client.get(f"/sites/{sites['hub1']}/tunnels", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert len(rows) == 2
+    for row in rows:
+        assert row["error"] == "connection refused"
+        assert row["interface_running"] is None
+        assert row["ipsec_established"] is None
+        assert row["bgp_established"] is None
+        # What the controller intended is still known, and still worth showing.
+        assert row["peer_site_name"] in {"spoke1", "spoke2"}

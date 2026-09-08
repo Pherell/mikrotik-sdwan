@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from app.drivers.base import ConfigItem, ConfigSection
 from app.render.engine import section
-from app.transports.base import LinkView, generate_psk, register
+from app.transports.base import LinkView, generate_psk, iface_name, register
 
 # Defaults chosen for modern hardware. Overridable per fabric through
 # transport_params so an old RB can fall back to CBC.
@@ -218,12 +218,15 @@ class IpsecGreTransport:
 
     # -- shared ------------------------------------------------------------
 
+    def interface_name(self, slug: str) -> str:
+        return iface_name("gre", slug)
+
     def _gre(
         self, link: LinkView, params: dict, ipsec_secret: str | None = None
     ) -> ConfigSection:
         tag = f"{link.tag}:gre"
         props: dict[str, object] = {
-            "name": link.iface_name("gre"),
+            "name": self.interface_name(link.slug),
             "remote-address": link.remote.public_ip,
             "mtu": link.fabric.mtu,
             # Without keepalives a GRE interface stays "running" after the far
@@ -257,7 +260,7 @@ class IpsecGreTransport:
                 ConfigItem(
                     props={
                         "address": f"{link.local.tunnel_ip}/31",
-                        "interface": link.iface_name("gre"),
+                        "interface": self.interface_name(link.slug),
                     },
                     tag=tag,
                 )

@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from app.deps import RequireAdmin, RequireOperator, RequireViewer, SessionDep, write_audit
+from app.drivers.base import DriverError
 from app.drivers.factory import open_driver
+from app.models.fabric import Link
 from app.models.site import Site, Wan
+from app.schemas.diagnostics import (
+    PingRequest,
+    PingResult,
+    TracerouteRequest,
+    TracerouteResult,
+    TunnelHealth,
+)
 from app.schemas.health import DeviceHealth
 from app.schemas.ports import PortRead
 from app.schemas.site import (
@@ -21,6 +31,7 @@ from app.schemas.site import (
     WanUpdate,
 )
 from app.security import SecretBox
+from app.services.diagnostics import run_ping, run_traceroute, tunnel_health
 from app.services.health import read_health
 from app.services.ports import read_ports
 from app.services.probe import apply_probe, probe_site
@@ -333,3 +344,133 @@ async def read_device(
     async with open_driver(site) as driver:
         rows = await driver.read("/" + normalized)
     return [{k: v for k, v in row.items() if k not in _SENSITIVE} for row in rows]
+
+
+# -- diagnostics -------------------------------------------------------------
+
+# Ping and traceroute are the only endpoints that ask a device to *do*
+# something outside the reconciler. They are here rather than behind the
+# reconciler because they change nothing: RouterOS ping writes no
+# configuration, leaves no rows, and stops when the count runs out.
+#
+# Operator, not viewer. A viewer reading state is one thing; a viewer aiming
+# traffic at an arbitrary address from someone else's router is another, and
+# the audit trail below is the reason the distinction is worth keeping.
+
+
+@router.post("/{site_id}/diagnostics/ping", response_model=PingResult)
+async def ping_from_site(
+    site_id: str,
+    body: PingRequest,
+    session: SessionDep,
+    request: Request,
+    user: RequireOperator,
+) -> PingResult:
+    """Ping an address from the device, optionally out of one uplink."""
+    site = await _get_or_404(session, site_id)
+    await write_audit(
+        session,
+        actor=user,
+        action="site.ping",
+        object_type="site",
+        object_id=site.id,
+        detail={"target": body.target, "interface": body.interface},
+        request=request,
+    )
+    try:
+        async with open_driver(site) as driver:
+            return await run_ping(driver, body)
+    except DriverError as exc:
+        # The device being unreachable is an answer to a diagnostic question,
+        # but it is not *this* diagnostic's answer, so it stays an error.
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+@router.post("/{site_id}/diagnostics/traceroute", response_model=TracerouteResult)
+async def traceroute_from_site(
+    site_id: str,
+    body: TracerouteRequest,
+    session: SessionDep,
+    request: Request,
+    user: RequireOperator,
+) -> TracerouteResult:
+    """Trace the path from the device to an address."""
+    site = await _get_or_404(session, site_id)
+    await write_audit(
+        session,
+        actor=user,
+        action="site.traceroute",
+        object_type="site",
+        object_id=site.id,
+        detail={"target": body.target, "interface": body.interface},
+        request=request,
+    )
+    try:
+        async with open_driver(site) as driver:
+            return await run_traceroute(driver, body)
+    except DriverError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+@router.get("/{site_id}/tunnels", response_model=list[TunnelHealth])
+async def site_tunnel_health(
+    site_id: str, session: SessionDep, _: RequireViewer
+) -> list[TunnelHealth]:
+    """Every tunnel this device has an end of, and why each one is or is not up.
+
+    Read-only, so a viewer may run it. Returns rows with `error` set rather
+    than failing when the device cannot be read: "we could not ask" is a
+    different answer from "the tunnel is down", and conflating them is how an
+    unreachable controller looks like a total outage.
+    """
+    site = await _get_or_404(session, site_id)
+
+    wan_ids = select(Wan.id).where(Wan.site_id == site.id)
+    links = (
+        (
+            await session.execute(
+                select(Link)
+                .where(or_(Link.a_wan_id.in_(wan_ids), Link.b_wan_id.in_(wan_ids)))
+                # Every one of these is read while building the response, and
+                # a lazy load inside an async request is a MissingGreenlet.
+                .options(
+                    selectinload(Link.fabric),
+                    selectinload(Link.a_wan).selectinload(Wan.site),
+                    selectinload(Link.b_wan).selectinload(Wan.site),
+                )
+                .order_by(Link.slug)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not links:
+        return []
+
+    try:
+        async with open_driver(site) as driver:
+            return await tunnel_health(driver, site, list(links))
+    except DriverError as exc:
+        return [
+            TunnelHealth(
+                link_id=link.id,
+                fabric_id=link.fabric_id,
+                fabric_name=link.fabric.name,
+                slug=link.slug,
+                peer_site_id=(
+                    link.b_wan.site_id
+                    if link.a_wan.site_id == site.id
+                    else link.a_wan.site_id
+                ),
+                peer_site_name=(
+                    link.b_wan.site.name
+                    if link.a_wan.site_id == site.id
+                    else link.a_wan.site.name
+                ),
+                enabled=link.enabled,
+                state=link.state,
+                last_error=link.last_error,
+                error=str(exc),
+            )
+            for link in links
+        ]

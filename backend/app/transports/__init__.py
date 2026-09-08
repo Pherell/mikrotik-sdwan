@@ -19,6 +19,7 @@ from app.transports.base import (
     available,
     choose_initiator,
     get_transport,
+    iface_name,
     validate_pair,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "available",
     "choose_initiator",
     "get_transport",
+    "iface_name",
     "validate_pair",
 ]

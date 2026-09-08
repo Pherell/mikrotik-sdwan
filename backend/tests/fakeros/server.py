@@ -54,11 +54,16 @@ class FakeRouterOS:
         identity: str = "MikroTik",
         menus: dict[str, list[dict[str, Any]]] | None = None,
         wireguard: bool = True,
+        reachable: set[str] | None = None,
     ) -> None:
         self.username = username
         self.password = password
         self._ids = itertools.count(1)
         self.commands: list[tuple[str, dict[str, Any]]] = []
+        # Addresses ping and traceroute answer for. None means everything
+        # answers, which is the boring case; a set is how a test asks for the
+        # interesting one.
+        self.reachable = reachable
 
         self.menus: dict[str, list[dict[str, Any]]] = {
             "system/resource": [
@@ -82,7 +87,11 @@ class FakeRouterOS:
         # correctly refuses to apply -- which is right behaviour against a
         # device that genuinely lacks a menu, and wrong as a model of a real
         # router, where /ip/firewall/nat always exists.
-        for always_present in ("ip/firewall/nat", "ip/firewall/filter"):
+        for always_present in (
+            "ip/firewall/nat",
+            "ip/firewall/filter",
+            "ip/firewall/address-list",
+        ):
             self.menus[always_present] = []
         if wireguard:
             self.menus["interface/wireguard"] = []
@@ -107,6 +116,26 @@ class FakeRouterOS:
 
     def rows(self, path: str) -> list[dict[str, Any]]:
         return self.menus.setdefault(path.strip("/"), [])
+
+    # RouterOS lists every interface in /interface whatever menu created it.
+    # Without this a tunnel the reconciler just built into /interface/gre is
+    # invisible to anything that asks the generic question -- which is the
+    # question diagnostics asks.
+    _IFACE_TYPES = ("ether", "bridge", "gre", "ipip", "wireguard", "eoip", "vxlan", "vlan")
+
+    def _all_interfaces(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for kind in self._IFACE_TYPES:
+            for row in self.menus.get(f"interface/{kind}", []):
+                rows.append({
+                    "type": kind,
+                    # A tunnel the reconciler created is running unless a test
+                    # says otherwise; a real one comes up as soon as it is made.
+                    "running": row.get("running", True),
+                    "disabled": row.get("disabled", False),
+                    **row,
+                })
+        return rows
 
     def _authorized(self, request: Request) -> bool:
         header = request.headers.get("authorization", "")
@@ -141,9 +170,12 @@ class FakeRouterOS:
         return JSONResponse({"detail": "unsupported"}, status_code=405)
 
     def _get(self, path: str, query: dict[str, str]) -> Response:
-        if path not in self.menus:
+        if path == "interface" and "interface" not in self.menus:
+            rows = self._all_interfaces()
+        elif path not in self.menus:
             return JSONResponse({"detail": "no such command prefix"}, status_code=404)
-        rows = self.menus[path]
+        else:
+            rows = self.menus[path]
         if query:
             rows = [
                 r
@@ -190,9 +222,89 @@ class FakeRouterOS:
                 self._with_id({"name": f"{body.get('name', 'backup')}.backup", "type": "backup"})
             )
             return JSONResponse([])
+        if path == "ping":
+            return JSONResponse(self._ping(body))
+        if path == "tool/traceroute":
+            return JSONResponse(self._traceroute(body))
         if path in self.menus:  # POST to a menu is a query in RouterOS
             return self._get(path, {})
         return JSONResponse([])
+
+    def _answers(self, address: str) -> bool:
+        return self.reachable is None or address in self.reachable
+
+    def _ping(self, body: dict[str, Any]) -> list[dict[str, str]]:
+        """One row per probe, cumulative counters folded into each.
+
+        The units are the ones that caused trouble: RouterOS writes
+        "11ms391us", never a bare number of milliseconds.
+        """
+        address = str(body.get("address", ""))
+        count = int(body.get("count", 1) or 1)
+        up = self._answers(address)
+        rows: list[dict[str, Any]] = []
+        received = 0
+        for seq in range(count):
+            if up:
+                received += 1
+                rows.append(
+                    {
+                        "seq": seq,
+                        "host": address,
+                        "size": 56,
+                        "ttl": 64,
+                        "time": f"{seq + 1}ms{391 + seq}us",
+                        "sent": seq + 1,
+                        "received": received,
+                        "packet-loss": 0,
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "seq": seq,
+                        # A timed-out probe carries a status and no time at all
+                        # -- not a time of zero.
+                        "status": "timeout",
+                        "sent": seq + 1,
+                        "received": 0,
+                        "packet-loss": 100,
+                    }
+                )
+        return [_row_out(r) for r in rows]
+
+    def _traceroute(self, body: dict[str, Any]) -> list[dict[str, str]]:
+        address = str(body.get("address", ""))
+        hops: list[dict[str, Any]] = [
+            {
+                "address": "10.0.0.1",
+                "loss": 0,
+                "sent": 1,
+                "last": "1ms200us",
+                "avg": "1ms300us",
+                "best": "1ms100us",
+                "worst": "1ms500us",
+                "status": "",
+            }
+        ]
+        if self._answers(address):
+            hops.append(
+                {
+                    "address": address,
+                    "loss": 0,
+                    "sent": 1,
+                    "last": "12ms",
+                    "avg": "12ms",
+                    "best": "11ms",
+                    "worst": "13ms",
+                    "status": "",
+                }
+            )
+        else:
+            # A hop that never answers has no address at all. Reproducing that
+            # is the point: it is what a broken path looks like.
+            hops.append({"loss": 100, "sent": 1, "status": "timeout"})
+        return [_row_out(h) for h in hops]
 
 
 async def _json(request: Request) -> dict[str, Any]:

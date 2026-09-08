@@ -7,6 +7,7 @@ import { App } from "./App";
 import { ToastProvider } from "./components/Toaster";
 import { ApiError } from "./lib/api";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { FabricDetailPage } from "./pages/FabricDetailPage";
 import { FabricsPage } from "./pages/FabricsPage";
 import { JobsPage } from "./pages/JobsPage";
@@ -66,6 +67,7 @@ createRoot(root).render(
             {/* Devices. */}
             <Route path="/devices" element={<SitesPage />} />
             <Route path="/devices/:siteId" element={<SiteDetailPage />} />
+            <Route path="/diagnostics" element={<DiagnosticsPage />} />
 
             {/* The old paths, so a bookmark or a pasted link still lands.
                 Renaming the words should not cost anyone a 404. */}

@@ -406,6 +406,73 @@ export interface Port {
   managed: boolean;
 }
 
+// -- diagnostics ------------------------------------------------------------
+
+export interface PingProbe {
+  seq: number | null;
+  host: string | null;
+  ttl: number | null;
+  size: number | null;
+  // null means no reply at all, which is not the same as a reply in 0 ms.
+  time_ms: number | null;
+  status: string | null;
+}
+
+export interface PingResult {
+  target: string;
+  interface: string | null;
+  sent: number;
+  received: number;
+  loss_percent: number;
+  min_ms: number | null;
+  avg_ms: number | null;
+  max_ms: number | null;
+  probes: PingProbe[];
+}
+
+export interface TraceHop {
+  hop: number;
+  address: string | null;
+  loss_percent: number | null;
+  sent: number | null;
+  last_ms: number | null;
+  avg_ms: number | null;
+  best_ms: number | null;
+  worst_ms: number | null;
+  status: string | null;
+}
+
+export interface TracerouteResult {
+  target: string;
+  hops: TraceHop[];
+}
+
+export interface TunnelHealth {
+  link_id: string;
+  fabric_id: string;
+  fabric_name: string;
+  slug: string;
+  peer_site_id: string | null;
+  peer_site_name: string | null;
+  enabled: boolean;
+  state: string;
+  last_error: string | null;
+  interface: string | null;
+  // Every one of these is null when the answer is genuinely unknown -- a GRE
+  // fabric has no IPsec SA, and a device that was never applied has no
+  // interface. Drawing null as "down" is how one unreachable router looks
+  // like a total outage.
+  interface_running: boolean | null;
+  ipsec_established: boolean | null;
+  ipsec_detail: string | null;
+  bgp_established: boolean | null;
+  bgp_detail: string | null;
+  netwatch_status: string | null;
+  netwatch_loss_percent: number | null;
+  netwatch_latency_ms: number | null;
+  error: string | null;
+}
+
 export interface DeviceHealth {
   cpu_load_percent: number | null;
   cpu_count: number | null;
@@ -482,6 +549,17 @@ export const endpoints = {
   users: () => api.get<User[]>("/users"),
   createUser: (body: unknown) => api.post<User>("/users", body),
   updateUser: (id: string, body: unknown) => api.patch<User>(`/users/${id}`, body),
+
+  // -- diagnostics ---------------------------------------------------------
+  ping: (
+    siteId: string,
+    body: { target: string; count?: number; interface?: string | null },
+  ) => api.post<PingResult>(`/sites/${siteId}/diagnostics/ping`, body),
+  traceroute: (
+    siteId: string,
+    body: { target: string; seconds?: number; interface?: string | null },
+  ) => api.post<TracerouteResult>(`/sites/${siteId}/diagnostics/traceroute`, body),
+  tunnels: (siteId: string) => api.get<TunnelHealth[]>(`/sites/${siteId}/tunnels`),
 
   // -- device console and rollback recovery --------------------------------
   deviceRead: (siteId: string, menu: string) =>

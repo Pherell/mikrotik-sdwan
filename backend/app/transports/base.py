@@ -75,7 +75,7 @@ class LinkView:
 
     def iface_name(self, prefix: str) -> str:
         """RouterOS interface names are capped; keep them short and stable."""
-        return f"{prefix}-{self.slug}"[:31]
+        return iface_name(prefix, self.slug)
 
     @property
     def subnet_cidr(self) -> str:
@@ -110,8 +110,26 @@ class TransportDriver(Protocol):
         """Sections for ``link.local``. Called once per side."""
         ...
 
+    def interface_name(self, slug: str) -> str:
+        """The interface this transport creates for a link with ``slug``.
+
+        Takes the slug rather than the link because that is all the name has
+        ever depended on, and because diagnostics needs to look up a rendered
+        interface on a live device without rebuilding the whole link view to
+        learn a string.
+        """
+        ...
+
 
 # -- shared helpers ---------------------------------------------------------
+
+
+def iface_name(prefix: str, slug: str) -> str:
+    """RouterOS caps interface names at 32 characters. Truncate the same way
+    everywhere, or the reconciler creates a second interface next to the one
+    it meant to update."""
+    return f"{prefix}-{slug}"[:31]
+
 
 
 def validate_pair(a: Endpoint, b: Endpoint, transport: TransportDriver) -> None:

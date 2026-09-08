@@ -18,7 +18,7 @@ import secrets as _secrets
 
 from app.drivers.base import ConfigItem, ConfigSection
 from app.render.engine import section
-from app.transports.base import LinkView, register
+from app.transports.base import LinkView, iface_name, register
 
 DEFAULT_PARAMS: dict[str, object] = {
     # A NAT'd peer must keep its mapping alive or the far side can never reach
@@ -115,7 +115,7 @@ class WireGuardTransport:
         # what LinkView.initiator already encodes relative to `local`.
         local_private, remote_public = self._key_pair_for(link)
 
-        iface = self._interface_name(link)
+        iface = self.interface_name(link.slug)
         iface_tag = f"{link.tag}:wg"
         peer_tag = f"{link.tag}:wg-peer"
         address_tag = f"{link.tag}:address"
@@ -179,9 +179,8 @@ class WireGuardTransport:
 
         return [interface, peers, address]
 
-    @staticmethod
-    def _interface_name(link: LinkView) -> str:
-        return link.iface_name("wg")
+    def interface_name(self, slug: str) -> str:
+        return iface_name("wg", slug)
 
     @staticmethod
     def _key_pair_for(link: LinkView) -> tuple[str, str]:

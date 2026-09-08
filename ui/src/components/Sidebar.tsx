@@ -110,6 +110,11 @@ const icons = {
       <rect x="2" y="13" width="5" height="6" rx="1" />
     </Icon>
   ),
+  diagnostics: (
+    <Icon>
+      <path d="M3 12h3l2.5-6 3 12 2.5-6H21" />
+    </Icon>
+  ),
   groups: (
     <Icon>
       <path d="M3 6h4M3 12h4M3 18h4" />
@@ -163,7 +168,11 @@ const GROUPS: { heading: string; items: Item[] }[] = [
   },
   {
     heading: "Devices",
-    items: [{ to: "/devices", label: "Devices", icon: icons.sites }],
+    items: [
+      { to: "/devices", label: "Devices", icon: icons.sites },
+      // Sits with devices because every test here runs *from* one.
+      { to: "/diagnostics", label: "Diagnostics", icon: icons.diagnostics },
+    ],
   },
   {
     heading: "System",

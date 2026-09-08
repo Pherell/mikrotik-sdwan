@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from app.drivers.base import ConfigItem, ConfigSection
 from app.render.engine import section
-from app.transports.base import LinkView, register
+from app.transports.base import LinkView, iface_name, register
 
 
 class _PointToPoint:
@@ -32,9 +32,12 @@ class _PointToPoint:
     def allocate(self) -> dict[str, str]:
         return {}  # nothing to key
 
+    def interface_name(self, slug: str) -> str:
+        return iface_name(self.prefix, slug)
+
     def render(self, link: LinkView) -> list[ConfigSection]:
         tag = f"{link.tag}:{self.prefix}"
-        iface = link.iface_name(self.prefix)
+        iface = self.interface_name(link.slug)
         props: dict[str, object] = {
             "name": iface,
             "remote-address": link.remote.public_ip,
