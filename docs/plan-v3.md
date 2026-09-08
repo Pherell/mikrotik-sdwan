@@ -353,21 +353,25 @@ are copy-pasteable rather than aspirational), and a link to the reference.
 ## Sequencing
 
 ```
-F1a  Rule ordering in the reconciler      correctness; unblocks everything below
-F1b  NAT and filter management            correctness; makes steering actually work
-V1   Vocabulary and menu split            cheap, and every later screen inherits it
-U1   Interface dropdowns                  small, removes a whole class of typo
-S1   SD-WAN groups + traffic rules        the model change; needs V1's words
+F1a  Rule ordering in the reconciler      done
+F1b  NAT and filter management            done
+V1   Vocabulary and menu split            done
+U1   Interface dropdowns                  done
+S1   SD-WAN groups + traffic rules        done
 D1   Diagnostics                          done
 L1   Logs                                 done
 A1   API tokens and scopes                done
 S2   Load balancing via PCC               done
-C1   Interactive SSH console              last; largest security decision
+C1   Web console                          done, as a command console
 ```
 
 F1 first because everything else is polish on a product whose main feature can
 blackhole traffic. V1 before S1 because renaming after building the new objects
 means renaming twice.
+
+All of it is in. The order above is the order it was built, and the reasoning
+is kept rather than deleted because it is the record of why each thing waited
+for the one above it.
 
 ## What this does not include
 
