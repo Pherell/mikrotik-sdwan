@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from ipaddress import ip_network
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _prefixes(v: list[str] | None) -> list[str] | None:
@@ -69,6 +69,101 @@ class AppGroupRead(AppGroupBase):
     builtin: bool
 
 
+MAX_MEMBERS = 8
+
+
+class GroupMember(BaseModel):
+    """One uplink's place in a group."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # A WAN tag or a WAN name. Tags let one group serve devices whose uplinks
+    # are wired differently.
+    uplink: str = Field(min_length=1, max_length=64)
+    # Only meaningful under load_balance, which is not implemented. Kept so the
+    # shape does not change when it is, and rejected as misleading if someone
+    # sets it to something other than 1 under failover.
+    weight: int = Field(default=1, ge=1, le=100)
+
+
+class SdwanGroupBase(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+    members: list[GroupMember] = Field(default_factory=list)
+    strategy: str = "failover"
+    sla_profile_id: str | None = None
+
+    @field_validator("members")
+    @classmethod
+    def _members(cls, v: list[GroupMember]) -> list[GroupMember]:
+        if not v:
+            raise ValueError("a group needs at least one uplink")
+        if len(v) > MAX_MEMBERS:
+            raise ValueError(f"a group holds at most {MAX_MEMBERS} uplinks")
+        names = [m.uplink for m in v]
+        if len(names) != len(set(names)):
+            raise ValueError("the same uplink cannot appear twice in a group")
+        return v
+
+    @field_validator("strategy")
+    @classmethod
+    def _strategy(cls, v: str) -> str:
+        if v == "load_balance":
+            # Rendering it as failover would be a lie, and silently accepting
+            # it would leave someone believing their traffic is spread across
+            # two links when it is not.
+            raise ValueError(
+                "load_balance is not implemented yet. On RouterOS it needs "
+                "per-connection-classifier rules that collide with the ones "
+                "traffic rules already emit -- see docs/plan-v3.md. Use "
+                "failover."
+            )
+        if v != "failover":
+            raise ValueError("strategy must be 'failover'")
+        return v
+
+    @model_validator(mode="after")
+    def _weights_do_nothing_under_failover(self) -> SdwanGroupBase:
+        if self.strategy == "failover" and any(m.weight != 1 for m in self.members):
+            raise ValueError(
+                "weights only apply to load_balance, which is not implemented. "
+                "Under failover the order of the uplinks is the preference."
+            )
+        return self
+
+
+class SdwanGroupCreate(SdwanGroupBase):
+    pass
+
+
+class SdwanGroupUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    description: str | None = None
+    members: list[GroupMember] | None = None
+    strategy: str | None = None
+    sla_profile_id: str | None = None
+
+    @field_validator("members")
+    @classmethod
+    def _members(cls, v: list[GroupMember] | None) -> list[GroupMember] | None:
+        return v if v is None else SdwanGroupBase._members(v)
+
+    @field_validator("strategy")
+    @classmethod
+    def _strategy(cls, v: str | None) -> str | None:
+        return v if v is None else SdwanGroupBase._strategy(v)
+
+
+class SdwanGroupRead(SdwanGroupBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class PolicyBase(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
@@ -84,8 +179,8 @@ class PolicyBase(BaseModel):
     dst_ports: str | None = None
     dscp: int | None = Field(default=None, ge=0, le=63)
 
-    prefer_tags: list[str] = Field(default_factory=list)
-    sla_profile_id: str | None = None
+    # Which uplinks and how healthy: named once as a group, pointed at here.
+    sdwan_group_id: str | None = None
     fallback: str = "any"
 
     _check_src = field_validator("src_prefixes")(_prefixes)
@@ -98,17 +193,25 @@ class PolicyBase(BaseModel):
             raise ValueError("fallback must be 'any' or 'drop'")
         return v
 
-    @field_validator("prefer_tags")
-    @classmethod
-    def _needs_a_preference(cls, v: list[str]) -> list[str]:
-        # A policy with nothing to prefer marks traffic into an empty table.
-        if not v:
-            raise ValueError("prefer_tags must name at least one uplink tag or WAN name")
-        return v
+
 
 
 class PolicyCreate(PolicyBase):
-    pass
+    # Required, not merely validated: a field validator does not run when the
+    # field is absent, so a rule posted without one sailed through. Making it
+    # required also puts it in the OpenAPI schema as required, which is where
+    # anyone integrating will look.
+    #
+    # Deliberately overridden here rather than on PolicyBase: PolicyRead
+    # inherits that, and an output schema which rejects stored data turns a
+    # plain GET into a 500.
+    sdwan_group_id: str = Field(
+        min_length=1,
+        description=(
+            "The SD-WAN group this rule uses: which uplinks the traffic should "
+            "take, in what order, and how healthy they must be."
+        ),
+    )
 
 
 class PolicyUpdate(BaseModel):
@@ -125,8 +228,7 @@ class PolicyUpdate(BaseModel):
     protocol: str | None = None
     dst_ports: str | None = None
     dscp: int | None = None
-    prefer_tags: list[str] | None = None
-    sla_profile_id: str | None = None
+    sdwan_group_id: str | None = None
     fallback: str | None = None
 
 

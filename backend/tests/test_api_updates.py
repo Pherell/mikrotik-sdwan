@@ -148,12 +148,17 @@ async def test_patch_policy_returns_the_updated_row(api: httpx.AsyncClient) -> N
         f"/sites/{site['id']}/wans",
         json={"name": "wan1", "interface": "ether1", "public_ip": "203.0.113.10"},
     )
+    group = await api.post(
+        "/sdwan-groups",
+        json={"name": "voice-path", "members": [{"uplink": "wan1"}]},
+    )
+    assert group.status_code == 201, group.text
     created = await api.post(
         "/policies",
         json={
             "name": "voice",
             "priority": 10,
-            "prefer_tags": ["wan1"],
+            "sdwan_group_id": group.json()["id"],
             "dst_prefixes": ["10.0.0.0/8"],
             "fallback": "any",
         },

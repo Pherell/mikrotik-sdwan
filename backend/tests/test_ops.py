@@ -241,8 +241,17 @@ async def test_export_round_trips_through_yaml(api) -> None:
         headers=headers,
         json={"name": "core", "topology": "hub_spoke", "member_site_ids": [site_id]},
     )
+    group = await client.post(
+        "/sdwan-groups",
+        headers=headers,
+        json={"name": "voice-path", "members": [{"uplink": "wan1"}]},
+    )
+    assert group.status_code == 201, group.text
+    group_id = group.json()["id"]
     await client.post(
-        "/policies", headers=headers, json={"name": "voice", "prefer_tags": ["wan1"]}
+        "/policies",
+        headers=headers,
+        json={"name": "voice", "sdwan_group_id": group_id},
     )
 
     resp = await client.get("/intent/export", headers=headers)

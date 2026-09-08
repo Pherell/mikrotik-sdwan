@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 
 import { endpoints, type Site, type Wan } from "../lib/api";
+import { InterfacePicker } from "./InterfacePicker";
 
 /**
  * Add, edit and remove uplinks.
@@ -205,15 +206,11 @@ function WanForm({
             onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
         </label>
-        <label>
-          Interface
-          <input
-            required
-            placeholder="ether1"
-            value={form.interface}
-            onChange={(e) => setForm({ ...form, interface: e.target.value })}
-          />
-        </label>
+        <InterfacePicker
+          siteId={siteId}
+          value={form.interface}
+          onChange={(name) => setForm({ ...form, interface: name })}
+        />
         <label>
           Public IP
           <input

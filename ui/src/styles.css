@@ -1411,3 +1411,11 @@ kbd {
     transition: none;
   }
 }
+
+/* A note under a field, explaining why it looks the way it does. */
+.field-note {
+  display: block;
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  margin-top: var(--space-1);
+}

@@ -7,13 +7,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.deps import RequireOperator, RequireViewer, SessionDep, write_audit
-from app.models.policy import AppGroup, Policy, SlaProfile
+from app.models.policy import AppGroup, Policy, SdwanGroup, SlaProfile
 from app.schemas.policy import (
     AppGroupCreate,
     AppGroupRead,
     PolicyCreate,
     PolicyRead,
     PolicyUpdate,
+    SdwanGroupCreate,
+    SdwanGroupRead,
+    SdwanGroupUpdate,
     SlaProfileCreate,
     SlaProfileRead,
 )
@@ -73,14 +76,21 @@ async def delete_sla(
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such SLA profile")
 
-    users = list(
-        await session.scalars(select(Policy).where(Policy.sla_profile_id == profile_id))
+    # An SLA now hangs off a group rather than a rule, so checking only rules
+    # would let a profile be deleted out from under the group depending on it --
+    # silently dropping that path's health standard back to the default.
+    holders = sorted(
+        list(await session.scalars(
+            select(SdwanGroup.name).where(SdwanGroup.sla_profile_id == profile_id)
+        ))
+        + list(await session.scalars(
+            select(Policy.name).where(Policy.sla_profile_id == profile_id)
+        ))
     )
-    if users:
+    if holders:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"In use by {', '.join(p.name for p in users)}. Point those policies at "
-            "another profile first.",
+            f"In use by {', '.join(holders)}. Point those at another profile first.",
         )
     await write_audit(
         session,
@@ -149,7 +159,9 @@ async def list_policies(session: SessionDep, user: RequireViewer) -> list[Policy
 async def create_policy(
     body: PolicyCreate, session: SessionDep, user: RequireOperator, request: Request
 ) -> Policy:
-    await _check_references(session, body.sla_profile_id, body.app_group_id)
+    await _check_references(
+        session, None, body.app_group_id, body.sdwan_group_id
+    )
 
     policy = Policy(**body.model_dump(), tenant_id=user.tenant_id)
     session.add(policy)
@@ -186,13 +198,9 @@ async def update_policy(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such policy")
 
     data = body.model_dump(exclude_unset=True)
-    await _check_references(session, data.get("sla_profile_id"), data.get("app_group_id"))
-    if "prefer_tags" in data and not data["prefer_tags"]:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "prefer_tags must name at least one uplink tag or WAN name; a policy "
-            "with none would mark traffic into an empty routing table.",
-        )
+    await _check_references(
+        session, None, data.get("app_group_id"), data.get("sdwan_group_id")
+    )
     for field, value in data.items():
         setattr(policy, field, value)
 
@@ -229,9 +237,122 @@ async def delete_policy(
 
 
 async def _check_references(
-    session: SessionDep, sla_id: str | None, app_group_id: str | None
+    session: SessionDep,
+    sla_id: str | None,
+    app_group_id: str | None,
+    sdwan_group_id: str | None = None,
 ) -> None:
     if sla_id and await session.get(SlaProfile, sla_id) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such SLA profile")
     if app_group_id and await session.get(AppGroup, app_group_id) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such app group")
+    if sdwan_group_id and await session.get(SdwanGroup, sdwan_group_id) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such SD-WAN group")
+
+
+# -- SD-WAN groups ----------------------------------------------------------
+
+
+@router.get("/sdwan-groups", response_model=list[SdwanGroupRead])
+async def list_groups(session: SessionDep, user: RequireViewer) -> list[SdwanGroup]:
+    rows = await session.scalars(
+        select(SdwanGroup)
+        .where(SdwanGroup.tenant_id == user.tenant_id)
+        .order_by(SdwanGroup.name)
+    )
+    return list(rows)
+
+
+@router.post("/sdwan-groups", response_model=SdwanGroupRead, status_code=201)
+async def create_group(
+    body: SdwanGroupCreate, session: SessionDep, user: RequireOperator, request: Request
+) -> SdwanGroup:
+    await _check_references(session, body.sla_profile_id, None)
+
+    data = body.model_dump()
+    data["members"] = [m for m in data["members"]]
+    group = SdwanGroup(**data, tenant_id=user.tenant_id)
+    session.add(group)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"A group named {body.name!r} already exists"
+        ) from exc
+
+    await write_audit(
+        session,
+        actor=user,
+        action="sdwan_group.create",
+        object_type="sdwan_group",
+        object_id=group.id,
+        detail={"name": group.name, "members": data["members"]},
+        request=request,
+    )
+    return group
+
+
+@router.patch("/sdwan-groups/{group_id}", response_model=SdwanGroupRead)
+async def update_group(
+    group_id: str,
+    body: SdwanGroupUpdate,
+    session: SessionDep,
+    user: RequireOperator,
+    request: Request,
+) -> SdwanGroup:
+    group = await session.get(SdwanGroup, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such SD-WAN group")
+
+    data = body.model_dump(exclude_unset=True)
+    await _check_references(session, data.get("sla_profile_id"), None)
+    for field, value in data.items():
+        setattr(group, field, value)
+
+    await write_audit(
+        session,
+        actor=user,
+        action="sdwan_group.update",
+        object_type="sdwan_group",
+        object_id=group.id,
+        detail={"fields": sorted(data)},
+        request=request,
+    )
+    await session.flush()
+    await session.refresh(group)
+    return group
+
+
+@router.delete("/sdwan-groups/{group_id}", status_code=204)
+async def delete_group(
+    group_id: str, session: SessionDep, user: RequireOperator, request: Request
+) -> None:
+    group = await session.get(SdwanGroup, group_id)
+    if group is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such SD-WAN group")
+
+    # A rule pointing at a deleted group would steer into an empty table.
+    # Refusing with the names is more useful than a foreign-key error.
+    users = await session.scalars(
+        select(Policy.name).where(Policy.sdwan_group_id == group_id)
+    )
+    names = sorted(users)
+    if names:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{group.name!r} is used by {len(names)} traffic rule"
+            f"{'s' if len(names) > 1 else ''}: {', '.join(names)}. "
+            "Point them at another group first.",
+        )
+
+    await session.delete(group)
+    await write_audit(
+        session,
+        actor=user,
+        action="sdwan_group.delete",
+        object_type="sdwan_group",
+        object_id=group_id,
+        detail={"name": group.name},
+        request=request,
+    )

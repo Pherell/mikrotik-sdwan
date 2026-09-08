@@ -15,6 +15,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SiteDetailPage } from "./pages/SiteDetailPage";
+import { SdwanGroupsPage } from "./pages/SdwanGroupsPage";
 import { SitesPage } from "./pages/SitesPage";
 import { UplinksPage } from "./pages/UplinksPage";
 
@@ -55,6 +56,7 @@ createRoot(root).render(
 
             {/* SD-WAN: choosing between uplinks. */}
             <Route path="/uplinks" element={<UplinksPage />} />
+            <Route path="/sdwan-groups" element={<SdwanGroupsPage />} />
             <Route path="/traffic-rules" element={<PoliciesPage />} />
 
             {/* Tunnels: the overlay those uplinks carry. */}

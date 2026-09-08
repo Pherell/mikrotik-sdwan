@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 
-import { POLICY_PRESETS, type PolicyPreset } from "../lib/presets";
 
-import { endpoints, type Policy, type SlaProfile } from "../lib/api";
+import { endpoints, type Policy, type SlaProfile,
+  type SdwanGroup,
+} from "../lib/api";
 import { Skeleton } from "../components/Skeleton";
+import { PageHeader } from "../components/PageHeader";
 
 export function PoliciesPage() {
   const queryClient = useQueryClient();
@@ -12,6 +14,10 @@ export function PoliciesPage() {
 
   const policies = useQuery({ queryKey: ["policies"], queryFn: endpoints.policies });
   const slas = useQuery({ queryKey: ["slas"], queryFn: endpoints.slaProfiles });
+  const sdwanGroups = useQuery({
+    queryKey: ["sdwan-groups"],
+    queryFn: endpoints.sdwanGroups,
+  });
   const sites = useQuery({ queryKey: ["sites"], queryFn: endpoints.sites });
 
   // Every tag any uplink carries, plus every WAN name — the set a policy can
@@ -41,27 +47,26 @@ export function PoliciesPage() {
 
   return (
     <>
+      <PageHeader
+        title="Traffic rules"
+        description="Match some traffic and send it to an SD-WAN group. Rules are evaluated top to bottom by priority and the first match wins — edit a priority or untick a rule right in the table."
+      >
+        <button className="primary" onClick={() => setAdding(true)}>
+          New rule
+        </button>
+      </PageHeader>
+
       <div className="card">
-        <div className="row" style={{ alignItems: "center" }}>
-          <h2 style={{ margin: 0 }}>Steering policies</h2>
-          <div className="no-grow">
-            <button className="primary" onClick={() => setAdding(true)}>
-              New policy
-            </button>
-          </div>
-        </div>
-        <p className="muted" style={{ marginBottom: 0 }}>
-          Rules are evaluated top to bottom by priority and the first match wins —
-          edit a priority or untick a rule right in the table.
-          Matching is by prefix, port and DSCP — RouterOS has no usable
-          application classifier, so an app group is a prefix list, not DPI.
+        <p className="muted" style={{ margin: 0 }}>
+          Matching is by prefix, port and DSCP. RouterOS has no usable application
+          classifier, so an application group is a prefix list, not deep packet
+          inspection.
         </p>
       </div>
 
       {adding && (
         <NewPolicyForm
-          tags={[...tags].sort()}
-          slas={slas.data ?? []}
+          groups={sdwanGroups.data ?? []}
           onDone={() => {
             setAdding(false);
             queryClient.invalidateQueries({ queryKey: ["policies"] });
@@ -74,9 +79,9 @@ export function PoliciesPage() {
         {policies.isLoading && <Skeleton rows={3} />}
         {policies.data?.length === 0 && (
           <p className="muted">
-            No policies yet, so every packet follows the device's own routing table. A
-            policy overrides that for traffic you name: prefer this uplink, and move to
-            the next one when it degrades past a threshold.
+            No rules yet, so every packet follows the device's own routing table.
+            A rule overrides that for traffic you name, sending it to an SD-WAN
+            group which decides the uplink and moves it when one degrades.
           </p>
         )}
         {policies.data && policies.data.length > 0 && (
@@ -86,8 +91,8 @@ export function PoliciesPage() {
                 <th>Priority</th>
                 <th>Name</th>
                 <th>Match</th>
-                <th>Prefers</th>
-                <th>SLA</th>
+                <th>Group</th>
+                <th>Uplinks</th>
                 <th />
               </tr>
             </thead>
@@ -123,9 +128,18 @@ export function PoliciesPage() {
                     </label>
                   </td>
                   <td className="muted">{describeMatch(p)}</td>
-                  <td>{p.prefer_tags.join(" → ")}</td>
+                  <td>
+                    {sdwanGroups.data?.find((g) => g.id === p.sdwan_group_id)?.name ?? (
+                      <span className="muted">none — this rule steers nothing</span>
+                    )}
+                  </td>
                   <td className="muted">
-                    {slas.data?.find((s) => s.id === p.sla_profile_id)?.name ?? "default"}
+                    {(() => {
+                      const g = sdwanGroups.data?.find(
+                        (x) => x.id === p.sdwan_group_id,
+                      );
+                      return g ? g.members.map((m: { uplink: string }) => m.uplink).join(" → ") : "—";
+                    })()}
                   </td>
                   <td>
                     <button onClick={() => remove.mutate(p.id)}>Delete</button>
@@ -223,13 +237,11 @@ function SlaProfiles({ profiles }: { profiles: SlaProfile[] }) {
 }
 
 function NewPolicyForm({
-  tags,
-  slas,
+  groups,
   onDone,
   onCancel,
 }: {
-  tags: string[];
-  slas: SlaProfile[];
+  groups: SdwanGroup[];
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -239,109 +251,41 @@ function NewPolicyForm({
     dst_prefixes: "",
     protocol: "",
     dst_ports: "",
-    sla_profile_id: "",
+    sdwan_group_id: "",
     fallback: "any",
   });
-  const [prefer, setPrefer] = useState<string[]>([]);
-  const [preset, setPreset] = useState<PolicyPreset | null>(null);
-
-  function applyPreset(chosen: PolicyPreset | null) {
-    setPreset(chosen);
-    if (!chosen) return;
-    const existing = chosen.sla
-      ? slas.find((s) => s.name === chosen.sla!.name)
-      : undefined;
-    setForm((current) => ({
-      ...current,
-      name: current.name || chosen.id,
-      priority: chosen.policy.priority,
-      protocol: chosen.policy.protocol,
-      dst_ports: chosen.policy.dst_ports,
-      fallback: chosen.policy.fallback,
-      sla_profile_id: existing?.id ?? "",
-    }));
-  }
 
   const create = useMutation({
-    mutationFn: async () => {
-      // A preset may name an SLA profile nobody has created yet. Making it
-      // here is the whole point: the operator picked "voice", not a jitter
-      // budget in milliseconds.
-      let slaId = form.sla_profile_id || null;
-      if (!slaId && preset?.sla) {
-        const existing = slas.find((s) => s.name === preset.sla!.name);
-        slaId = existing
-          ? existing.id
-          : (await endpoints.createSla({ ...preset.sla, description: preset.blurb })).id;
-      }
-      return endpoints.createPolicy({
+    mutationFn: () =>
+      endpoints.createPolicy({
         name: form.name,
         priority: form.priority,
         dst_prefixes: splitList(form.dst_prefixes),
         protocol: form.protocol || null,
         dst_ports: form.dst_ports || null,
-        prefer_tags: prefer,
-        sla_profile_id: slaId,
+        sdwan_group_id: form.sdwan_group_id,
         fallback: form.fallback,
-      });
-    },
+      }),
     onSuccess: onDone,
   });
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    // Guarded here as well as on the button. requestSubmit() and implicit
-    // submission both bypass a disabled control, and a preset creates its SLA
-    // profile *before* the policy -- so a policy the server then rejects would
-    // leave an unreferenced profile behind.
-    if (prefer.length === 0) return;
+    // Guarded here as well as on the button: requestSubmit() and implicit
+    // submission both bypass a disabled control.
+    if (!form.sdwan_group_id) return;
     create.mutate();
-  }
-
-  function toggle(tag: string) {
-    setPrefer((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
-    );
   }
 
   return (
     <div className="card">
-      <h2>New policy</h2>
+      <h2>New traffic rule</h2>
       {create.isError && <div className="error">{(create.error as Error).message}</div>}
 
       <p className="muted" style={{ marginTop: 0 }}>
-        Start from what the traffic is. Every field stays editable afterwards.
+        A rule matches traffic and sends it to an SD-WAN group. The group decides
+        which uplinks and in what order — that part is named once and shared.
       </p>
-      <div className="preset-grid">
-        {POLICY_PRESETS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className={`preset${preset?.id === option.id ? " selected" : ""}`}
-            onClick={() => applyPreset(preset?.id === option.id ? null : option)}
-            aria-pressed={preset?.id === option.id}
-          >
-            <span className="preset-title">{option.title}</span>
-            <span className="preset-blurb">{option.blurb}</span>
-          </button>
-        ))}
-      </div>
-      {preset && (
-        <div className="preset-why muted">
-          <strong>{preset.title}.</strong> {preset.reasoning}
-          {preset.sla && (
-            <>
-              {" "}Uses an SLA of {preset.sla.loss_percent}% loss /{" "}
-              {preset.sla.latency_ms} ms
-              {preset.sla.jitter_ms !== null && ` / ${preset.sla.jitter_ms} ms jitter`},
-              probed every {preset.sla.probe_interval_seconds} s
-              {slas.some((s) => s.name === preset.sla!.name)
-                ? "."
-                : ` — the profile "${preset.sla.name}" will be created when you save.`}
-            </>
-          )}
-        </div>
-      )}
 
       <form onSubmit={submit}>
         <div className="row">
@@ -362,15 +306,18 @@ function NewPolicyForm({
             />
           </label>
           <label>
-            SLA profile
+            Send it to
             <select
-              value={form.sla_profile_id}
-              onChange={(e) => setForm({ ...form, sla_profile_id: e.target.value })}
+              required
+              value={form.sdwan_group_id}
+              onChange={(e) => setForm({ ...form, sdwan_group_id: e.target.value })}
             >
-              <option value="">default (20% / 300 ms)</option>
-              {slas.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
+              <option value="" disabled>
+                Choose an SD-WAN group…
+              </option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name} — {g.members.map((m: { uplink: string }) => m.uplink).join(" → ")}
                 </option>
               ))}
             </select>
@@ -408,29 +355,15 @@ function NewPolicyForm({
           </label>
         </div>
 
-        <label>
-          Prefer these uplinks, in order
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-            {tags.length === 0 && (
-              <span className="muted">
-                No uplinks known yet. Add sites and probe them first.
-              </span>
-            )}
-            {tags.map((tag) => (
-              <button
-                type="button"
-                key={tag}
-                className={prefer.includes(tag) ? "primary" : ""}
-                onClick={() => toggle(tag)}
-              >
-                {prefer.includes(tag) ? `${prefer.indexOf(tag) + 1}. ${tag}` : tag}
-              </button>
-            ))}
+        {groups.length === 0 && (
+          <div className="warn">
+            No SD-WAN groups yet. A rule needs one to know where to send traffic —
+            create a group first.
           </div>
-        </label>
+        )}
 
         <label>
-          When none of them meets the SLA
+          When no uplink in the group is healthy
           <select
             value={form.fallback}
             onChange={(e) => setForm({ ...form, fallback: e.target.value })}
@@ -450,7 +383,7 @@ function NewPolicyForm({
             <button
               className="primary"
               type="submit"
-              disabled={create.isPending || prefer.length === 0}
+              disabled={create.isPending || !form.sdwan_group_id}
             >
               {create.isPending ? "Creating…" : "Create"}
             </button>

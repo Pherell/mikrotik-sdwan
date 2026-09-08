@@ -170,7 +170,8 @@ carry (Tunnels).
 |---|---|---|
 | SD-WAN | **Overview** | Fleet health, anything needing attention, bulk apply, drift sweep |
 | SD-WAN | **Uplinks** | Every internet connection across every device, and what each one is |
-| SD-WAN | **Traffic rules** | Which traffic prefers which uplink, and when to move it |
+| SD-WAN | **SD-WAN groups** | A named set of uplinks, in preference order, with the health standard they must meet |
+| SD-WAN | **Traffic rules** | Match some traffic and send it to a group |
 | Tunnels | **Tunnel networks** | Which devices are joined, how they connect, and the tunnels that result |
 | Devices | **Devices** | The routers themselves: ports, health, uplinks, plan/apply, console |
 | System | **Jobs** | Every apply, with its diff and log |
@@ -192,9 +193,33 @@ so if you use both, this is the mapping:
 | Tunnel network | `fabric` | "Fabric" is an invented word; this says what it is |
 | Tunnel | `link` | "Link" also meant a physical port and an uplink |
 | Traffic rule | `policy` | "Policy" carried four separate ideas |
+| SD-WAN group | `sdwan-group` | New: the half of a rule worth naming once |
 
 Old bookmarks still work: `/sites`, `/fabrics` and `/policies` redirect to their
 new paths, carrying any id with them.
+
+### Groups and rules
+
+Steering is two objects, the way Sophos separates an SD-WAN profile from an
+SD-WAN route:
+
+- an **SD-WAN group** says *which uplinks, in what order, and how healthy they
+  must be*. Named once, used by many rules.
+- a **traffic rule** matches traffic and points at a group.
+
+So a rule reads as one sentence: *Teams traffic goes to the voice group.* Before
+this, every rule retyped its own uplink order and its own SLA, and "the voice
+path" was not a thing you could point at.
+
+Presets — voice, SaaS, bulk, pinned — live on the group, because what they
+always described was a path, not a match. Picking one fills the thresholds and
+creates the SLA profile for you on save.
+
+**`load_balance` is refused, not faked.** A group's strategy can only be
+`failover` today. On RouterOS, balancing needs per-connection-classifier rules
+that collide with the ones traffic rules already emit; rendering it as failover
+would be a lie, and accepting it silently would leave you believing traffic is
+spread across two links when it is not. See `docs/plan-v3.md`.
 
 Having two vocabularies is itself a small ambiguity. It is deliberate for now --
 renaming REST paths and database tables is a breaking change for anyone

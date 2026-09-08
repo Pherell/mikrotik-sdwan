@@ -7,7 +7,7 @@ autogenerate and the test fixtures both rely on.
 from app.models.base import Base
 from app.models.fabric import Fabric, FabricMember, Link
 from app.models.job import AuditEvent, Job
-from app.models.policy import AppGroup, Policy, SlaProfile
+from app.models.policy import AppGroup, Policy, SdwanGroup, SlaProfile
 from app.models.site import Site, Wan
 from app.models.user import User
 
@@ -21,6 +21,7 @@ __all__ = [
     "Link",
     "Policy",
     "Site",
+    "SdwanGroup",
     "SlaProfile",
     "User",
     "Wan",

@@ -104,12 +104,35 @@ def _mark(policy: Policy) -> str:
     return f"sdwan-{_slug(policy.name)}"[:31]
 
 
+def _members(policy: Policy) -> list[str]:
+    """The group's uplinks, in preference order.
+
+    A rule with no group steers nothing. That is deliberate: the group is where
+    "which uplinks, in what order" lives now, and a rule without one has not
+    said where its traffic should go.
+    """
+    group = policy.sdwan_group
+    if group is None:
+        return []
+    return [
+        str(member["uplink"])
+        for member in (group.members or [])
+        if isinstance(member, dict) and member.get("uplink")
+    ]
+
+
+def _sla(policy: Policy) -> SlaProfile:
+    """The group's health standard, or the built-in default."""
+    group = policy.sdwan_group
+    return (group.sla_profile if group is not None else None) or DEFAULT_SLA
+
+
 def _paths_for(policy: Policy, view: SitePolicyView) -> list[PathOption]:
-    """Preferred uplinks present at this site, in the policy's tag order."""
+    """Uplinks present at this site, in the group's order."""
     chosen: list[PathOption] = []
     seen: set[str] = set()
-    for tag in policy.prefer_tags or []:
-        for path in sorted(view.paths_by_tag.get(tag, []), key=lambda p: p.cost):
+    for uplink in _members(policy):
+        for path in sorted(view.paths_by_tag.get(uplink, []), key=lambda p: p.cost):
             if path.wan_name not in seen and path.next_hops:
                 seen.add(path.wan_name)
                 chosen.append(path)
@@ -223,8 +246,8 @@ def _routes(
 
 
 def _probes(policy: Policy, paths: list[PathOption], site_name: str) -> list[ConfigItem]:
-    """Netwatch entries carrying this policy's SLA thresholds."""
-    sla = policy.sla_profile or DEFAULT_SLA
+    """Netwatch entries carrying the group's SLA thresholds."""
+    sla = _sla(policy)
     tag = owner_tag("policy", policy.name, "sla")
     items: list[ConfigItem] = []
     for index, path in enumerate(paths):

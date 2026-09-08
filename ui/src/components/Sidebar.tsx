@@ -110,6 +110,13 @@ const icons = {
       <rect x="2" y="13" width="5" height="6" rx="1" />
     </Icon>
   ),
+  groups: (
+    <Icon>
+      <path d="M3 6h4M3 12h4M3 18h4" />
+      <path d="M7 6c6 0 6 6 10 6M7 12h10M7 18c6 0 6-6 10-6" />
+      <circle cx="19" cy="12" r="2.2" />
+    </Icon>
+  ),
   collapse: (
     <Icon>
       <path d="M15 6l-6 6 6 6" />
@@ -143,6 +150,7 @@ const GROUPS: { heading: string; items: Item[] }[] = [
     items: [
       { to: "/", label: "Overview", icon: icons.overview, end: true },
       { to: "/uplinks", label: "Uplinks", icon: icons.uplinks },
+      { to: "/sdwan-groups", label: "SD-WAN groups", icon: icons.groups },
       { to: "/traffic-rules", label: "Traffic rules", icon: icons.policies },
     ],
   },

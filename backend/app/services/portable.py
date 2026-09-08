@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.fabric import Fabric, FabricMember
-from app.models.policy import AppGroup, Policy, SlaProfile
+from app.models.policy import AppGroup, Policy, SdwanGroup, SlaProfile
 from app.models.site import Site, Wan
 
 SCHEMA_VERSION = 1
@@ -134,6 +134,20 @@ async def export_intent(session: AsyncSession, tenant_id: str = "default") -> di
                 .order_by(AppGroup.name)
             )
         ],
+        "sdwan_groups": [
+            {
+                "name": g.name,
+                "description": g.description,
+                "members": list(g.members or []),
+                "strategy": g.strategy,
+                "sla_profile": g.sla_profile.name if g.sla_profile else None,
+            }
+            for g in await session.scalars(
+                select(SdwanGroup)
+                .where(SdwanGroup.tenant_id == tenant_id)
+                .order_by(SdwanGroup.name)
+            )
+        ],
         "policies": [
             {
                 "name": p.name,
@@ -152,8 +166,7 @@ async def export_intent(session: AsyncSession, tenant_id: str = "default") -> di
                 "protocol": p.protocol,
                 "dst_ports": p.dst_ports,
                 "dscp": p.dscp,
-                "prefer_tags": list(p.prefer_tags or []),
-                "sla_profile": p.sla_profile.name if p.sla_profile else None,
+                "sdwan_group": p.sdwan_group.name if p.sdwan_group else None,
                 "fallback": p.fallback,
             }
             for p in await session.scalars(
@@ -190,6 +203,7 @@ async def import_intent(
         )
 
     summary = {"sites": 0, "wans": 0, "fabrics": 0, "policies": 0, "sla_profiles": 0,
+               "sdwan_groups": 0,
                "app_groups": 0, "created": [], "updated": [], "warnings": []}
 
     existing_sites = {
@@ -251,6 +265,7 @@ async def import_intent(
         await _upsert(session, AppGroup, spec, tenant_id, summary, "app_groups")
 
     await _import_fabrics(session, document, tenant_id, existing_sites, summary)
+    await _import_sdwan_groups(session, document, tenant_id, summary)
     await _import_policies(session, document, tenant_id, existing_sites, summary)
     await session.flush()
     return summary
@@ -307,6 +322,22 @@ async def _import_fabrics(
         )
 
 
+async def _import_sdwan_groups(
+    session: AsyncSession, document: dict, tenant_id: str, summary: dict
+) -> None:
+    """Groups come in before rules, since a rule names the group it uses."""
+    slas = {
+        p.name: p.id
+        for p in await session.scalars(
+            select(SlaProfile).where(SlaProfile.tenant_id == tenant_id)
+        )
+    }
+    for spec in document.get("sdwan_groups", []):
+        data = dict(spec)
+        data["sla_profile_id"] = slas.get(data.pop("sla_profile", None) or "")
+        await _upsert(session, SdwanGroup, data, tenant_id, summary, "sdwan_groups")
+
+
 async def _import_policies(
     session: AsyncSession,
     document: dict,
@@ -314,12 +345,6 @@ async def _import_policies(
     sites: dict[str, Site],
     summary: dict,
 ) -> None:
-    slas = {
-        p.name: p.id
-        for p in await session.scalars(
-            select(SlaProfile).where(SlaProfile.tenant_id == tenant_id)
-        )
-    }
     groups = {
         g.name: g.id
         for g in await session.scalars(
@@ -331,9 +356,16 @@ async def _import_policies(
         for f in await session.scalars(select(Fabric).where(Fabric.tenant_id == tenant_id))
     }
 
+    sdwan_groups = {
+        g.name: g.id
+        for g in await session.scalars(
+            select(SdwanGroup).where(SdwanGroup.tenant_id == tenant_id)
+        )
+    }
+
     for spec in document.get("policies", []):
         data = dict(spec)
-        data["sla_profile_id"] = slas.get(data.pop("sla_profile", None) or "")
+        data["sdwan_group_id"] = sdwan_groups.get(data.pop("sdwan_group", None) or "")
         data["app_group_id"] = groups.get(data.pop("app_group", None) or "")
         data["fabric_id"] = fabrics.get(data.pop("fabric", None) or "")
         data["site_ids"] = [

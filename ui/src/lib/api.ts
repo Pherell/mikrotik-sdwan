@@ -290,6 +290,26 @@ export interface AppGroup {
   builtin: boolean;
 }
 
+export interface GroupMember {
+  uplink: string;
+  weight: number;
+}
+
+/**
+ * A named set of uplinks, in preference order, with a health standard.
+ * The half of a steering decision worth naming once and reusing.
+ */
+export interface SdwanGroup {
+  id: string;
+  name: string;
+  description: string | null;
+  members: GroupMember[];
+  strategy: "failover";
+  sla_profile_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Policy {
   id: string;
   name: string;
@@ -304,8 +324,7 @@ export interface Policy {
   protocol: string | null;
   dst_ports: string | null;
   dscp: number | null;
-  prefer_tags: string[];
-  sla_profile_id: string | null;
+  sdwan_group_id: string | null;
   fallback: string;
 }
 
@@ -439,6 +458,11 @@ export const endpoints = {
   deletePolicy: (id: string) => api.del(`/policies/${id}`),
   slaProfiles: () => api.get<SlaProfile[]>("/sla-profiles"),
   createSla: (body: unknown) => api.post<SlaProfile>("/sla-profiles", body),
+  sdwanGroups: () => api.get<SdwanGroup[]>("/sdwan-groups"),
+  createSdwanGroup: (body: unknown) => api.post<SdwanGroup>("/sdwan-groups", body),
+  updateSdwanGroup: (id: string, body: unknown) =>
+    api.patch<SdwanGroup>(`/sdwan-groups/${id}`, body),
+  deleteSdwanGroup: (id: string) => api.del(`/sdwan-groups/${id}`),
   deleteSla: (id: string) => api.del(`/sla-profiles/${id}`),
   appGroups: () => api.get<AppGroup[]>("/app-groups"),
   driftCheck: (siteId: string) => api.post<Job>(`/sites/${siteId}/drift`),

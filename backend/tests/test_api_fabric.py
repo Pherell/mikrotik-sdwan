@@ -754,6 +754,20 @@ async def _dual_homed_fabric(client, headers) -> tuple[str, dict[str, str]]:
     return fabric_id, {"hub1": hub, "spoke1": spoke}
 
 
+async def _group(client, headers, name: str, uplinks: list[str], sla: str | None = None) -> str:
+    """An SD-WAN group: which uplinks, in order, and how healthy they must be."""
+    body: dict = {
+        "name": name,
+        "members": [{"uplink": u} for u in uplinks],
+        "strategy": "failover",
+    }
+    if sla:
+        body["sla_profile_id"] = sla
+    resp = await client.post("/sdwan-groups", headers=headers, json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
 async def test_policy_steers_onto_the_preferred_uplink(api) -> None:
     client, _, routers = api
     headers = await _auth(client)
@@ -775,8 +789,11 @@ async def test_policy_steers_onto_the_preferred_uplink(api) -> None:
             "dst_prefixes": ["10.1.0.0/24"],
             "protocol": "udp",
             "dst_ports": "5060",
-            "prefer_tags": ["mpls", "broadband"],
-            "sla_profile_id": sla.json()["id"],
+            # The SLA belongs to the path, so it goes on the group: one health
+            # standard shared by every rule that uses these uplinks.
+            "sdwan_group_id": await _group(
+                client, headers, "both", ["mpls", "broadband"], sla=sla.json()["id"]
+            ),
         },
     )
     assert resp.status_code == 201, resp.text
@@ -817,7 +834,11 @@ async def test_policy_apply_converges(api) -> None:
     await client.post(
         "/policies",
         headers=headers,
-        json={"name": "bulk", "prefer_tags": ["broadband"], "dst_prefixes": ["0.0.0.0/0"]},
+        json={
+            "name": "bulk",
+            "sdwan_group_id": await _group(client, headers, "bb", ["broadband"]),
+            "dst_prefixes": ["0.0.0.0/0"],
+        },
     )
     await client.post(
         f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
@@ -833,7 +854,12 @@ async def test_deleting_a_policy_sweeps_its_rules_off_the_device(api) -> None:
     _, sites = await _dual_homed_fabric(client, headers)
 
     created = await client.post(
-        "/policies", headers=headers, json={"name": "bulk", "prefer_tags": ["mpls"]}
+        "/policies",
+        headers=headers,
+        json={
+            "name": "bulk",
+            "sdwan_group_id": await _group(client, headers, "m", ["mpls"]),
+        },
     )
     await client.post(
         f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
@@ -859,7 +885,12 @@ async def test_a_policy_naming_no_uplink_here_is_not_pushed(api) -> None:
     _, sites = await _dual_homed_fabric(client, headers)
 
     await client.post(
-        "/policies", headers=headers, json={"name": "sat", "prefer_tags": ["satellite"]}
+        "/policies",
+        headers=headers,
+        json={
+            "name": "sat",
+            "sdwan_group_id": await _group(client, headers, "sat", ["satellite"]),
+        },
     )
     await client.post(
         f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
@@ -868,34 +899,73 @@ async def test_a_policy_naming_no_uplink_here_is_not_pushed(api) -> None:
     assert routers["203.0.113.1"].rows("ip/firewall/mangle") == []
 
 
-async def test_a_policy_without_preferences_is_rejected(api) -> None:
+async def test_a_rule_without_a_group_is_rejected(api) -> None:
+    """A rule with no group marks traffic into an empty routing table."""
+    client, _, _ = api
+    headers = await _auth(client)
+
+    resp = await client.post("/policies", headers=headers, json={"name": "nowhere"})
+    assert resp.status_code == 422
+    assert "sdwan_group_id" in resp.text
+
+
+async def test_a_group_needs_at_least_one_uplink(api) -> None:
     client, _, _ = api
     headers = await _auth(client)
 
     resp = await client.post(
-        "/policies", headers=headers, json={"name": "nowhere", "prefer_tags": []}
+        "/sdwan-groups", headers=headers, json={"name": "empty", "members": []}
     )
     assert resp.status_code == 422
+
+
+async def test_load_balance_is_refused_rather_than_faked(api) -> None:
+    """Rendering it as failover would be a lie, and accepting it silently would
+    leave someone believing traffic is spread across two links when it is not."""
+    client, _, _ = api
+    headers = await _auth(client)
+
+    resp = await client.post(
+        "/sdwan-groups",
+        headers=headers,
+        json={
+            "name": "balanced",
+            "members": [{"uplink": "mpls"}, {"uplink": "broadband"}],
+            "strategy": "load_balance",
+        },
+    )
+    assert resp.status_code == 422
+    assert "not implemented" in resp.text
+
+
+async def test_a_group_in_use_cannot_be_deleted(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    group_id = await _group(client, headers, "voice-path", ["mpls"])
+    await client.post(
+        "/policies",
+        headers=headers,
+        json={"name": "voice", "sdwan_group_id": group_id},
+    )
+
+    resp = await client.delete(f"/sdwan-groups/{group_id}", headers=headers)
+
+    assert resp.status_code == 409
+    assert "voice" in resp.json()["detail"]
 
 
 async def test_an_sla_profile_in_use_cannot_be_deleted(api) -> None:
     client, _, _ = api
     headers = await _auth(client)
     sla = await client.post("/sla-profiles", headers=headers, json={"name": "voice"})
-    await client.post(
-        "/policies",
-        headers=headers,
-        json={
-            "name": "voice",
-            "prefer_tags": ["mpls"],
-            "sla_profile_id": sla.json()["id"],
-        },
-    )
+    # The SLA hangs off the group now, so the guard has to look there -- checking
+    # only rules would let it be deleted out from under the group using it.
+    await _group(client, headers, "voice-path", ["mpls"], sla=sla.json()["id"])
 
     resp = await client.delete(f"/sla-profiles/{sla.json()['id']}", headers=headers)
 
     assert resp.status_code == 409
-    assert "voice" in resp.json()["detail"]
+    assert "voice-path" in resp.json()["detail"]
 
 
 # -- firewall ---------------------------------------------------------------

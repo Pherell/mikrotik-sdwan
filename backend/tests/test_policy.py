@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.models.policy import AppGroup, Policy, SlaProfile
+from app.models.policy import AppGroup, Policy, SdwanGroup, SlaProfile
 from app.render.policy import (
     SLA_PENALTY,
     PathOption,
@@ -19,13 +19,32 @@ def path(name: str, hops: list[str], cost: float = 1.0) -> PathOption:
     )
 
 
+def group(uplinks: list[str], sla: SlaProfile | None = None) -> SdwanGroup:
+    return SdwanGroup(
+        id="grp-" + "-".join(uplinks),
+        name="-".join(uplinks),
+        members=[{"uplink": u, "weight": 1} for u in uplinks],
+        strategy="failover",
+        sla_profile=sla,
+        tenant_id="default",
+    )
+
+
 def policy(**kw) -> Policy:
+    """A rule pointing at a group.
+
+    `prefer` and `sla_profile` are accepted for readability and turned into the
+    group the renderer actually reads, so the tests describe intent rather than
+    the storage shape.
+    """
+    prefer = kw.pop("prefer", ["mpls"])
+    sla = kw.pop("sla_profile", None)
     defaults = dict(
         id=f"pol-{kw.get('name', 'p')}",
         name="voice",
         priority=100,
         enabled=True,
-        prefer_tags=["mpls"],
+        sdwan_group=kw.pop("sdwan_group", None) or group(prefer, sla),
         src_prefixes=[],
         dst_prefixes=[],
         site_ids=[],
@@ -80,7 +99,7 @@ def test_steering_points_at_the_overlay_not_the_wan_gateway() -> None:
 
 
 def test_preference_order_becomes_route_distance() -> None:
-    p = policy(prefer_tags=["mpls", "broadband"])
+    p = policy(prefer=["mpls", "broadband"])
     s = sections_of(
         view(
             [p],
@@ -127,7 +146,7 @@ def test_fallback_drop_leaves_no_escape_route() -> None:
 def test_a_policy_with_no_matching_uplink_here_renders_nothing() -> None:
     """Marking traffic into an empty table blackholes it. Leaving it on the main
     table is worse for the policy and much better for the site."""
-    s = sections_of(view([policy(prefer_tags=["satellite"])], mpls=[path("wan1", ["10.255.0.0"])]))
+    s = sections_of(view([policy(prefer=["satellite"])], mpls=[path("wan1", ["10.255.0.0"])]))
 
     assert s["/ip/firewall/mangle"].items == []
     assert s["/routing/table"].items == []
@@ -156,8 +175,8 @@ def test_no_policies_still_emits_empty_sections() -> None:
 def test_mangle_is_position_sensitive_and_ordered_by_priority() -> None:
     """RouterOS evaluates the chain top to bottom and the first match wins, so
     the order is the semantics."""
-    high = policy(name="critical", priority=10, prefer_tags=["mpls"])
-    low = policy(name="bulk", priority=900, prefer_tags=["mpls"])
+    high = policy(name="critical", priority=10, prefer=["mpls"])
+    low = policy(name="bulk", priority=900, prefer=["mpls"])
     s = sections_of(view([low, high], mpls=[path("wan1", ["10.255.0.0"])]))
 
     assert s["/ip/firewall/mangle"].ordered is True
@@ -194,8 +213,9 @@ def test_netwatch_carries_the_profile_thresholds() -> None:
         probe_count=20,
         recovery_seconds=30,
     )
-    p = policy(sla_profile_id="sla-1")
-    p.sla_profile = sla
+    # The SLA is a property of the path now, so it hangs off the group rather
+    # than the rule -- which is the point: one health standard, many rules.
+    p = policy(sla_profile=sla)
 
     s = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))
     props = s["/tool/netwatch"].items[0].props
@@ -218,7 +238,7 @@ def test_a_policy_without_a_profile_falls_back_to_sane_defaults() -> None:
 def test_breaching_the_sla_demotes_rather_than_removes() -> None:
     """The route must stay in the table so the path can be re-preferred the
     moment it recovers."""
-    p = policy(prefer_tags=["mpls", "broadband"])
+    p = policy(prefer=["mpls", "broadband"])
     s = sections_of(
         view(
             [p],

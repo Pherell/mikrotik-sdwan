@@ -64,6 +64,41 @@ class AppGroup(Base, UUIDPk, Timestamps, Tenanted):
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_appgroup_tenant_name"),)
 
 
+class SdwanGroup(Base, UUIDPk, Timestamps, Tenanted):
+    """A named set of uplinks, in preference order, with a health standard.
+
+    This is the half of a steering decision that is worth naming once and
+    reusing: *which* uplinks, in what order, and how bad one has to get before
+    traffic leaves it. Before this existed it was retyped into every rule, and
+    "the SLA" was a thing you set per rule rather than a property of the path.
+
+    Modelled on Sophos's SD-WAN profile, including the eight-member cap.
+    """
+
+    __tablename__ = "sdwan_groups"
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+
+    # [{"uplink": "fibre", "weight": 1}, ...] in preference order. "uplink" is
+    # a WAN tag or a WAN name, exactly as prefer_tags was.
+    members: Mapped[list | None] = mapped_column(JSONCol, default=list)
+
+    # failover: first healthy member wins, weights ignored.
+    # load_balance: not implemented -- see docs/plan-v3.md. Rejected on write
+    # rather than silently rendered as failover, which would be a lie.
+    strategy: Mapped[str] = mapped_column(String(16), nullable=False, default="failover")
+
+    sla_profile_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("sla_profiles.id", ondelete="SET NULL")
+    )
+    sla_profile: Mapped[SlaProfile | None] = relationship(lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_sdwan_group_tenant_name"),
+    )
+
+
 class Policy(Base, UUIDPk, Timestamps, Tenanted):
     """One steering rule.
 
@@ -96,8 +131,17 @@ class Policy(Base, UUIDPk, Timestamps, Tenanted):
     dscp: Mapped[int | None] = mapped_column(Integer)
 
     # -- action -------------------------------------------------------------
-    # Ordered WAN tags. The first uplink carrying a matching tag and meeting the
-    # SLA wins; ties break on Wan.cost.
+    # Which uplinks, in what order, and how healthy they must be. Named once as
+    # a group and pointed at from here, so one path definition serves many
+    # rules.
+    sdwan_group_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("sdwan_groups.id", ondelete="RESTRICT"), index=True
+    )
+    sdwan_group: Mapped[SdwanGroup | None] = relationship(lazy="selectin")
+
+    # Superseded by sdwan_group. Retained so the migration that moved every
+    # rule onto a group is reversible and nothing is silently destroyed; the
+    # renderer no longer reads either.
     prefer_tags: Mapped[list | None] = mapped_column(JSONCol, default=list)
     sla_profile_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("sla_profiles.id", ondelete="SET NULL")
