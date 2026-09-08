@@ -16,7 +16,12 @@ import { type FormEvent, useState } from "react";
 import { PageHeader } from "../components/PageHeader";
 import { Skeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toaster";
-import { endpoints, type SdwanGroup, type SlaProfile } from "../lib/api";
+import {
+  endpoints,
+  type GroupStrategy,
+  type SdwanGroup,
+  type SlaProfile,
+} from "../lib/api";
 import { POLICY_PRESETS, type PolicyPreset } from "../lib/presets";
 
 export function SdwanGroupsPage() {
@@ -105,12 +110,16 @@ export function SdwanGroupsPage() {
                     {g.description && <div className="muted">{g.description}</div>}
                   </td>
                   <td data-label="Uplinks">
-                    {g.members.map((m) => m.uplink).join(" → ")}
+                    {g.strategy === "failover"
+                      ? g.members.map((m) => m.uplink).join(" → ")
+                      : g.members
+                          .map((m) => `${m.uplink} ×${m.weight}`)
+                          .join(" + ")}
                   </td>
                   <td data-label="Strategy" className="muted">
                     {g.strategy === "failover"
                       ? "first healthy one wins"
-                      : g.strategy}
+                      : "connections spread across all of them"}
                   </td>
                   <td data-label="Health" className="muted">
                     {slas.data?.find((s) => s.id === g.sla_profile_id)?.name ??
@@ -172,6 +181,14 @@ function GroupForm({
   );
   const [slaId, setSlaId] = useState(group?.sla_profile_id ?? "");
   const [preset, setPreset] = useState<PolicyPreset | null>(null);
+  const [strategy, setStrategy] = useState<GroupStrategy>(
+    group?.strategy ?? "failover",
+  );
+  // Weight per uplink, kept for every uplink rather than only the chosen ones,
+  // so toggling one off and back on does not lose the number you typed.
+  const [weights, setWeights] = useState<Record<string, number>>(
+    Object.fromEntries((group?.members ?? []).map((m) => [m.uplink, m.weight])),
+  );
 
   function applyPreset(option: PolicyPreset | null) {
     setPreset(option);
@@ -201,8 +218,13 @@ function GroupForm({
       const body = {
         name,
         description: description || null,
-        members: chosen.map((uplink) => ({ uplink, weight: 1 })),
-        strategy: "failover",
+        members: chosen.map((uplink) => ({
+          uplink,
+          // The server rejects a weight other than 1 under failover, because a
+          // number that does nothing is worse than no number.
+          weight: strategy === "load_balance" ? (weights[uplink] ?? 1) : 1,
+        })),
+        strategy,
         sla_profile_id: sla,
       };
       return group
@@ -216,9 +238,11 @@ function GroupForm({
     onError: (e) => toast.bad((e as Error).message),
   });
 
+  const tooFewToBalance = strategy === "load_balance" && chosen.length < 2;
+
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (chosen.length === 0) return;
+    if (chosen.length === 0 || tooFewToBalance) return;
     save.mutate();
   }
 
@@ -281,7 +305,24 @@ function GroupForm({
         </div>
 
         <label>
-          Uplinks, in the order traffic should prefer them
+          How traffic uses them
+          <select
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value as GroupStrategy)}
+          >
+            <option value="failover">
+              One at a time — the first healthy uplink in the list
+            </option>
+            <option value="load_balance">
+              All at once — connections spread across them by weight
+            </option>
+          </select>
+        </label>
+
+        <label>
+          {strategy === "failover"
+            ? "Uplinks, in the order traffic should prefer them"
+            : "Uplinks to spread across, and each one's share"}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
             {uplinks.length === 0 && (
               <span className="muted">
@@ -295,13 +336,45 @@ function GroupForm({
                 className={chosen.includes(uplink) ? "primary" : ""}
                 onClick={() => toggle(uplink)}
               >
-                {chosen.includes(uplink)
+                {/* Under failover the number is a position, under balancing it
+                    is a share. Showing a position next to a weight field would
+                    read as though both applied. */}
+                {chosen.includes(uplink) && strategy === "failover"
                   ? `${chosen.indexOf(uplink) + 1}. ${uplink}`
                   : uplink}
               </button>
             ))}
           </div>
         </label>
+
+        {strategy === "load_balance" && chosen.length > 0 && (
+          <div className="row">
+            {chosen.map((uplink) => (
+              <label key={uplink}>
+                {uplink} share
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={weights[uplink] ?? 1}
+                  onChange={(e) =>
+                    setWeights((prev) => ({
+                      ...prev,
+                      [uplink]: Math.max(1, Number(e.target.value) || 1),
+                    }))
+                  }
+                />
+              </label>
+            ))}
+          </div>
+        )}
+
+        {tooFewToBalance && (
+          <div className="warn">
+            Spreading traffic needs at least two uplinks. With one, choose "one
+            at a time".
+          </div>
+        )}
 
         <label>
           Health standard
@@ -315,11 +388,27 @@ function GroupForm({
           </select>
         </label>
 
-        <p className="muted">
-          Traffic uses the first uplink in this list that is present at the device
-          and meeting the standard above. When one degrades past it, traffic moves
-          to the next; when it recovers, traffic moves back.
-        </p>
+        {strategy === "failover" ? (
+          <p className="muted">
+            Traffic uses the first uplink in this list that is present at the
+            device and meeting the standard above. When one degrades past it,
+            traffic moves to the next; when it recovers, traffic moves back.
+          </p>
+        ) : (
+          <p className="muted">
+            Each new connection is assigned an uplink, in proportion to the
+            shares above — a share of 3 next to a share of 1 sends three
+            connections one way for every one the other. An uplink that fails
+            or breaches the standard above stops receiving new connections and
+            its existing ones move to the others.{" "}
+            <strong>
+              This spreads connections, not packets: one download still uses one
+              uplink and will not go faster.
+            </strong>{" "}
+            That is true of RouterOS and of every other router that balances
+            this way.
+          </p>
+        )}
 
         <div className="row" style={{ justifyContent: "flex-start" }}>
           <div className="no-grow">
@@ -327,7 +416,7 @@ function GroupForm({
               className="primary"
               type="submit"
               data-busy={save.isPending}
-              disabled={save.isPending || chosen.length === 0}
+              disabled={save.isPending || chosen.length === 0 || tooFewToBalance}
             >
               {save.isPending ? "Saving…" : group ? "Save" : "Create"}
             </button>

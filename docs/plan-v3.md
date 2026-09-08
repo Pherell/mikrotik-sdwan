@@ -180,10 +180,26 @@ routes ordered by member position via `distance`, `check-gateway=ping`, and
 netwatch demoting a member that breaches its SLA by +100. Weights are ignored
 and the UI must say so rather than accept a number that does nothing.
 
-**`load_balance`** does not exist. On RouterOS it means PCC —
-`per-connection-classifier=both-addresses:N/M` marking connections into buckets,
-one bucket per weight share. That collides with the mangle rules traffic rules
-already emit, and needs the ordering work from F1a to be safe. Own milestone.
+**`load_balance`** — done. On RouterOS it means PCC:
+`per-connection-classifier=both-addresses:N/M` marking connections into
+buckets, one bucket per weight share. Weights are bucket *counts*, because
+RouterOS has no number it understands as a weight — a member with weight 3 owns
+three of the N buckets. Total buckets are capped at 16 and weights scaled into
+it, so 100-versus-1 renders sixteen rules rather than a hundred and one, with
+every member keeping at least one bucket.
+
+Two rules per bucket set, in order: `mark-connection` with `passthrough=yes`
+(the connection, not the packet, so one TCP stream is never split mid-transfer)
+and then `mark-routing` keyed on the connection mark. One routing table per
+*member*, not per bucket, or a 7/3 split would build ten identical tables.
+
+Each table prefers its own member at distance 1 and carries the others at 2.
+Without that fallback, a member going down blackholes every connection hashed
+to it — balancing without failover is worse than no balancing, because the
+failure is partial and looks random. The SLA scripts became table-aware for the
+same reason: one gateway sits at a different distance in every table, so a
+script setting one distance everywhere would flatten the balance into whichever
+path recovered last.
 
 **The ceiling, stated up front:** RouterOS balances *connections*, not packets.
 One download never uses two links. Sophos's weighted round-robin assigns
@@ -309,7 +325,7 @@ S1   SD-WAN groups + traffic rules        the model change; needs V1's words
 D1   Diagnostics                          done
 L1   Logs                                 done
 A1   API tokens and scopes                done
-S2   Load balancing via PCC               needs F1a and S1
+S2   Load balancing via PCC               done
 C1   Interactive SSH console              last; largest security decision
 ```
 

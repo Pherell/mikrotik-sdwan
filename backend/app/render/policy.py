@@ -12,6 +12,17 @@ The mechanism, in the order the packet meets it:
    distance of a path that breaches them, which moves traffic without tearing
    anything down.
 
+Under ``load_balance`` steps 2-4 change shape. RouterOS has no weighted
+next-hop selection, so spreading traffic means PCC: hash each connection into
+one of N buckets with ``per-connection-classifier``, give each bucket a
+connection mark, and route by it. Weights are bucket *counts* -- a member with
+weight 3 owns three of the N buckets.
+
+**The ceiling, stated here because it belongs next to the code:** this
+distributes *connections*, not packets. One download never uses two links. That
+is a property of RouterOS, and of Sophos's weighted round-robin too, but nobody
+should choose load_balance expecting a single transfer to go faster.
+
 Mangle rules are positional: RouterOS evaluates the chain top to bottom and the
 first match wins. Policies are therefore rendered in ``priority`` order and the
 section is marked ``ordered`` so the reconciler preserves it.
@@ -29,6 +40,11 @@ from app.render.engine import owner_tag, section
 # below every other preference, small enough to stay above the "any" fallback
 # at distance 250, so a fully degraded site still forwards.
 SLA_PENALTY = 100
+
+# Total PCC buckets a group may use. Weights are scaled into this, so the
+# mangle chain grows with the cap rather than with whatever numbers somebody
+# typed: weights of 100 and 1 would otherwise render 101 classifier rules.
+MAX_BUCKETS = 16
 
 DEFAULT_SLA = SlaProfile(
     name="default",
@@ -86,13 +102,28 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             continue
 
         lists.extend(_address_lists(policy, view.site_name))
-        mangle.append(_mangle_rule(policy, mark, view.site_name))
+        balanced = _strategy(policy) == "load_balance" and len(paths) > 1
+
+        if balanced:
+            # PCC needs the connection marked before it can be routed, so the
+            # single mark-routing rule becomes a classifier pass followed by a
+            # routing pass. Both are appended in order; the section is
+            # ``ordered`` so the reconciler keeps them that way.
+            buckets = _buckets(policy, paths)
+            mangle.extend(_pcc_rules(policy, mark, paths, buckets))
+        else:
+            mangle.append(_mangle_rule(policy, mark, view.site_name))
 
         if mark not in seen_marks:
             seen_marks.add(mark)
-            tables.append(_routing_table(mark, view.site_name))
-            routes.extend(_routes(policy, mark, paths, view.site_name))
-            probes.extend(_probes(policy, paths, view.site_name))
+            if balanced:
+                tables.extend(_balanced_tables(mark, paths, view.site_name))
+                routes.extend(_balanced_routes(policy, mark, paths, view.site_name))
+                probes.extend(_probes(policy, paths, view.site_name, mark=mark))
+            else:
+                tables.append(_routing_table(mark, view.site_name))
+                routes.extend(_routes(policy, mark, paths, view.site_name))
+                probes.extend(_probes(policy, paths, view.site_name))
 
     return _sections(view, lists, mangle, tables, routes, probes)
 
@@ -162,17 +193,14 @@ def _address_lists(policy: Policy, site_name: str) -> list[ConfigItem]:
     return items
 
 
-def _mangle_rule(policy: Policy, mark: str, site_name: str) -> ConfigItem:
-    props: dict[str, object] = {
-        "chain": "prerouting",
-        "action": "mark-routing",
-        "new-routing-mark": mark,
-        # Marking every packet of a flow costs more than marking the first and
-        # letting the connection tracker carry the rest, but it is correct when
-        # a path changes mid-flow, which is the whole point of SLA steering.
-        "passthrough": False,
-        "comment": owner_tag("policy", policy.name),
-    }
+def _match_props(policy: Policy) -> dict[str, object]:
+    """What this policy matches, without saying what to do about it.
+
+    Shared by the failover rule and by every PCC classifier, because a
+    classifier that matched a wider set of traffic than the rule it belongs to
+    would balance packets the policy never claimed.
+    """
+    props: dict[str, object] = {}
     if policy.src_prefixes:
         props["src-address-list"] = _list_name(policy, "src")
     if policy.dst_prefixes:
@@ -191,7 +219,24 @@ def _mangle_rule(policy: Policy, mark: str, site_name: str) -> ConfigItem:
     dscp = policy.dscp if policy.dscp is not None else _dscp_of(policy)
     if dscp is not None:
         props["dscp"] = dscp
+    return props
 
+
+def _mangle_rule(policy: Policy, mark: str, site_name: str) -> ConfigItem:
+    props = _match_props(policy)
+    props.update(
+        {
+            "chain": "prerouting",
+            "action": "mark-routing",
+            "new-routing-mark": mark,
+            # Marking every packet of a flow costs more than marking the first
+            # and letting the connection tracker carry the rest, but it is
+            # correct when a path changes mid-flow, which is the whole point of
+            # SLA steering.
+            "passthrough": False,
+            "comment": owner_tag("policy", policy.name),
+        }
+    )
     return ConfigItem(props=props, tag=owner_tag("policy", policy.name))
 
 
@@ -245,13 +290,213 @@ def _routes(
     return items
 
 
-def _probes(policy: Policy, paths: list[PathOption], site_name: str) -> list[ConfigItem]:
-    """Netwatch entries carrying the group's SLA thresholds."""
+# -- load balancing ---------------------------------------------------------
+#
+# RouterOS has no weighted next hop. What it has is PCC: hash a connection's
+# addresses into one of N buckets, and act on the bucket. So "70/30 across two
+# links" becomes "of 10 buckets, 7 go left and 3 go right", and the weights are
+# bucket counts rather than anything the router understands as a weight.
+
+
+def _strategy(policy: Policy) -> str:
+    group = policy.sdwan_group
+    return str(group.strategy) if group is not None else "failover"
+
+
+def _weights(policy: Policy, paths: list[PathOption]) -> list[int]:
+    """One weight per path, in path order.
+
+    Paths are resolved from group members by tag, and a tag can match more than
+    one uplink at a site, so this cannot be a straight zip: each path carries
+    its own weight from whichever member selected it.
+    """
+    group = policy.sdwan_group
+    by_uplink: dict[str, int] = {}
+    for member in (group.members or []) if group is not None else []:
+        if isinstance(member, dict) and member.get("uplink"):
+            by_uplink[str(member["uplink"])] = int(member.get("weight", 1) or 1)
+    return [max(1, by_uplink.get(path.wan_name, 1)) for path in paths]
+
+
+def _buckets(policy: Policy, paths: list[PathOption]) -> list[int]:
+    """Which path each bucket belongs to.
+
+    Returns a list of path indexes, one entry per bucket. Scaled to at most
+    MAX_BUCKETS: weights of 100 and 1 would otherwise render 101 classifier
+    rules, and the ratio survives scaling while the rule count does not.
+
+    Every path gets at least one bucket. A member with weight 1 next to a
+    member with weight 100 rounds to zero otherwise, which silently removes a
+    link somebody deliberately listed.
+    """
+    weights = _weights(policy, paths)
+    total = sum(weights)
+    if total <= MAX_BUCKETS:
+        counts = weights
+    else:
+        counts = [max(1, round(w * MAX_BUCKETS / total)) for w in weights]
+        # Rounding up every small share can overshoot the cap. Trim from the
+        # largest, which is the one that can spare it.
+        while sum(counts) > MAX_BUCKETS:
+            biggest = counts.index(max(counts))
+            if counts[biggest] == 1:
+                break  # every member is down to one bucket; the cap yields
+            counts[biggest] -= 1
+
+    buckets: list[int] = []
+    for index, count in enumerate(counts):
+        buckets.extend([index] * count)
+    return buckets
+
+
+def _pcc_rules(
+    policy: Policy, mark: str, paths: list[PathOption], buckets: list[int]
+) -> list[ConfigItem]:
+    """Classify into buckets, then route by the bucket.
+
+    Two passes, in this order, because they depend on each other: the first
+    marks the *connection* so every later packet of it takes the same path
+    without being re-hashed, and the second turns that into a routing mark.
+    Marking the connection rather than the packet is what stops a single TCP
+    stream being split across two links mid-transfer.
+    """
+    items: list[ConfigItem] = []
+    total = len(buckets)
+
+    for position, path_index in enumerate(buckets):
+        props = _match_props(policy)
+        props.update(
+            {
+                "chain": "prerouting",
+                "action": "mark-connection",
+                "new-connection-mark": _conn_mark(mark, path_index),
+                # both-addresses so a client's connections to different servers
+                # spread out. src-address alone pins each client to one link,
+                # which is the opposite of what a load balancer is for.
+                "per-connection-classifier": f"both-addresses:{total}/{position}",
+                # Must continue: the routing pass below is a separate rule, and
+                # the remaining classifiers still need to see unmatched
+                # connections.
+                "passthrough": True,
+                "comment": owner_tag("policy", policy.name, f"pcc-{position}"),
+            }
+        )
+        items.append(
+            ConfigItem(props=props, tag=owner_tag("policy", policy.name, f"pcc-{position}"))
+        )
+
+    for path_index in sorted(set(buckets)):
+        items.append(
+            ConfigItem(
+                props={
+                    "chain": "prerouting",
+                    "action": "mark-routing",
+                    "connection-mark": _conn_mark(mark, path_index),
+                    "new-routing-mark": _bucket_mark(mark, path_index),
+                    "passthrough": False,
+                    "comment": owner_tag("policy", policy.name, f"route-{path_index}"),
+                },
+                tag=owner_tag("policy", policy.name, f"route-{path_index}"),
+            )
+        )
+    return items
+
+
+def _conn_mark(mark: str, index: int) -> str:
+    return f"{mark}-c{index}"[:31]
+
+
+def _bucket_mark(mark: str, index: int) -> str:
+    return f"{mark}-{index}"[:31]
+
+
+def _balanced_tables(mark: str, paths: list[PathOption], site_name: str) -> list[ConfigItem]:
+    """One routing table per member, not per bucket.
+
+    Buckets that share a member share its table. Otherwise a 7/3 split would
+    build ten identical tables.
+    """
+    tag = owner_tag("policy", mark, "table")
+    return [
+        ConfigItem(props={"name": _bucket_mark(mark, index), "fib": True}, tag=tag)
+        for index in range(len(paths))
+    ]
+
+
+def _balanced_routes(
+    policy: Policy, mark: str, paths: list[PathOption], site_name: str
+) -> list[ConfigItem]:
+    """Each table prefers its own member and falls back to the others.
+
+    The fallback is what makes this survivable. Without it a member going down
+    blackholes every connection hashed to it -- balancing without failover is
+    worse than no balancing, because the failure is partial and looks random.
+    """
+    tag = owner_tag("policy", policy.name, "route")
+    items: list[ConfigItem] = []
+    for table_index in range(len(paths)):
+        table = _bucket_mark(mark, table_index)
+        for path_index, path in enumerate(paths):
+            distance = 1 if path_index == table_index else 2
+            for hop in path.next_hops:
+                items.append(
+                    ConfigItem(
+                        props={
+                            "dst-address": "0.0.0.0/0",
+                            "gateway": hop,
+                            "routing-table": table,
+                            "distance": distance,
+                            "check-gateway": "ping",
+                            "comment": f"{tag}:{table}:{path.wan_name}",
+                        },
+                        tag=f"{tag}:{table}:{path.wan_name}",
+                    )
+                )
+        if policy.fallback == "any":
+            items.append(
+                ConfigItem(
+                    props={
+                        "dst-address": "0.0.0.0/0",
+                        "gateway": "main",
+                        "routing-table": table,
+                        "distance": 250,
+                        "comment": f"{tag}:{table}:fallback",
+                    },
+                    tag=f"{tag}:{table}:fallback",
+                )
+            )
+    return items
+
+
+def _probes(
+    policy: Policy,
+    paths: list[PathOption],
+    site_name: str,
+    *,
+    mark: str | None = None,
+) -> list[ConfigItem]:
+    """Netwatch entries carrying the group's SLA thresholds.
+
+    ``mark`` switches this to the load-balanced shape. There, one gateway sits
+    at a different distance in every table -- preferred in its own, a fallback
+    in the others -- so a script that set one distance everywhere would flatten
+    the balance into "everything via whichever path recovered last".
+    """
     sla = _sla(policy)
     tag = owner_tag("policy", policy.name, "sla")
     items: list[ConfigItem] = []
     for index, path in enumerate(paths):
-        base = index + 1
+        if mark is None:
+            healthy = [(None, index + 1)]
+        else:
+            # Distance 1 in its own table, 2 in the rest -- exactly what
+            # _balanced_routes wrote.
+            healthy = [
+                (_bucket_mark(mark, table), 1 if table == index else 2)
+                for table in range(len(paths))
+            ]
+        demoted = [(table, distance + SLA_PENALTY) for table, distance in healthy]
+
         for hop in path.next_hops:
             props: dict[str, object] = {
                 "host": hop,
@@ -263,8 +508,8 @@ def _probes(policy: Policy, paths: list[PathOption], site_name: str) -> list[Con
                 "disabled": False,
                 # Demote rather than delete: the route stays in the table so the
                 # path can be re-preferred the moment it recovers.
-                "down-script": _distance_script(hop, base + SLA_PENALTY),
-                "up-script": _distance_script(hop, base),
+                "down-script": _distance_script(hop, demoted),
+                "up-script": _distance_script(hop, healthy),
                 "comment": f"{tag}:{path.wan_name}",
             }
             if sla.jitter_ms:
@@ -273,8 +518,11 @@ def _probes(policy: Policy, paths: list[PathOption], site_name: str) -> list[Con
     return items
 
 
-def _distance_script(gateway: str, distance: int) -> str:
-    """A RouterOS script that sets every route via ``gateway`` to ``distance``.
+def _distance_script(gateway: str, targets: list[tuple[str | None, int]]) -> str:
+    """A RouterOS script setting this gateway's routes to given distances.
+
+    ``targets`` is (routing table, distance) pairs; a table of None means every
+    table, which is the failover case where there is only one.
 
     Absolute, not relative. An earlier version added a penalty to the current
     distance, which compounds: two down events in a row demote the path twice
@@ -284,10 +532,16 @@ def _distance_script(gateway: str, distance: int) -> str:
     Kept to one line: RouterOS stores scripts verbatim, and a multi-line value
     round-trips with whitespace changes that would diff dirty forever.
     """
-    return (
-        f':foreach r in=[/ip/route/find gateway="{gateway}"] '
-        f"do={{/ip/route/set $r distance={distance}}}"
-    )
+    clauses = []
+    for table, distance in targets:
+        where = f'gateway="{gateway}"'
+        if table is not None:
+            where += f' routing-table="{table}"'
+        clauses.append(
+            f":foreach r in=[/ip/route/find {where}] "
+            f"do={{/ip/route/set $r distance={distance}}}"
+        )
+    return "; ".join(clauses)
 
 
 def _sections(

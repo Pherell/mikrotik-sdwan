@@ -292,8 +292,12 @@ export interface AppGroup {
 
 export interface GroupMember {
   uplink: string;
+  // Only meaningful under load_balance, where it is a share of the
+  // *connections*, not of the bandwidth.
   weight: number;
 }
+
+export type GroupStrategy = "failover" | "load_balance";
 
 /**
  * A named set of uplinks, in preference order, with a health standard.
@@ -304,7 +308,7 @@ export interface SdwanGroup {
   name: string;
   description: string | null;
   members: GroupMember[];
-  strategy: "failover";
+  strategy: GroupStrategy;
   sla_profile_id: string | null;
   created_at: string;
   updated_at: string;

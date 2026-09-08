@@ -922,9 +922,7 @@ async def test_a_group_needs_at_least_one_uplink(api) -> None:
     assert resp.status_code == 422
 
 
-async def test_load_balance_is_refused_rather_than_faked(api) -> None:
-    """Rendering it as failover would be a lie, and accepting it silently would
-    leave someone believing traffic is spread across two links when it is not."""
+async def test_load_balance_takes_weights(api) -> None:
     client, _, _ = api
     headers = await _auth(client)
 
@@ -933,12 +931,74 @@ async def test_load_balance_is_refused_rather_than_faked(api) -> None:
         headers=headers,
         json={
             "name": "balanced",
-            "members": [{"uplink": "mpls"}, {"uplink": "broadband"}],
+            "members": [
+                {"uplink": "mpls", "weight": 3},
+                {"uplink": "broadband", "weight": 1},
+            ],
             "strategy": "load_balance",
         },
     )
+
+    assert resp.status_code == 201, resp.text
+    assert [m["weight"] for m in resp.json()["members"]] == [3, 1]
+
+
+async def test_load_balance_needs_something_to_balance_across(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+
+    resp = await client.post(
+        "/sdwan-groups",
+        headers=headers,
+        json={
+            "name": "lonely",
+            "members": [{"uplink": "mpls", "weight": 2}],
+            "strategy": "load_balance",
+        },
+    )
+
     assert resp.status_code == 422
-    assert "not implemented" in resp.text
+    assert "at least two uplinks" in resp.text
+
+
+async def test_a_weight_under_failover_is_refused_as_misleading(api) -> None:
+    """Under failover the order is the whole preference, so a weight here is a
+    number that does nothing."""
+    client, _, _ = api
+    headers = await _auth(client)
+
+    resp = await client.post(
+        "/sdwan-groups",
+        headers=headers,
+        json={
+            "name": "confused",
+            "members": [
+                {"uplink": "mpls", "weight": 3},
+                {"uplink": "broadband", "weight": 1},
+            ],
+            "strategy": "failover",
+        },
+    )
+
+    assert resp.status_code == 422
+    assert "weights only apply to load_balance" in resp.text
+
+
+async def test_an_unknown_strategy_is_refused(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+
+    resp = await client.post(
+        "/sdwan-groups",
+        headers=headers,
+        json={
+            "name": "nonsense",
+            "members": [{"uplink": "mpls"}, {"uplink": "broadband"}],
+            "strategy": "round_robin",
+        },
+    )
+
+    assert resp.status_code == 422
 
 
 async def test_a_group_in_use_cannot_be_deleted(api) -> None:

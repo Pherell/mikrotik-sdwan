@@ -327,3 +327,219 @@ def test_everything_rendered_is_ownership_tagged() -> None:
         assert sec.owner_tag.startswith("sdwan:policy")
         for item in sec.items:
             assert item.tag.startswith("sdwan:policy")
+
+
+# -- load balancing ---------------------------------------------------------
+#
+# RouterOS has no weighted next hop. Spreading traffic means PCC: hash each
+# connection into one of N buckets and act on the bucket. Weights are bucket
+# counts, so 70/30 is "of ten buckets, seven go left".
+
+
+def balanced(uplinks: list[str], weights: list[int], sla: SlaProfile | None = None):
+    g = group(uplinks, sla)
+    g.strategy = "load_balance"
+    g.members = [{"uplink": u, "weight": w} for u, w in zip(uplinks, weights, strict=True)]
+    return g
+
+
+def test_equal_weights_split_the_buckets_evenly() -> None:
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [1, 1]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    mangle = result["/ip/firewall/mangle"].items
+    classifiers = [i for i in mangle if i.props.get("action") == "mark-connection"]
+
+    assert len(classifiers) == 2
+    assert [i.props["per-connection-classifier"] for i in classifiers] == [
+        "both-addresses:2/0",
+        "both-addresses:2/1",
+    ]
+
+
+def test_weights_become_bucket_counts() -> None:
+    """Three-to-one is three buckets to one, not a number RouterOS understands
+    as a weight -- it has no such number."""
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [3, 1]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    mangle = result["/ip/firewall/mangle"].items
+    classifiers = [i for i in mangle if i.props.get("action") == "mark-connection"]
+
+    assert len(classifiers) == 4
+    assert all(
+        i.props["per-connection-classifier"].startswith("both-addresses:4/")
+        for i in classifiers
+    )
+    marks = [i.props["new-connection-mark"] for i in classifiers]
+    assert marks.count(marks[0]) == 3  # the weight-3 member owns three buckets
+
+
+def test_a_lopsided_weight_is_scaled_rather_than_rendering_a_hundred_rules() -> None:
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [100, 1]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    mangle = result["/ip/firewall/mangle"].items
+    classifiers = [i for i in mangle if i.props.get("action") == "mark-connection"]
+
+    assert len(classifiers) <= 16
+    marks = {i.props["new-connection-mark"] for i in classifiers}
+    # Both members survive scaling. Rounding the small share to zero would
+    # silently remove a link somebody deliberately listed.
+    assert len(marks) == 2
+
+
+def test_the_connection_is_marked_not_the_packet() -> None:
+    """What stops a single TCP stream being split across two links mid-transfer."""
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [1, 1]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    mangle = result["/ip/firewall/mangle"].items
+    classifiers = [i for i in mangle if i.props.get("action") == "mark-connection"]
+    routers = [i for i in mangle if i.props.get("action") == "mark-routing"]
+
+    assert all(
+        i.props["per-connection-classifier"].startswith("both-addresses:")
+        for i in classifiers
+    )
+    # Classifiers must fall through so the later ones and the routing pass run.
+    assert all(i.props["passthrough"] is True for i in classifiers)
+    # Routing marks are terminal.
+    assert all(i.props["passthrough"] is False for i in routers)
+    # Every connection mark is turned into a routing mark.
+    assert {i.props["connection-mark"] for i in routers} == {
+        i.props["new-connection-mark"] for i in classifiers
+    }
+
+
+def test_classifiers_match_exactly_what_the_rule_matches() -> None:
+    """A classifier matching wider traffic than its rule would balance packets
+    the policy never claimed."""
+    p = policy(
+        sdwan_group=balanced(["fibre", "lte"], [1, 1]),
+        dst_prefixes=["203.0.113.0/24"],
+        protocol="udp",
+        dst_ports="5060",
+    )
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    mangle = result["/ip/firewall/mangle"].items
+    classifiers = [i for i in mangle if i.props.get("action") == "mark-connection"]
+
+    for item in classifiers:
+        assert item.props["protocol"] == "udp"
+        assert item.props["dst-port"] == "5060"
+        assert item.props["dst-address-list"].endswith("-dst")
+
+
+def test_one_table_per_member_not_per_bucket() -> None:
+    """A 7/3 split must not build ten identical tables."""
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [7, 3]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    tables = result["/routing/table"].items
+    assert len(tables) == 2
+
+
+def test_each_table_prefers_its_own_member_and_falls_back_to_the_others() -> None:
+    """Balancing without failover is worse than no balancing: the failure is
+    partial and looks random."""
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [1, 1]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    routes = result["/ip/route"].items
+    by_table: dict[str, dict[str, int]] = {}
+    for item in routes:
+        if item.props["gateway"] == "main":
+            continue
+        by_table.setdefault(str(item.props["routing-table"]), {})[
+            str(item.props["gateway"])
+        ] = int(item.props["distance"])
+
+    assert len(by_table) == 2
+    tables = sorted(by_table)
+    # In its own table the member is preferred; in the other it is the backup.
+    assert by_table[tables[0]]["10.255.0.1"] == 1
+    assert by_table[tables[0]]["10.255.1.1"] == 2
+    assert by_table[tables[1]]["10.255.0.1"] == 2
+    assert by_table[tables[1]]["10.255.1.1"] == 1
+    assert all(
+        i.props.get("check-gateway") == "ping"
+        for i in routes
+        if i.props["gateway"] != "main"
+    )
+
+
+def test_the_sla_script_demotes_per_table_not_globally() -> None:
+    """One gateway sits at a different distance in every table, so a script
+    that set one distance everywhere would flatten the balance into whichever
+    path recovered last."""
+    sla = SlaProfile(
+        name="voice",
+        loss_percent=2,
+        latency_ms=120,
+        probe_interval_seconds=5,
+        probe_count=10,
+        recovery_seconds=30,
+    )
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [1, 1], sla))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    probes = result["/tool/netwatch"].items
+    fibre = next(i for i in probes if i.props["host"] == "10.255.0.1")
+
+    up = str(fibre.props["up-script"])
+    down = str(fibre.props["down-script"])
+    # Both tables are named, and each carries its own distance.
+    assert up.count("routing-table=") == 2
+    assert "distance=1}" in up and "distance=2}" in up
+    assert f"distance={1 + SLA_PENALTY}}}" in down
+    assert f"distance={2 + SLA_PENALTY}}}" in down
+
+
+def test_failover_rendering_is_untouched() -> None:
+    """The strategy that already worked must render exactly as before -- a
+    diff here is a config change pushed to every device on upgrade."""
+    p = policy(prefer=["mpls", "lte"])
+    result = sections_of(
+        view([p], mpls=[path("mpls", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+
+    mangle = result["/ip/firewall/mangle"].items
+    assert len(mangle) == 1
+    assert mangle[0].props["action"] == "mark-routing"
+    assert "per-connection-classifier" not in mangle[0].props
+    assert len(result["/routing/table"].items) == 1
+
+    probes = result["/tool/netwatch"].items
+    # One clause, no routing-table filter: there is only one table.
+    assert "routing-table=" not in str(probes[0].props["up-script"])
+    assert str(probes[0].props["up-script"]).count(":foreach") == 1
+
+
+def test_a_single_member_group_never_balances() -> None:
+    """PCC across one path is pure overhead and an extra failure mode."""
+    g = balanced(["fibre", "lte"], [1, 1])
+    p = policy(sdwan_group=g)
+    # Only one of the two uplinks exists at this site.
+    result = sections_of(view([p], fibre=[path("fibre", ["10.255.0.1"])]))
+
+    mangle = result["/ip/firewall/mangle"].items
+    assert len(mangle) == 1
+    assert mangle[0].props["action"] == "mark-routing"

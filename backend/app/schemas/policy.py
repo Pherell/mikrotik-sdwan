@@ -72,6 +72,11 @@ class AppGroupRead(AppGroupBase):
 
 MAX_MEMBERS = 8
 
+# failover: the first healthy member wins; weights are meaningless.
+# load_balance: connections are spread across members in proportion to their
+# weights, via PCC. Connections, not packets -- see app.render.policy.
+STRATEGIES = frozenset({"failover", "load_balance"})
+
 
 class GroupMember(BaseModel):
     """One uplink's place in a group."""
@@ -81,9 +86,10 @@ class GroupMember(BaseModel):
     # A WAN tag or a WAN name. Tags let one group serve devices whose uplinks
     # are wired differently.
     uplink: str = Field(min_length=1, max_length=64)
-    # Only meaningful under load_balance, which is not implemented. Kept so the
-    # shape does not change when it is, and rejected as misleading if someone
-    # sets it to something other than 1 under failover.
+    # Only meaningful under load_balance, where it is a share of the
+    # connections rather than of the bandwidth. Rejected as misleading if
+    # someone sets it to something other than 1 under failover, where the
+    # order of the uplinks is the whole preference.
     weight: int = Field(default=1, ge=1, le=100)
 
 
@@ -109,26 +115,22 @@ class SdwanGroupBase(BaseModel):
     @field_validator("strategy")
     @classmethod
     def _strategy(cls, v: str) -> str:
-        if v == "load_balance":
-            # Rendering it as failover would be a lie, and silently accepting
-            # it would leave someone believing their traffic is spread across
-            # two links when it is not.
-            raise ValueError(
-                "load_balance is not implemented yet. On RouterOS it needs "
-                "per-connection-classifier rules that collide with the ones "
-                "traffic rules already emit -- see docs/plan-v3.md. Use "
-                "failover."
-            )
-        if v != "failover":
-            raise ValueError("strategy must be 'failover'")
+        if v not in STRATEGIES:
+            raise ValueError(f"strategy must be one of: {', '.join(sorted(STRATEGIES))}")
         return v
 
     @model_validator(mode="after")
     def _weights_do_nothing_under_failover(self) -> SdwanGroupBase:
         if self.strategy == "failover" and any(m.weight != 1 for m in self.members):
             raise ValueError(
-                "weights only apply to load_balance, which is not implemented. "
-                "Under failover the order of the uplinks is the preference."
+                "weights only apply to load_balance. Under failover the order "
+                "of the uplinks is the preference; a weight here would be a "
+                "number that does nothing."
+            )
+        if self.strategy == "load_balance" and len(self.members) < 2:
+            raise ValueError(
+                "load_balance needs at least two uplinks to spread across. "
+                "With one, use failover."
             )
         return self
 
