@@ -1507,3 +1507,55 @@ async def test_an_unreachable_device_still_records_the_attempt(api, monkeypatch)
     assert len(events) == 1
     assert "connection refused" in events[0].detail["unreachable"]
 
+
+# -- deleting a device that is part of a fabric ------------------------------
+
+
+async def test_a_device_in_a_tunnel_network_is_refused_not_silently_deleted(api) -> None:
+    """The other half of the guard that used to raise MissingGreenlet. Deleting
+    a site out from under a fabric would leave links pointing at nothing."""
+    client, _, _ = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+
+    resp = await client.delete(f"/sites/{sites['hub1']}", headers=headers)
+
+    assert resp.status_code == 409
+    assert "fabric" in resp.json()["detail"].lower()
+    # And it is still there.
+    assert (await client.get(f"/sites/{sites['hub1']}", headers=headers)).status_code == 200
+
+
+async def test_the_whole_remove_then_delete_flow_works(api) -> None:
+    """What an operator actually does: take the device out of the tunnel
+    network, then delete it. Every step of this raised a 500 before."""
+    client, maker, _ = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+
+    removed = await client.delete(
+        f"/fabrics/{fabric_id}/members/{sites['spoke2']}", headers=headers
+    )
+    assert removed.status_code in (200, 204), removed.text
+
+    # Expand again so the links for the departed member are reconciled away.
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+
+    resp = await client.delete(f"/sites/{sites['spoke2']}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    from sqlalchemy import select
+
+    from app.models import Link, Wan
+
+    async with maker() as s:
+        wans = [w for w in await s.scalars(select(Wan)) if w.site_id == sites["spoke2"]]
+        links = list(await s.scalars(select(Link)))
+    assert wans == []
+    # No link may still reference the deleted device.
+    gone = {sites["spoke2"]}
+    for link in links:
+        assert link.a_wan_id not in gone and link.b_wan_id not in gone
+

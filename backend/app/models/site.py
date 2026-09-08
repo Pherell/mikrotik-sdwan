@@ -69,8 +69,12 @@ class Site(Base, UUIDPk, Timestamps, Tenanted):
     wans: Mapped[list[Wan]] = relationship(
         back_populates="site", cascade="all, delete-orphan", lazy="selectin"
     )
+    # selectin, like wans above. The delete endpoint reads this to refuse a
+    # site that is still in a fabric, and a lazy load inside an async request
+    # raises MissingGreenlet rather than quietly fetching -- so the guard blew
+    # up before it could decide, and no device could ever be deleted.
     memberships: Mapped[list[FabricMember]] = relationship(
-        back_populates="site", cascade="all, delete-orphan"
+        back_populates="site", cascade="all, delete-orphan", lazy="selectin"
     )
 
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_site_tenant_name"),)

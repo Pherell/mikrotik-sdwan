@@ -483,3 +483,88 @@ async def test_the_reference_is_served_under_the_proxied_prefix(api) -> None:
     assert docs.status_code == 200
     assert "swagger" in docs.text.lower()
     assert "/api/v1/api-tokens" in schema.json()["paths"]
+
+
+# -- deleting a device ------------------------------------------------------
+#
+# The only delete test here used to be the RBAC one, which 403s before it
+# reaches the endpoint body. So the body was never executed by any test, and
+# it raised MissingGreenlet on every single call: the guard reads
+# site.memberships, which was a lazy relationship, and a lazy load inside an
+# async request is not allowed. Deleting a device was impossible.
+
+
+async def _make_site(client, token, name="edge", host="10.0.0.1", prefix="10.1.0.0/24"):
+    resp = await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={"name": name, "mgmt_host": host, "username": "admin",
+              "password": "pw", "local_prefixes": [prefix]},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+async def test_an_admin_can_actually_delete_a_device(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+    site_id = await _make_site(client, token)
+
+    resp = await client.delete(f"/sites/{site_id}", headers=_auth(token))
+
+    assert resp.status_code == 204, resp.text
+    assert (await client.get(f"/sites/{site_id}", headers=_auth(token))).status_code == 404
+
+
+async def test_deleting_a_device_takes_its_uplinks_with_it(api) -> None:
+    """The uplinks belong to the device. Leaving them behind would leave rows
+    that no longer name anything."""
+    from sqlalchemy import func, select
+
+    from app.models import Wan
+
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+    site_id = await _make_site(client, token)
+    await client.post(
+        f"/sites/{site_id}/wans",
+        headers=_auth(token),
+        json={"name": "wan1", "interface": "ether1", "public_ip": "203.0.113.1"},
+    )
+
+    assert (await client.delete(f"/sites/{site_id}", headers=_auth(token))).status_code == 204
+
+    async with maker() as s:
+        left = await s.scalar(select(func.count()).select_from(Wan))
+    assert left == 0
+
+
+async def test_deleting_a_device_is_audited(api) -> None:
+    from sqlalchemy import select
+
+    from app.models import AuditEvent
+
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+    site_id = await _make_site(client, token, name="doomed")
+
+    await client.delete(f"/sites/{site_id}", headers=_auth(token))
+
+    async with maker() as s:
+        events = [e for e in await s.scalars(select(AuditEvent)) if e.action == "site.delete"]
+    assert len(events) == 1
+    assert events[0].detail["name"] == "doomed"
+
+
+async def test_deleting_a_device_that_is_not_there_is_a_404(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+
+    resp = await client.delete("/sites/no-such-site", headers=_auth(token))
+
+    assert resp.status_code == 404
+
