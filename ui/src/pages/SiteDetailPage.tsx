@@ -41,6 +41,14 @@ export function SiteDetailPage() {
     },
   });
 
+  const forget = useMutation({
+    mutationFn: () => endpoints.forgetDeviceIdentity(siteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["site", siteId] });
+      queryClient.invalidateQueries({ queryKey: ["sites"] });
+    },
+  });
+
   const drift = useMutation({
     mutationFn: () => endpoints.driftCheck(siteId),
     onSuccess: () => {
@@ -127,6 +135,52 @@ export function SiteDetailPage() {
           <dd>{s.local_prefixes.length ? s.local_prefixes.join(", ") : "none"}</dd>
           <dt>On drift</dt>
           <dd>{s.drift_action === "auto-remediate" ? "re-apply automatically" : "alert only"}</dd>
+          <dt>Pinned identity</dt>
+          <dd>
+            {s.tls_fingerprint ? (
+              <>
+                <code className="fingerprint">{s.tls_fingerprint}</code>
+                <div className="muted">
+                  Recorded on first contact. The controller refuses to talk to
+                  anything presenting a different certificate.
+                </div>
+                <button
+                  className="sm"
+                  style={{ marginTop: 6 }}
+                  disabled={forget.isPending}
+                  onClick={() => {
+                    // A pin exists to be inconvenient when it fires. The
+                    // confirmation spells out the only two things a mismatch
+                    // can mean, because clicking past this is how someone
+                    // hands their credentials to whatever is intercepting.
+                    if (
+                      confirm(
+                        [
+                          `Forget the recorded identity for ${s.name}?`,
+                          "Do this only if you know the device was rebuilt, " +
+                            "reset, or re-keyed. If it was not, something is " +
+                            "answering in its place, and reconnecting will hand " +
+                            "that thing this device's credentials.",
+                          "The next connection will trust whatever answers.",
+                        ].join("\n\n"),
+                      )
+                    ) {
+                      forget.mutate();
+                    }
+                  }}
+                >
+                  {forget.isPending ? "Forgetting…" : "Forget this identity"}
+                </button>
+                {forget.isError && (
+                  <div className="error">{(forget.error as Error).message}</div>
+                )}
+              </>
+            ) : (
+              <span className="muted">
+                not recorded yet — learned on the next connection
+              </span>
+            )}
+          </dd>
         </dl>
       </div>
 

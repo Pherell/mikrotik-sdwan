@@ -140,6 +140,11 @@ export interface Site {
   last_seen_at: string | null;
   last_error: string | null;
   has_credentials: boolean;
+  // The device identity recorded on first contact. A later connection
+  // presenting anything else is refused, so this is what an operator compares
+  // by eye against the router before deciding a mismatch is boring.
+  tls_fingerprint: string | null;
+  has_ssh_host_key: boolean;
   loopback_ip: string | null;
   local_prefixes: string[];
   drift_action: string;
@@ -618,6 +623,12 @@ export const endpoints = {
 
   // -- editing (previously API-only) ---------------------------------------
   updateSite: (id: string, body: unknown) => api.patch<Site>(`/sites/${id}`, body),
+  // Forget the recorded device identity so the next connection learns it
+  // again. Its own call rather than a generic patch, because "clear both
+  // pins" is the whole operation and spelling it out at each call site is how
+  // one of them ends up clearing only the TLS half.
+  forgetDeviceIdentity: (id: string) =>
+    api.patch<Site>(`/sites/${id}`, { tls_fingerprint: null, ssh_host_key: null }),
   updateWan: (siteId: string, wanId: string, body: unknown) =>
     api.patch<Wan>(`/sites/${siteId}/wans/${wanId}`, body),
   deleteWan: (siteId: string, wanId: string) =>

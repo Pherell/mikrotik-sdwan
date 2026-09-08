@@ -568,3 +568,68 @@ async def test_deleting_a_device_that_is_not_there_is_a_404(api) -> None:
 
     assert resp.status_code == 404
 
+
+# -- recovering from a changed device certificate ---------------------------
+#
+# RouterOS regenerates its certificate on a reset, a re-key, and some upgrades.
+# The controller pins the identity on first contact and refuses anything else
+# afterwards, which is the point -- but the error told operators to "clear the
+# pin on the site", and nothing in the UI could do that. An instruction that
+# cannot be followed is not a recovery path.
+
+
+async def test_the_pinned_identity_is_visible(api) -> None:
+    """It is compared against the router by eye, so it has to be readable."""
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+    site_id = await _make_site(client, token)
+
+    async with maker() as s:
+        from app.models import Site
+
+        site = await s.get(Site, site_id)
+        site.tls_fingerprint = "AA:BB:CC"
+        site.ssh_host_key = "ssh-ed25519 AAAA"
+        await s.commit()
+
+    body = (await client.get(f"/sites/{site_id}", headers=_auth(token))).json()
+
+    assert body["tls_fingerprint"] == "AA:BB:CC"
+    # The key itself is long and only its presence is actionable.
+    assert body["has_ssh_host_key"] is True
+    assert "ssh_host_key" not in body
+
+
+async def test_forgetting_the_identity_clears_both_halves(api) -> None:
+    """One call, because "clear both pins" is the whole operation -- spelling
+    it out at each call site is how one of them ends up clearing only TLS, and
+    the SSH half then refuses the next connection on its own."""
+    client, maker = api
+    await _seed(maker, Role.admin, "admin@example.com")
+    token = await _token(client, "admin@example.com")
+    site_id = await _make_site(client, token)
+
+    from app.models import Site
+
+    async with maker() as s:
+        site = await s.get(Site, site_id)
+        site.tls_fingerprint = "AA:BB:CC"
+        site.ssh_host_key = "ssh-ed25519 AAAA"
+        await s.commit()
+
+    resp = await client.patch(
+        f"/sites/{site_id}",
+        headers=_auth(token),
+        json={"tls_fingerprint": None, "ssh_host_key": None},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tls_fingerprint"] is None
+    assert resp.json()["has_ssh_host_key"] is False
+
+    async with maker() as s:
+        site = await s.get(Site, site_id)
+        assert site.tls_fingerprint is None
+        assert site.ssh_host_key is None
+
