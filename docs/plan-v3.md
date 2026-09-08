@@ -241,15 +241,30 @@ was never applied has no interface; an unreachable device has no opinion about
 any of its tunnels. All three are `null`, drawn grey. Collapsing them into
 "down" turns one unreachable router into what looks like a total outage.
 
-### Web console
+### Web console — done, as a command console
 
-A read-only allowlisted command runner already exists (`DeviceConsole`). A real
-interactive SSH terminal in the browser is a different thing: a websocket PTY
-proxy, and a serious security surface — it turns the controller into a jump host
-for every device it manages, with the controller's own auth in front of it.
-Worth having, worth doing deliberately, and worth being explicit that it widens
-the blast radius of a controller compromise from "can push config" to "has a
-shell everywhere".
+What shipped is a **command console**: type a RouterOS command, see what it
+said. Reads and probes, server-side allowlist, every command audited including
+the refused ones. It replaced a dropdown of menus that was safe and nearly
+useless — it could only answer questions somebody had anticipated, and the
+whole reason to open a console is a question nobody anticipated.
+
+What did **not** ship is a PTY proxied to SSH, and the reason is two reasons.
+
+The security one is the one the plan already stated: it turns the controller
+into a jump host with a shell on every device it manages, taking a controller
+compromise from "can push configuration, with a diff and a rollback and an
+audit row" to "has root on the estate".
+
+The product one would bite first. Configuration changed by hand is drift the
+reconciler does not know about, and the next apply reverts it — silently,
+because reverting drift is exactly its job. A console that lets you change
+things behind the reconciler's back does not give you a faster way to work; it
+gives you changes that disappear.
+
+If a real PTY is wanted later it is a websocket channel to `asyncssh`, plus
+xterm.js in the browser, plus a decision that the drift problem above is
+acceptable. That is a deliberate product decision, not a missing feature.
 
 ### Interface dropdowns
 

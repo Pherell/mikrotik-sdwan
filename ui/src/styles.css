@@ -1508,3 +1508,80 @@ pre.token-reveal {
   user-select: all;
   margin: 0 0 12px;
 }
+
+/* The console.
+   A bounded, scrolling transcript rather than a page that grows forever: the
+   input must stay reachable without scrolling to the bottom of the document. */
+.console-out {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  max-height: 420px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.console-cmd {
+  color: var(--text);
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.console-cmd:first-child {
+  margin-top: 0;
+}
+
+.console-note {
+  color: var(--muted);
+}
+
+.console-err {
+  color: var(--bad);
+  white-space: pre-wrap;
+}
+
+.console-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Wide output scrolls inside itself. RouterOS rows are wide, and a connection
+   table must not make the whole page scroll sideways. */
+.console-rows {
+  overflow-x: auto;
+  margin: 4px 0 2px;
+}
+
+.console-rows table {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.console-rows th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.console-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.console-input > span {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.console-input input {
+  font-family: var(--mono);
+  /* Overrides the form-wide bottom margin: this input sits in a flex row with
+     a button, not in a stacked label. */
+  margin: 0;
+}

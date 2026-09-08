@@ -8,15 +8,21 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
-from app.deps import RequireAdmin, RequireOperator, SessionDep
+from app.deps import RequireAdmin, RequireOperator, SessionDep, write_audit
 from app.drivers.base import DriverError
 from app.drivers.factory import open_driver
 from app.models.job import AuditEvent
 from app.models.site import Site
-from app.schemas.log import AuditRead, DeviceLogEntry
+from app.schemas.log import (
+    AuditRead,
+    ConsoleRequest,
+    ConsoleResponse,
+    DeviceLogEntry,
+)
+from app.services.console import ConsoleRefused, precheck, run_console
 from app.services.devicelog import read_device_log
 
 router = APIRouter(tags=["logs"])
@@ -102,3 +108,71 @@ async def device_log(
             )
     except DriverError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
+# -- the console -------------------------------------------------------------
+
+
+@router.post("/sites/{site_id}/console", response_model=ConsoleResponse)
+async def console(
+    site_id: str,
+    body: ConsoleRequest,
+    session: SessionDep,
+    request: Request,
+    user: RequireOperator,
+) -> ConsoleResponse:
+    """Run one read-only RouterOS command and return what it said.
+
+    A command console, not a shell. A PTY proxied to SSH would turn the
+    controller into a jump host with a shell on every device it manages, and
+    configuration changed by hand would be drift the next apply silently
+    reverts. Reads and probes here; changes through plan and apply.
+
+    Audited with the exact text, allowed or not: a refused command is the more
+    interesting audit row of the two.
+    """
+    site = await session.get(Site, site_id)
+    if site is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such site")
+
+    async def audit(detail: dict, *, raising: bool) -> None:
+        # commit=True when this request is about to raise. A flushed row is
+        # undone by the rollback the session dependency performs on any
+        # exception, so a refused command -- the more interesting of the two
+        # -- would otherwise leave no trace at all.
+        await write_audit(
+            session,
+            actor=user,
+            action="site.console",
+            object_type="site",
+            object_id=site.id,
+            detail=detail,
+            request=request,
+            commit=raising,
+        )
+
+    try:
+        # Before the connection, not after: a command that was never going to
+        # be allowed should not cost a handshake with a router, and should not
+        # turn up in that router's own log either.
+        precheck(body.command)
+    except ConsoleRefused as exc:
+        await audit({"command": body.command, "refused": str(exc)}, raising=True)
+        # 400, not 403: the credential was fine, the command was not.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    try:
+        async with open_driver(site) as driver:
+            result = await run_console(driver, body.command)
+    except DriverError as exc:
+        await audit({"command": body.command, "unreachable": str(exc)}, raising=True)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    await audit({"command": body.command, "resolved": result.resolved}, raising=False)
+
+    return ConsoleResponse(
+        command=result.command,
+        resolved=result.resolved,
+        rows=result.rows,
+        error=result.error,
+    )

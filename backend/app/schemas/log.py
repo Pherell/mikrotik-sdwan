@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.time import UtcDatetime
 
@@ -55,3 +55,22 @@ class DeviceLogEntry(BaseModel):
     # True when any topic is an error/critical/warning topic, so the UI does
     # not have to know RouterOS's topic vocabulary.
     severity: str = "info"
+
+
+class ConsoleRequest(BaseModel):
+    """One RouterOS command, as typed."""
+
+    command: str = Field(min_length=1, max_length=512)
+
+
+class ConsoleResponse(BaseModel):
+    command: str
+    # What the console actually ran, after parsing. Shown back because a
+    # console that will not say what it ran is asking to be trusted for no
+    # reason -- and because "/ip route" silently becoming "/ip/route/print"
+    # should be visible rather than surprising.
+    resolved: str
+    rows: list[dict[str, Any]] = []
+    # Set when the device answered with a failure. Distinct from a 4xx, which
+    # means the controller refused before the device was asked.
+    error: str | None = None

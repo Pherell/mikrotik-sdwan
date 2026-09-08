@@ -453,6 +453,18 @@ export interface DeviceLogEntry {
   severity: "info" | "warning" | "error";
 }
 
+export interface ConsoleResponse {
+  command: string;
+  // What the console actually ran after parsing. Shown back, because
+  // "/ip route" silently becoming "/ip/route/print" should be visible rather
+  // than surprising.
+  resolved: string;
+  rows: Record<string, unknown>[];
+  // The device answered with a failure. Distinct from a 4xx, which means the
+  // controller refused before the device was asked.
+  error: string | null;
+}
+
 // -- diagnostics ------------------------------------------------------------
 
 export interface PingProbe {
@@ -623,6 +635,8 @@ export const endpoints = {
     return api.get<AuditEvent[]>(`/audit${suffix ? `?${suffix}` : ""}`);
   },
   auditActions: () => api.get<string[]>("/audit/actions"),
+  console: (siteId: string, command: string) =>
+    api.post<ConsoleResponse>(`/sites/${siteId}/console`, { command }),
   deviceLog: (siteId: string, params: { topic?: string; contains?: string }) => {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {

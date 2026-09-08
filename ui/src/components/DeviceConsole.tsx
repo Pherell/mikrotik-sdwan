@@ -1,30 +1,106 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
-import { DEVICE_MENUS, endpoints } from "../lib/api";
+import { endpoints } from "../lib/api";
 
 /**
- * Read one RouterOS menu straight off the device.
+ * Type a RouterOS command, see what it says.
  *
- * Read-only and allowlisted server-side, so this cannot become a way to run
- * commands. The menu list here mirrors READABLE_PATHS in the API; anything
- * outside it is refused with a 400 regardless of what the UI sends.
+ * This replaced a dropdown of menus. The dropdown was safe and nearly useless:
+ * it could only answer questions somebody had anticipated, and the whole
+ * reason to open a console is a question nobody anticipated.
+ *
+ * It is a command console, not a shell. The server keeps the allowlist and
+ * decides what runs; this sends what was typed and shows what came back,
+ * refusals included — a refusal that explains itself is how somebody learns
+ * where the boundary is.
  */
-export function DeviceConsole({ siteId }: { siteId: string }) {
-  const [menu, setMenu] = useState<string>("ip/ipsec/active-peers");
-  const [open, setOpen] = useState(false);
 
-  const rows = useQuery({
-    queryKey: ["device", siteId, menu],
-    queryFn: () => endpoints.deviceRead(siteId, menu),
-    enabled: false,
-    retry: false,
+type Entry =
+  | { kind: "command"; text: string }
+  | { kind: "resolved"; text: string }
+  | { kind: "rows"; rows: Record<string, unknown>[] }
+  | { kind: "error"; text: string }
+  | { kind: "note"; text: string };
+
+const EXAMPLES = [
+  "/ip/route/print",
+  "/ip/address/print",
+  "/interface/print",
+  "/ip/ipsec/active-peers/print",
+  "/routing/bgp/session/print",
+  "/ping address=8.8.8.8 count=3",
+];
+
+export function DeviceConsole({ siteId }: { siteId: string }) {
+  const [open, setOpen] = useState(false);
+  const [command, setCommand] = useState("");
+  const [history, setHistory] = useState<Entry[]>([]);
+  // Shell-style recall. Without it you retype a long command to change one
+  // character, which is most of what anyone does at a console.
+  const [recall, setRecall] = useState<string[]>([]);
+  const [recallAt, setRecallAt] = useState<number | null>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  const run = useMutation({
+    mutationFn: (text: string) => endpoints.console(siteId, text),
+    onSuccess: (result, text) => {
+      const lines: Entry[] = [];
+      // Only when it differs from what was typed. An echo of every command
+      // halves how much output fits on the screen.
+      if (result.resolved !== text.trim()) {
+        lines.push({ kind: "resolved", text: result.resolved });
+      }
+      if (result.error) {
+        lines.push({ kind: "error", text: result.error });
+      } else if (result.rows.length === 0) {
+        lines.push({ kind: "note", text: "no rows" });
+      } else {
+        lines.push({ kind: "rows", rows: result.rows });
+      }
+      setHistory((prev) => [...prev, ...lines]);
+    },
+    onError: (e) =>
+      setHistory((prev) => [...prev, { kind: "error", text: (e as Error).message }]),
   });
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [history]);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const text = command.trim();
+    if (!text) return;
+    setHistory((prev) => [...prev, { kind: "command", text }]);
+    setRecall((prev) => [...prev, text]);
+    setRecallAt(null);
+    setCommand("");
+    run.mutate(text);
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    if (recall.length === 0) return;
+    event.preventDefault();
+    const next =
+      event.key === "ArrowUp"
+        ? recallAt === null
+          ? recall.length - 1
+          : Math.max(0, recallAt - 1)
+        : recallAt === null || recallAt + 1 >= recall.length
+          ? null
+          : recallAt + 1;
+    setRecallAt(next);
+    // ?? "" because noUncheckedIndexedAccess makes recall[next] possibly
+    // undefined even though next was derived from the array's own length.
+    setCommand(next === null ? "" : (recall[next] ?? ""));
+  }
 
   return (
     <div className="card">
       <div className="row" style={{ alignItems: "center" }}>
-        <h2 style={{ margin: 0 }}>Device console</h2>
+        <h2 style={{ margin: 0 }}>Console</h2>
         <div className="no-grow">
           <button onClick={() => setOpen(!open)}>{open ? "Hide" : "Open"}</button>
         </div>
@@ -33,62 +109,116 @@ export function DeviceConsole({ siteId }: { siteId: string }) {
       {open && (
         <>
           <p className="muted">
-            Reads one menu directly from the router. Never writes, and secret
-            properties are stripped before they leave the controller.
+            Runs one RouterOS command on the device and shows what it said.
+            Reads and probes only — the controller keeps an allowlist and says
+            why when it refuses. Changes go through plan and apply, where they
+            leave a diff, a backup and a rollback behind them.
           </p>
-          <div className="row" style={{ justifyContent: "flex-start" }}>
-            <label style={{ flex: "0 0 320px", margin: 0 }}>
-              Menu
-              <select value={menu} onChange={(e) => setMenu(e.target.value)}>
-                {DEVICE_MENUS.map((m) => (
-                  <option key={m} value={m}>
-                    /{m}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="no-grow" style={{ alignSelf: "flex-end" }}>
-              <button onClick={() => rows.refetch()} disabled={rows.isFetching}>
-                {rows.isFetching ? "Reading…" : "Read"}
-              </button>
-            </div>
+
+          <div className="console-out">
+            {history.length === 0 && (
+              <div className="console-note">
+                Try one of these, or type your own:
+                <div className="console-examples">
+                  {EXAMPLES.map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      className="sm"
+                      onClick={() => setCommand(example)}
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {history.map((entry, i) => (
+              <Line key={i} entry={entry} />
+            ))}
+            {run.isPending && <div className="console-note">running…</div>}
+            <div ref={endRef} />
           </div>
 
-          {rows.isError && (
-            <div className="error">{(rows.error as Error).message}</div>
-          )}
-          {rows.data && <DeviceTable rows={rows.data} />}
+          <form onSubmit={submit}>
+            <div className="console-input">
+              <span aria-hidden="true">&gt;</span>
+              <input
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder="/ip/route/print"
+                spellCheck={false}
+                autoComplete="off"
+                aria-label="RouterOS command"
+              />
+              <div className="no-grow">
+                <button className="primary" type="submit" disabled={run.isPending}>
+                  Run
+                </button>
+              </div>
+            </div>
+          </form>
         </>
       )}
     </div>
   );
 }
 
-function DeviceTable({ rows }: { rows: Record<string, unknown>[] }) {
-  if (rows.length === 0) return <p className="muted">Menu is empty.</p>;
+function Line({ entry }: { entry: Entry }) {
+  if (entry.kind === "command") {
+    return (
+      <div className="console-cmd">
+        <span aria-hidden="true">&gt; </span>
+        {entry.text}
+      </div>
+    );
+  }
+  if (entry.kind === "resolved") {
+    return <div className="console-note">ran {entry.text}</div>;
+  }
+  if (entry.kind === "error") {
+    return <div className="console-err">{entry.text}</div>;
+  }
+  if (entry.kind === "note") {
+    return <div className="console-note">{entry.text}</div>;
+  }
+  return <Rows rows={entry.rows} />;
+}
 
-  // RouterOS rows are ragged: not every row carries every property. Take the
-  // union so nothing is silently hidden, but keep .id last since it is noise.
-  const columns = [
-    ...new Set(rows.flatMap((r) => Object.keys(r))),
-  ].sort((a, b) => Number(a.startsWith(".")) - Number(b.startsWith(".")));
+/**
+ * Rows as a table rather than raw JSON.
+ *
+ * Columns are the union of the keys present, in first-seen order. RouterOS
+ * rows are ragged — not every row carries every property — so a union is the
+ * only way nothing is silently hidden. `.id` goes last: a column of `*7` on
+ * every row pushes the useful fields off the right-hand edge.
+ */
+function Rows({ rows }: { rows: Record<string, unknown>[] }) {
+  const columns: string[] = [];
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (!columns.includes(key)) columns.push(key);
+    }
+  }
+  columns.sort((a, b) => Number(a.startsWith(".")) - Number(b.startsWith(".")));
 
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div className="console-rows">
       <table>
         <thead>
           <tr>
-            {columns.map((c) => (
-              <th key={c}>{c}</th>
+            {columns.map((column) => (
+              <th key={column}>{column}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => (
             <tr key={i}>
-              {columns.map((c) => (
-                <td key={c} className={c.startsWith(".") ? "muted" : undefined}>
-                  {format(row[c])}
+              {columns.map((column) => (
+                <td key={column} className={column.startsWith(".") ? "muted" : undefined}>
+                  {format(row[column])}
                 </td>
               ))}
             </tr>
@@ -102,6 +232,7 @@ function DeviceTable({ rows }: { rows: Record<string, unknown>[] }) {
 function format(value: unknown): string {
   if (value === undefined || value === null) return "—";
   if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
 

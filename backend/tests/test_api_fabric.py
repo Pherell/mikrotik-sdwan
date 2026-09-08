@@ -1357,3 +1357,153 @@ async def test_an_unreachable_device_has_no_log_to_show(api, monkeypatch) -> Non
     # 502, not 500: the controller is fine, the device is not.
     assert resp.status_code == 502
     assert "connection refused" in resp.json()["detail"]
+
+
+# -- the console -------------------------------------------------------------
+
+
+async def test_console_runs_an_allowed_read(api, patched_sites_driver) -> None:
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+    routers["198.51.100.5"].rows("ip/route").append(
+        {"dst-address": "0.0.0.0/0", "gateway": "198.51.100.1", "distance": 1}
+    )
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/console",
+        headers=headers,
+        json={"command": "/ip route"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # It says what it actually ran, not only what was typed.
+    assert body["resolved"] == "/ip/route/print"
+    assert any(r.get("gateway") == "198.51.100.1" for r in body["rows"])
+
+
+async def test_console_refuses_a_write_before_touching_the_device(
+    api, patched_sites_driver
+) -> None:
+    """A command that was never going to be allowed should not cost a handshake
+    with a router, nor appear in that router's own log."""
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+    before = len(routers["198.51.100.5"].commands)
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/console",
+        headers=headers,
+        json={"command": "/ip/route/remove"},
+    )
+
+    # 400, not 403: the credential was fine, the command was not.
+    assert resp.status_code == 400
+    assert "changes configuration" in resp.json()["detail"]
+    assert len(routers["198.51.100.5"].commands) == before
+
+
+async def test_console_refuses_a_menu_holding_credentials(
+    api, patched_sites_driver
+) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/console",
+        headers=headers,
+        json={"command": "/ip/ipsec/identity/print"},
+    )
+
+    assert resp.status_code == 400
+    assert "pre-shared keys" in resp.json()["detail"]
+
+
+async def test_a_refused_command_is_still_audited(api, patched_sites_driver) -> None:
+    """The more interesting audit row of the two."""
+    from sqlalchemy import select
+
+    from app.models import AuditEvent
+
+    client, maker, _ = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    await client.post(
+        f"/sites/{sites['hub1']}/console",
+        headers=headers,
+        json={"command": "/user/print"},
+    )
+
+    async with maker() as s:
+        events = [e for e in await s.scalars(select(AuditEvent))
+                  if e.action == "site.console"]
+    assert len(events) == 1
+    assert events[0].detail["command"] == "/user/print"
+
+
+async def test_a_viewer_cannot_use_the_console(api, patched_sites_driver) -> None:
+    client, maker, _ = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    async with maker() as s:
+        s.add(
+            User(
+                email="viewer2@example.com",
+                role=Role.viewer,
+                password_hash=hash_password("correct-horse"),
+            )
+        )
+        await s.commit()
+    resp = await client.post(
+        "/auth/login",
+        json={"email": "viewer2@example.com", "password": "correct-horse"},
+    )
+    viewer = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/console",
+        headers=viewer,
+        json={"command": "/ip/route/print"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_an_unreachable_device_still_records_the_attempt(api, monkeypatch) -> None:
+    """Same reason a refusal is recorded: the session rolls back on the raise,
+    so the audit has to be committed before it."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy import select
+
+    from app.drivers.base import DriverError
+    from app.models import AuditEvent
+
+    client, maker, _ = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    @asynccontextmanager
+    async def unreachable(site, _box=None):
+        raise DriverError("connection refused")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("app.api.v1.logs.open_driver", unreachable)
+
+    resp = await client.post(
+        f"/sites/{sites['hub1']}/console",
+        headers=headers,
+        json={"command": "/ip/route/print"},
+    )
+
+    assert resp.status_code == 502
+    async with maker() as s:
+        events = [e for e in await s.scalars(select(AuditEvent))
+                  if e.action == "site.console"]
+    assert len(events) == 1
+    assert "connection refused" in events[0].detail["unreachable"]
+
