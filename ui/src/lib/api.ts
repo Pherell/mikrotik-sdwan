@@ -406,6 +406,28 @@ export interface Port {
   managed: boolean;
 }
 
+// -- API tokens -------------------------------------------------------------
+
+export interface ApiToken {
+  id: string;
+  name: string;
+  // The public half. Enough to tell two tokens apart and to match a row
+  // against a credential somebody is holding.
+  prefix: string;
+  role: "viewer" | "operator" | "admin";
+  owner_id: string;
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+// The one response that carries the usable credential. It is not stored and
+// cannot be fetched again.
+export interface ApiTokenCreated extends ApiToken {
+  token: string;
+}
+
 // -- logs -------------------------------------------------------------------
 
 export interface AuditEvent {
@@ -570,6 +592,17 @@ export const endpoints = {
   users: () => api.get<User[]>("/users"),
   createUser: (body: unknown) => api.post<User>("/users", body),
   updateUser: (id: string, body: unknown) => api.patch<User>(`/users/${id}`, body),
+
+  // -- API tokens ----------------------------------------------------------
+  apiTokens: () => api.get<ApiToken[]>("/api-tokens"),
+  createApiToken: (body: {
+    name: string;
+    role: string;
+    expires_in_days: number | null;
+  }) => api.post<ApiTokenCreated>("/api-tokens", body),
+  renameApiToken: (id: string, name: string) =>
+    api.patch<ApiToken>(`/api-tokens/${id}`, { name }),
+  revokeApiToken: (id: string) => api.del(`/api-tokens/${id}`),
 
   // -- logs ----------------------------------------------------------------
   audit: (params: {

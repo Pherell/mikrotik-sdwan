@@ -6,12 +6,12 @@ a response.
 
 from __future__ import annotations
 
-from datetime import datetime
 from ipaddress import ip_address, ip_network
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import DeviceKind, SiteRole, SiteStatus
+from app.schemas.time import UtcDatetime
 
 
 def _valid_ip(v: str | None) -> str | None:
@@ -164,8 +164,8 @@ class SiteRead(SiteBase):
     # what the device reports; clearing it re-learns on the next connection.
     tls_fingerprint: str | None = None
     has_ssh_host_key: bool = False
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     wans: list[WanRead] = Field(default_factory=list)
 
 

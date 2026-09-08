@@ -465,3 +465,21 @@ async def test_a_failed_login_is_audited_without_storing_the_password(api) -> No
     serialised = str(rows)
     assert "hunter2-is-wrong" not in serialised
     assert any("login" in r["action"] for r in rows)
+
+
+# -- the API's own documentation --------------------------------------------
+
+
+async def test_the_reference_is_served_under_the_proxied_prefix(api) -> None:
+    """Caddy proxies /api/* to this service and everything else to the UI, so
+    the default /docs and /openapi.json were served by the container and
+    reachable by nobody."""
+    client, _ = api
+
+    schema = await client.get("/openapi.json")
+    docs = await client.get("/docs")
+
+    assert schema.status_code == 200, schema.text
+    assert docs.status_code == 200
+    assert "swagger" in docs.text.lower()
+    assert "/api/v1/api-tokens" in schema.json()["paths"]

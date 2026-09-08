@@ -21,6 +21,10 @@
   --text-xl: 20px;
   --text-2xl: 24px;
 
+  /* Monospace, named once. Every place that wanted it was repeating the same
+     five-font fallback stack, and one of them had already drifted. */
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
   /* Spacing, on 4px. Replaces ad-hoc inline marginTop: 16 and friends. */
   --space-1: 4px;
   --space-2: 8px;
@@ -1473,4 +1477,34 @@ a.button:hover {
 /* A timestamp that must not wrap mid-date. */
 .nowrap {
   white-space: nowrap;
+}
+
+/* A copy-pasteable command. Scrolls inside itself rather than widening the
+   page: a long curl line must not make the whole layout scroll sideways. */
+pre.snippet {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  margin: 0 0 12px;
+}
+
+/* The credential, shown once. Wraps rather than scrolls -- somebody selecting
+   it by hand should be able to see all of it at once. */
+pre.token-reveal {
+  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 13px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  user-select: all;
+  margin: 0 0 12px;
 }

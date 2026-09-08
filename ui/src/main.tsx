@@ -7,6 +7,7 @@ import { App } from "./App";
 import { ToastProvider } from "./components/Toaster";
 import { ApiError } from "./lib/api";
 import { DashboardPage } from "./pages/DashboardPage";
+import { ApiPage } from "./pages/ApiPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { LogsPage } from "./pages/LogsPage";
 import { FabricDetailPage } from "./pages/FabricDetailPage";
@@ -79,6 +80,7 @@ createRoot(root).render(
             <Route path="/policies" element={<Navigate to="/traffic-rules" replace />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/logs" element={<LogsPage />} />
+            <Route path="/api-access" element={<ApiPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

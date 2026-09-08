@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from ipaddress import ip_network
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.schemas.time import UtcDatetime
 
 
 def _prefixes(v: list[str] | None) -> list[str] | None:
@@ -42,7 +43,7 @@ class SlaProfileRead(SlaProfileBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    created_at: datetime
+    created_at: UtcDatetime
     # Roughly how long a breach takes to be noticed, so the UI can say it.
     detection_seconds: int = 0
 
@@ -160,8 +161,8 @@ class SdwanGroupRead(SdwanGroupBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 class PolicyBase(BaseModel):
@@ -236,5 +237,5 @@ class PolicyRead(PolicyBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime

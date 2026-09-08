@@ -18,6 +18,7 @@ from app.api.v1 import logs as logs_api
 from app.api.v1 import ops as ops_api
 from app.api.v1 import policies as policies_api
 from app.api.v1 import sites as sites_api
+from app.api.v1 import tokens as tokens_api
 from app.config import get_settings
 from app.db import SessionLocal, engine
 from app.drivers.base import DeviceAuthError, DeviceUnreachable, DriverError
@@ -70,6 +71,15 @@ def create_app() -> FastAPI:
         summary="Intent-based SD-WAN orchestration for RouterOS",
         lifespan=lifespan,
         debug=settings.debug,
+        # Under /api/v1, not at the root. Caddy proxies /api/* to this service
+        # and everything else to the UI, so the default /docs and
+        # /openapi.json were served by the container and reachable by nobody.
+        # Moving them here means the existing proxy rule covers them and the
+        # reference lives at the same prefix as the API it describes.
+        docs_url="/api/v1/docs",
+        openapi_url="/api/v1/openapi.json",
+        # One documentation UI. A second is a second thing to keep working.
+        redoc_url=None,
     )
 
     app.add_middleware(
@@ -115,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(policies_api.router, prefix="/api/v1")
     app.include_router(ops_api.router, prefix="/api/v1")
     app.include_router(logs_api.router, prefix="/api/v1")
+    app.include_router(tokens_api.router, prefix="/api/v1")
     return app
 
 

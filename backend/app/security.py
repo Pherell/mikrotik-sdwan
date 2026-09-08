@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
@@ -133,3 +134,66 @@ def mask(value: str, keep: int = 4) -> str:
     if len(value) <= keep:
         return "*" * len(value)
     return value[:keep] + "*" * (len(value) - keep)
+
+
+# -- API tokens --------------------------------------------------------------
+
+# A recognisable prefix on the whole credential. Secret scanners key off
+# patterns like this, and a string found in a log or a repository is worth
+# nothing to the finder unless they can tell what it opens -- which cuts both
+# ways, and on balance being able to revoke a leaked token quickly wins.
+TOKEN_LABEL = "sdwan"
+# Bytes of randomness in each half. The prefix only has to be unique; the
+# secret has to be unguessable.
+_PREFIX_BYTES = 6
+_SECRET_BYTES = 32
+
+
+def new_api_token() -> tuple[str, str, str]:
+    """Mint a token. Returns (whole credential, prefix, hash of the secret).
+
+    The whole credential is shown once, at creation, and never stored. What is
+    stored is the prefix -- so the row can be found and named -- and a digest
+    of the secret.
+    """
+    prefix = secrets.token_hex(_PREFIX_BYTES)
+    secret = secrets.token_urlsafe(_SECRET_BYTES)
+    return f"{TOKEN_LABEL}_{prefix}_{secret}", prefix, hash_api_secret(secret)
+
+
+def hash_api_secret(secret: str) -> str:
+    """SHA-256, deliberately, not bcrypt.
+
+    bcrypt makes guessing a human-chosen secret slow. This secret is 32 bytes
+    of os.urandom, so there is nothing to guess and a KDF would only add a
+    fixed delay to every API request. What must be true is that the database
+    never holds the usable value, and one round of SHA-256 over 256 bits of
+    entropy gives exactly that.
+    """
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def split_api_token(credential: str) -> tuple[str, str] | None:
+    """(prefix, secret) from a whole credential, or None if it is not one.
+
+    Returning None rather than raising keeps the caller honest: a request that
+    presents a JWT must fall through to the JWT path, not fail here.
+    """
+    # maxsplit=2: token_urlsafe emits "-" and "_", so the secret half can
+    # contain underscores of its own. The prefix is hex and never can.
+    parts = credential.split("_", 2)
+    if len(parts) != 3 or parts[0] != TOKEN_LABEL:
+        return None
+    prefix, secret = parts[1], parts[2]
+    if not prefix or not secret:
+        return None
+    return prefix, secret
+
+
+def api_secret_matches(secret: str, stored_hash: str) -> bool:
+    """Compare in constant time.
+
+    The prefix already narrowed this to one row, so a timing signal here would
+    leak the secret of a *known* token rather than merely its existence.
+    """
+    return secrets.compare_digest(hash_api_secret(secret), stored_hash)

@@ -110,6 +110,12 @@ const icons = {
       <rect x="2" y="13" width="5" height="6" rx="1" />
     </Icon>
   ),
+  api: (
+    <Icon>
+      <path d="M9 18l-5-6 5-6M15 6l5 6-5 6" />
+      <path d="M13 4l-2 16" />
+    </Icon>
+  ),
   logs: (
     <Icon>
       <path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
@@ -151,7 +157,13 @@ const icons = {
   ),
 };
 
-type Item = { to: string; label: string; icon: ReactNode; end?: boolean };
+type Item = {
+  to: string;
+  label: string;
+  icon: ReactNode;
+  end?: boolean;
+  adminOnly?: boolean;
+};
 
 const GROUPS: { heading: string; items: Item[] }[] = [
   {
@@ -185,8 +197,15 @@ const GROUPS: { heading: string; items: Item[] }[] = [
     items: [
       { to: "/jobs", label: "Jobs", icon: icons.jobs },
       { to: "/logs", label: "Logs", icon: icons.logs },
+      // "/api-access", not "/api": one origin serves the UI and the API, and
+      // a UI route under the API's own prefix is caught by the proxy before
+      // the router ever sees it.
+      //
+      // Admin-only server-side; hidden here for the same reason the audit tab
+      // is -- a menu item that can only ever 403 is worse than no menu item.
+      { to: "/api-access", label: "API", icon: icons.api, adminOnly: true },
       { to: "/settings", label: "Settings", icon: icons.settings },
-      { to: "/users", label: "Users", icon: icons.users },
+      { to: "/users", label: "Users", icon: icons.users, adminOnly: true },
     ],
   },
 ];
@@ -229,7 +248,7 @@ export function Sidebar({
         <div className="sidebar-scroll">
           {GROUPS.map((group) => {
             const items = group.items.filter(
-              (i) => i.to !== "/users" || user?.role === "admin",
+              (i) => !i.adminOnly || user?.role === "admin",
             );
             if (items.length === 0) return null;
             return (

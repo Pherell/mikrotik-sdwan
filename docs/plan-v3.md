@@ -265,12 +265,36 @@ endpoint in anyone else's hands. And audit rows needed a Python-generated
 whole seconds, so two events in the same second came back in UUID order — in no
 order at all. For an append-only trail the order *is* the content.
 
-### API documentation and tokens
+### API documentation and tokens — done
 
-FastAPI already serves OpenAPI at `/docs`. What is missing is **API tokens with
-scopes** — today the only credential is a user's login JWT, so any automation
-runs as a person with that person's full rights. Tokens want: a name, a role, an
-expiry, revocation, and an audit trail.
+The plan said "FastAPI already serves OpenAPI at `/docs`". It served it at a
+path Caddy does not proxy — `/api/*` goes to the API and everything else to the
+UI — so the reference was reachable by nobody. It now lives at
+`/api/v1/docs`, under the prefix that is actually routed.
+
+**Tokens** carry a **role**, not a separate scope vocabulary. The product
+already has three roles that mean something, and a second orthogonal permission
+system beside them is two models that have to agree and eventually do not. What
+a token adds is the rest of a credential's life cycle: a name, an owner, an
+expiry, a last-used time, and revocation.
+
+Three properties are worth stating because they are what stop a token becoming
+a way around the permission system:
+
+- The effective permission is the **lesser** of the token's role and its
+  owner's, so demoting a person weakens their tokens without anyone having to
+  remember to revoke them.
+- A token **cannot mint another token**. A token that could would outlive its
+  own revocation.
+- Revocation is a **timestamp, not a delete**, because the audit trail refers
+  to tokens by id and a trail full of dangling ids is not a trail.
+
+The audit trail now records which credential acted, not only which person:
+"admin did this" stops being the whole answer the moment automation exists.
+
+Alongside it, an in-app **API** page with the tokens, a getting-started
+tutorial whose curl examples are built from the browser's own origin (so they
+are copy-pasteable rather than aspirational), and a link to the reference.
 
 ---
 
@@ -284,7 +308,7 @@ U1   Interface dropdowns                  small, removes a whole class of typo
 S1   SD-WAN groups + traffic rules        the model change; needs V1's words
 D1   Diagnostics                          done
 L1   Logs                                 done
-A1   API tokens and scopes                independent
+A1   API tokens and scopes                done
 S2   Load balancing via PCC               needs F1a and S1
 C1   Interactive SSH console              last; largest security decision
 ```

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from ipaddress import ip_network
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import SiteRole, Topology, Transport
+from app.schemas.time import UtcDatetime
 
 
 def _valid_cidr(v: str) -> str:
@@ -98,8 +98,8 @@ class FabricRead(FabricBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     members: list[MemberRead] = Field(default_factory=list)
     link_count: int = 0
     pool_capacity: int = 0

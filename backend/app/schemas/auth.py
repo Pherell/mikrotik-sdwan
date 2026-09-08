@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import Role
 from app.schemas.email import AccountEmail
+from app.schemas.time import UtcDatetime
 
 
 class LoginRequest(BaseModel):
@@ -48,4 +47,4 @@ class UserRead(BaseModel):
     full_name: str | None
     role: Role
     is_active: bool
-    created_at: datetime
+    created_at: UtcDatetime

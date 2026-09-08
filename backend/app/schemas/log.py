@@ -10,10 +10,11 @@ Job logs already have a schema in `app.schemas.job`; the other two are here.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
+from app.schemas.time import UtcDatetime
 
 
 class AuditRead(BaseModel):
@@ -28,7 +29,7 @@ class AuditRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    created_at: datetime
+    created_at: UtcDatetime
     actor_id: str | None = None
     actor_email: str | None = None
     action: str

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import JobKind, JobState
+from app.schemas.time import UtcDatetime
 
 
 class PlanSection(BaseModel):
@@ -43,9 +43,9 @@ class JobRead(BaseModel):
     backup_name: str | None
     rollback_token: str | None
     attempts: int
-    started_at: datetime | None
-    finished_at: datetime | None
-    created_at: datetime
+    started_at: UtcDatetime | None
+    finished_at: UtcDatetime | None
+    created_at: UtcDatetime
 
 
 class ApplyRequest(BaseModel):

@@ -12,6 +12,7 @@ row correctly and then returned 500 on the way out.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 import httpx
 import pytest
@@ -180,7 +181,12 @@ async def test_updated_at_actually_moves(api: httpx.AsyncClient) -> None:
     resp = await api.patch(f"/sites/{site['id']}", json={"region": "nordics"})
 
     assert resp.status_code == 200, resp.text
-    assert resp.json()["updated_at"] >= before
+    # Parsed, not compared as strings. Sub-second precision makes
+    # "...08.307345Z" sort *before* "...08Z", because "." precedes "Z" --
+    # so the string form of this assertion passed by accident of formatting.
+    assert datetime.fromisoformat(resp.json()["updated_at"]) >= datetime.fromisoformat(
+        before
+    )
 
 
 async def test_patch_site_refuses_a_drift_action_it_cannot_read_back(
