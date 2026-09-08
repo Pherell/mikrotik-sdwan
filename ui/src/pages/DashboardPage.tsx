@@ -50,6 +50,17 @@ export function DashboardPage() {
           jobs={jobs.data ?? []}
         />
         <HowItWorks />
+        {/* The checklist above is the happy path. This is where someone goes
+            when a step did not do what they expected -- and unlike these two
+            cards, it does not disappear once the first device exists. */}
+        <div className="card">
+          <h2>Stuck on a step?</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            The <Link to="/guide">guide</Link> covers each of these in detail,
+            what every word here means, and what to do when something does not
+            come up.
+          </p>
+        </div>
       </>
     );
   }

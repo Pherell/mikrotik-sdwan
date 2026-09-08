@@ -110,6 +110,12 @@ const icons = {
       <rect x="2" y="13" width="5" height="6" rx="1" />
     </Icon>
   ),
+  guide: (
+    <Icon>
+      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H5.5A1.5 1.5 0 0 1 4 16.5z" />
+      <path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h4.5a1.5 1.5 0 0 0 1.5-1.5z" />
+    </Icon>
+  ),
   api: (
     <Icon>
       <path d="M9 18l-5-6 5-6M15 6l5 6-5 6" />
@@ -191,6 +197,13 @@ const GROUPS: { heading: string; items: Item[] }[] = [
       // Sits with devices because every test here runs *from* one.
       { to: "/diagnostics", label: "Diagnostics", icon: icons.diagnostics },
     ],
+  },
+  {
+    // Its own heading rather than an item under System: it is the one entry
+    // somebody looks for when they do not yet know what the others mean, and
+    // burying it under "System" hides it from exactly that person.
+    heading: "Help",
+    items: [{ to: "/guide", label: "Guide", icon: icons.guide }],
   },
   {
     heading: "System",

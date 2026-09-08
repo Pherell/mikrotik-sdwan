@@ -9,6 +9,7 @@ import { ApiError } from "./lib/api";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ApiPage } from "./pages/ApiPage";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { GuidePage } from "./pages/GuidePage";
 import { LogsPage } from "./pages/LogsPage";
 import { FabricDetailPage } from "./pages/FabricDetailPage";
 import { FabricsPage } from "./pages/FabricsPage";
@@ -81,6 +82,7 @@ createRoot(root).render(
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/api-access" element={<ApiPage />} />
+            <Route path="/guide" element={<GuidePage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
