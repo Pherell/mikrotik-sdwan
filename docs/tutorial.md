@@ -162,18 +162,44 @@ user table is empty**; changing the variable later does nothing.
 
 ### The UI at a glance
 
-| Section | What it is for |
-|---|---|
-| **Overview** | Fleet health, anything needing attention, bulk apply, drift sweep |
-| **Sites** | Devices, their uplinks, plan/apply, drift, device console |
-| **Fabrics** | Overlays: transport, topology, members, links, topology graph |
-| **Policies** | Steering rules and SLA profiles |
-| **Jobs** | Every apply, with its diff and log |
-| **Settings** | Export/import intent, application groups |
-| **Users** | Accounts and roles (admin only) |
+The menu separates the two things that were previously mixed together:
+choosing between uplinks (SD-WAN) and building the encrypted network they
+carry (Tunnels).
+
+| Group | Section | What it is for |
+|---|---|---|
+| SD-WAN | **Overview** | Fleet health, anything needing attention, bulk apply, drift sweep |
+| SD-WAN | **Uplinks** | Every internet connection across every device, and what each one is |
+| SD-WAN | **Traffic rules** | Which traffic prefers which uplink, and when to move it |
+| Tunnels | **Tunnel networks** | Which devices are joined, how they connect, and the tunnels that result |
+| Devices | **Devices** | The routers themselves: ports, health, uplinks, plan/apply, console |
+| System | **Jobs** | Every apply, with its diff and log |
+| System | **Settings** | Export/import configuration, application groups |
+| System | **Users** | Accounts and roles (admin only) |
 
 Everything the API can do is reachable from those pages; the API examples below
 exist because automation needs them, not because the UI is missing anything.
+
+### The words, and the ones the API still uses
+
+The interface was renamed to stop one word meaning three things. **The API was
+not renamed with it** -- existing scripts and the exported YAML keep working --
+so if you use both, this is the mapping:
+
+| In the interface | In the API and exported YAML | Why it changed |
+|---|---|---|
+| Device | `site` | One device per site is enforced, so "site" named a thing that did not exist |
+| Tunnel network | `fabric` | "Fabric" is an invented word; this says what it is |
+| Tunnel | `link` | "Link" also meant a physical port and an uplink |
+| Traffic rule | `policy` | "Policy" carried four separate ideas |
+
+Old bookmarks still work: `/sites`, `/fabrics` and `/policies` redirect to their
+new paths, carrying any id with them.
+
+Having two vocabularies is itself a small ambiguity. It is deliberate for now --
+renaming REST paths and database tables is a breaking change for anyone
+automating against them, and worth doing on its own rather than folded into a
+UI pass.
 
 ### Create real accounts
 

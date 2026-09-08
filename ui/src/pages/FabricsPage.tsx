@@ -19,11 +19,11 @@ export function FabricsPage() {
   return (
     <>
       <PageHeader
-        title="Fabrics"
-        description="A fabric connects your sites to each other over whatever internet they have. Choose how they connect and which sites take part; the controller works out the tunnels."
+        title="Tunnel networks"
+        description="An encrypted network joining your devices over whatever internet they have. Choose how they connect and which devices take part; the controller works out every tunnel."
       >
         <button className="primary" onClick={() => setAdding(true)}>
-          New fabric
+          New tunnel network
         </button>
       </PageHeader>
 
@@ -43,10 +43,10 @@ export function FabricsPage() {
         {fabrics.isError && <div className="error">{(fabrics.error as Error).message}</div>}
         {fabrics.data?.length === 0 && (
           <p className="muted">
-            No fabrics yet. A fabric joins your sites to each other over whatever
-            internet they have. You choose which sites take part and how they connect
-            — IPsec, WireGuard, plain GRE — and the controller works out every tunnel,
-            allocates the addresses and generates the keys.
+            No tunnel networks yet. One joins your devices to each other over
+            whatever internet they have. You choose which devices take part and how
+            they connect — IPsec, WireGuard, plain GRE — and the controller works out
+            every tunnel, allocates the addresses and generates the keys.
           </p>
         )}
         {fabrics.data && fabrics.data.length > 0 && (
@@ -65,7 +65,7 @@ export function FabricsPage() {
               {fabrics.data.map((f) => (
                 <tr key={f.id}>
                   <td>
-                    <Link to={`/fabrics/${f.id}`}>{f.name}</Link>
+                    <Link to={`/tunnel-networks/${f.id}`}>{f.name}</Link>
                   </td>
                   <td>{f.transport}</td>
                   <td>{f.topology}</td>
@@ -116,7 +116,7 @@ function NewFabricForm({
 
   return (
     <div className="card">
-      <h2>New fabric</h2>
+      <h2>New tunnel network</h2>
       {create.isError && <div className="error">{(create.error as Error).message}</div>}
       <form onSubmit={submit}>
         <div className="row">

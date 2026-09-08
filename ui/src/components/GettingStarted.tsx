@@ -62,48 +62,48 @@ export function GettingStarted({
     <div className="card getting-started">
       <h2>Get started</h2>
       <p className="muted" style={{ marginTop: 0 }}>
-        Five steps, in this order. Each one produces the input the next one needs.
+        Five steps, in this order. Each one produces what the next one needs.
       </p>
       <ol className="steps">
         <Step
           index={1}
           done={hasSite}
-          title="Add a site"
-          what="A location and the RouterOS device that serves it. The controller probes it and works out which interfaces are uplinks."
-          to="/sites"
-          cta="Add a site"
+          title="Add a device"
+          what="One RouterOS router. The controller connects to it, reads its interfaces, and works out which of them reach the internet — those become its uplinks."
+          to="/devices"
+          cta="Add a device"
         />
         <Step
           index={2}
           done={hasFabric}
-          title="Create a fabric"
-          what="The overlay that joins your sites to each other over whatever internet they have. You choose how they connect — IPsec, WireGuard — and which sites take part."
-          to="/fabrics"
+          title="Create a tunnel network"
+          what="An encrypted network joining your devices to each other over whatever internet they have. You choose how they connect — IPsec, WireGuard — and which devices take part."
+          to="/tunnel-networks"
           cta="Create one"
         />
         <Step
           index={3}
           done={hasLinks}
-          title="Expand it into links"
-          what="A link is one tunnel between two uplinks. You never write these: the controller works out every pair from the fabric's members and topology."
-          to="/fabrics"
-          cta="Expand"
+          title="Build the tunnels"
+          what="One tunnel joins two uplinks. You never write these: the controller works out every pair from the network's members and shape."
+          to="/tunnel-networks"
+          cta="Build them"
         />
         <Step
           index={4}
           done={hasApplied}
           title="Review and apply"
           what="You see the exact configuration before it is pushed. The device takes a backup and arms a rollback first, so a push that costs you management access undoes itself."
-          to="/sites"
-          cta="Open a site"
+          to="/devices"
+          cta="Open a device"
         />
         <Step
           index={5}
           done={false}
-          title="Add steering policies"
+          title="Add traffic rules"
           what="Optional. Which traffic prefers which uplink, and when to move it. Start from a preset — voice, SaaS, bulk — rather than from thresholds in milliseconds."
-          to="/policies"
-          cta="Add a policy"
+          to="/traffic-rules"
+          cta="Add a rule"
         />
       </ol>
     </div>

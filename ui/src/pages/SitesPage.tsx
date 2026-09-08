@@ -28,11 +28,11 @@ export function SitesPage() {
   return (
     <>
       <PageHeader
-        title="Sites"
-        description="A site is a location and the RouterOS device that serves it, with its uplinks. Everything else is built on top of these."
+        title="Devices"
+        description="One RouterOS router the controller manages, with the uplinks it reaches the internet through. Everything else is built on these."
       >
         <button className="primary" onClick={() => setAdding(true)}>
-          Add site
+          Add device
         </button>
       </PageHeader>
 
@@ -47,10 +47,10 @@ export function SitesPage() {
         {sites.isError && <div className="error">{(sites.error as Error).message}</div>}
         {sites.data?.length === 0 && (
           <p className="muted">
-            No sites yet. A site is one location and the RouterOS device that serves
-            it. Add one and the controller connects, reads its version and interfaces,
-            and works out which of them are uplinks — everything else is built on top
-            of these.
+            No devices yet. Add a RouterOS router and the controller connects to
+            it, reads its version and interfaces, and works out which of them reach
+            the internet. Those become its uplinks, and everything else is built on
+            those.
           </p>
         )}
         {sites.data && sites.data.length > 0 && (
@@ -60,7 +60,7 @@ export function SitesPage() {
                 <th className="tick">
                   <input
                     type="checkbox"
-                    aria-label="Select every site"
+                    aria-label="Select every device"
                     checked={allSelected}
                     onChange={() =>
                       setSelected(allSelected ? [] : all.map((s) => s.id))
@@ -112,7 +112,7 @@ function SiteRow({
         />
       </td>
       <td data-label="Name">
-        <Link to={`/sites/${site.id}`}>{site.name}</Link>
+        <Link to={`/devices/${site.id}`}>{site.name}</Link>
         {site.region && <div className="muted">{site.region}</div>}
       </td>
       <td data-label="Role">{site.role}</td>

@@ -58,7 +58,7 @@ export function SiteDetailPage() {
   return (
     <>
       <p>
-        <Link to="/sites">← All sites</Link>
+        <Link to="/devices">← All devices</Link>
       </p>
 
       <div className="card">

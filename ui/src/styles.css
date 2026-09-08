@@ -1367,3 +1367,47 @@ kbd {
     transition: none;
   }
 }
+
+/* -- collapsible explainer ------------------------------------------------ */
+
+.explainer > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.explainer > summary::-webkit-details-marker {
+  display: none;
+}
+
+.explainer > summary h2 {
+  margin: 0;
+}
+
+/* A disclosure triangle that rotates, so the control reads as a control. */
+.explainer > summary::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.12s ease;
+}
+
+.explainer[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.explainer[open] > summary {
+  margin-bottom: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .explainer > summary::before {
+    transition: none;
+  }
+}

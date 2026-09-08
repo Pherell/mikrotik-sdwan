@@ -102,6 +102,14 @@ const icons = {
       <path d="M16 11.2A3.2 3.2 0 0 0 16 5M18 19.5c0-2.2-.8-3.9-2-4.9" />
     </Icon>
   ),
+  uplinks: (
+    <Icon>
+      <path d="M4 16h6a2 2 0 0 0 2-2V8" />
+      <path d="M16 5l4 3-4 3" />
+      <path d="M12 8h8" />
+      <rect x="2" y="13" width="5" height="6" rx="1" />
+    </Icon>
+  ),
   collapse: (
     <Icon>
       <path d="M15 6l-6 6 6 6" />
@@ -127,20 +135,32 @@ const icons = {
 
 type Item = { to: string; label: string; icon: ReactNode; end?: boolean };
 
-const GROUPS: { heading: string; items: Item[]; adminOnly?: boolean }[] = [
+const GROUPS: { heading: string; items: Item[] }[] = [
   {
-    heading: "Network",
+    // Choosing between uplinks. Independent of how the tunnels are built,
+    // which is why it is its own heading rather than mixed in below.
+    heading: "SD-WAN",
     items: [
       { to: "/", label: "Overview", icon: icons.overview, end: true },
-      { to: "/sites", label: "Sites", icon: icons.sites },
-      { to: "/fabrics", label: "Fabrics", icon: icons.fabrics },
-      { to: "/policies", label: "Policies", icon: icons.policies },
+      { to: "/uplinks", label: "Uplinks", icon: icons.uplinks },
+      { to: "/traffic-rules", label: "Traffic rules", icon: icons.policies },
     ],
   },
-  { heading: "Operations", items: [{ to: "/jobs", label: "Jobs", icon: icons.jobs }] },
   {
-    heading: "Admin",
+    // The overlay those uplinks carry.
+    heading: "Tunnels",
     items: [
+      { to: "/tunnel-networks", label: "Tunnel networks", icon: icons.fabrics },
+    ],
+  },
+  {
+    heading: "Devices",
+    items: [{ to: "/devices", label: "Devices", icon: icons.sites }],
+  },
+  {
+    heading: "System",
+    items: [
+      { to: "/jobs", label: "Jobs", icon: icons.jobs },
       { to: "/settings", label: "Settings", icon: icons.settings },
       { to: "/users", label: "Users", icon: icons.users },
     ],

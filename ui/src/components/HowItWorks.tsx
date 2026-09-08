@@ -1,5 +1,5 @@
 /**
- * The diagram that answers "fabric — what is this?".
+ * The diagram that answers "what is this thing?".
  *
  * The empty states were accurate and assumed the answer: "a fabric is one
  * overlay: a transport, a topology, and the sites that take part" is a good
@@ -13,31 +13,31 @@ import { Link } from "react-router-dom";
 
 const NODES = [
   {
-    id: "sites",
-    label: "Sites",
-    to: "/sites",
-    made: "A location and its router. Each has one or more uplinks.",
-    gives: "The things that need connecting.",
+    id: "devices",
+    label: "Devices",
+    to: "/devices",
+    made: "One RouterOS router each.",
+    gives: "Uplinks — the internet connections everything else chooses between.",
   },
   {
-    id: "fabric",
-    label: "Fabric",
-    to: "/fabrics",
-    made: "Sites you pick, a transport (IPsec, WireGuard, GRE…) and a topology.",
-    gives: "One overlay network joining those sites.",
+    id: "network",
+    label: "Tunnel network",
+    to: "/tunnel-networks",
+    made: "Devices you pick, and how they should connect (IPsec, WireGuard, GRE…).",
+    gives: "One encrypted network joining those devices.",
   },
   {
-    id: "links",
-    label: "Links",
-    to: "/fabrics",
-    made: "Computed, never written. Every uplink pair the topology allows.",
+    id: "tunnels",
+    label: "Tunnels",
+    to: "/tunnel-networks",
+    made: "Computed, never written. Every uplink pair the network's shape allows.",
     gives: "The individual tunnels, with addresses and keys allocated.",
   },
   {
-    id: "policies",
-    label: "Policies",
-    to: "/policies",
-    made: "Traffic to match, uplinks to prefer, and how bad a link must get.",
+    id: "rules",
+    label: "Traffic rules",
+    to: "/traffic-rules",
+    made: "Traffic to match, uplinks to prefer, and how bad one must get before moving.",
     gives: "Which path traffic takes, and when it moves.",
   },
   {
@@ -49,13 +49,15 @@ const NODES = [
   },
 ];
 
-export function HowItWorks() {
+export function HowItWorks({ defaultOpen = true }: { defaultOpen?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   const chosen = NODES.find((n) => n.id === open);
 
   return (
-    <div className="card">
-      <h2>How this fits together</h2>
+    <details className="card explainer" open={defaultOpen}>
+      <summary>
+        <h2>How this fits together</h2>
+      </summary>
       <p className="muted" style={{ marginTop: 0 }}>
         Each stage is built from the one before it. Select any of them.
       </p>
@@ -66,7 +68,7 @@ export function HowItWorks() {
             <button
               type="button"
               className={`pipe${open === node.id ? " selected" : ""}${
-                node.id === "links" ? " derived" : ""
+                node.id === "tunnels" ? " derived" : ""
               }`}
               onClick={() => setOpen(open === node.id ? null : node.id)}
               aria-pressed={open === node.id}
@@ -96,10 +98,11 @@ export function HowItWorks() {
         </div>
       ) : (
         <p className="muted pipe-hint">
-          <strong>Links are the one you do not author.</strong> They are derived from a
-          fabric's members and topology, which is why there is no button to create one.
+          <strong>Tunnels are the one thing you do not author.</strong> They are
+          worked out from a network's members and shape, which is why there is no
+          button to create one.
         </p>
       )}
-    </div>
+    </details>
   );
 }

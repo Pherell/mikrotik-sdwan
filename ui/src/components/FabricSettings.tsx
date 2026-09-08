@@ -58,7 +58,7 @@ export function FabricSettings({ fabric, onDone }: { fabric: Fabric; onDone: () 
 
   return (
     <div className="card">
-      <h2>Fabric settings</h2>
+      <h2>Tunnel network settings</h2>
       {save.isError && <div className="error">{(save.error as Error).message}</div>}
       <form onSubmit={submit}>
         <div className="row">

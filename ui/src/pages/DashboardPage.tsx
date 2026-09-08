@@ -59,7 +59,7 @@ export function DashboardPage() {
       {armed.length > 0 && <ArmedBanner jobs={armed} sites={all} />}
 
       <div className="tiles">
-        <Tile label="Sites" value={all.length} to="/sites" />
+        <Tile label="Devices" value={all.length} to="/devices" />
         <Tile
           label="Reachable"
           value={byStatus.reachable ?? 0}
@@ -102,6 +102,8 @@ export function DashboardPage() {
       )}
 
       <RecentJobs jobs={jobs.data ?? []} sites={all} />
+
+      <HowItWorks defaultOpen={false} />
     </>
   );
 }
@@ -148,7 +150,7 @@ function ArmedBanner({ jobs, sites }: { jobs: Job[]; sites: Site[] }) {
         <ul>
           {jobs.map((j) => (
             <li key={j.id}>
-              <Link to={`/sites/${j.site_id}`}>{name(j.site_id)}</Link> —{" "}
+              <Link to={`/devices/${j.site_id}`}>{name(j.site_id)}</Link> —{" "}
               <code>{j.backup_name}</code>
             </li>
           ))}
@@ -295,7 +297,7 @@ function NeedsAttention({
           {[...unreachable, ...drifted].map((s) => (
             <tr key={s.id}>
               <td>
-                <Link to={`/sites/${s.id}`}>{s.name}</Link>
+                <Link to={`/devices/${s.id}`}>{s.name}</Link>
               </td>
               <td>
                 <span className={`badge ${s.status}`}>{s.status}</span>

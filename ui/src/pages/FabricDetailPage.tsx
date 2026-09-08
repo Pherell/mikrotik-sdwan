@@ -73,7 +73,7 @@ export function FabricDetailPage() {
   return (
     <>
       <p>
-        <Link to="/fabrics">← All fabrics</Link>
+        <Link to="/tunnel-networks">← All tunnel networks</Link>
       </p>
 
       <div className="card">
@@ -85,7 +85,7 @@ export function FabricDetailPage() {
               onClick={() => expand.mutate()}
               disabled={expand.isPending}
             >
-              {expand.isPending ? "Expanding…" : "Recompute links"}
+              {expand.isPending ? "Rebuilding…" : "Rebuild tunnels"}
             </button>
           </div>
           <div className="no-grow">
@@ -141,7 +141,7 @@ export function FabricDetailPage() {
       <div className="card">
         <h2>Members</h2>
         {f.members.length === 0 ? (
-          <p className="muted">No sites in this fabric yet.</p>
+          <p className="muted">No devices in this tunnel network yet.</p>
         ) : (
           <table>
             <thead>
@@ -155,7 +155,7 @@ export function FabricDetailPage() {
               {f.members.map((m) => (
                 <tr key={m.id}>
                   <td>
-                    <Link to={`/sites/${m.site_id}`}>{m.site_name}</Link>
+                    <Link to={`/devices/${m.site_id}`}>{m.site_name}</Link>
                   </td>
                   <td className="muted">{m.loopback_ip ?? "not assigned"}</td>
                   <td>
@@ -193,11 +193,11 @@ export function FabricDetailPage() {
       </div>
 
       <div className="card">
-        <h2>Links</h2>
+        <h2>Tunnels</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          Computed from this fabric's members and topology — there is no button to add
+          Computed from this network's members and shape — there is no button to add
           one, and editing them by hand is not a thing. Change who is a member, or the
-          topology, and recompute.
+          shape, and rebuild them.
         </p>
         {(links.data ?? []).length === 0 ? (
           <p className="muted">
