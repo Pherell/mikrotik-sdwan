@@ -16,6 +16,7 @@ from arq.connections import RedisSettings
 from app.config import get_settings
 from app.db import SessionLocal
 from app.services.drift import check_all
+from app.telemetry.poller import poll_all
 
 log = logging.getLogger(__name__)
 
@@ -37,8 +38,30 @@ async def drift_sweep(ctx: dict[str, Any]) -> dict[str, int]:
     return {"checked": len(jobs), "drifted": drifted}
 
 
+async def telemetry_poll(ctx: dict[str, Any]) -> dict[str, int]:
+    """One netwatch + system/resource pass over every provisioned site.
+
+    Re-enqueues itself rather than using ``cron``: arq's cron is minute-
+    granular, and the interval here is 30s by default
+    (``SDWAN_TELEMETRY_POLL_SECONDS``). Re-enqueuing from inside the job --
+    rather than a fixed-rate scheduler -- means a slow poll pushes the next
+    one back instead of overlapping it, which matters once a fleet is large
+    enough that one pass can take a real fraction of the interval.
+    """
+    settings = get_settings()
+    async with SessionLocal() as session:
+        written = await poll_all(session)
+        await session.commit()
+
+    await ctx["redis"].enqueue_job(
+        "telemetry_poll", _defer_by=settings.telemetry_poll_seconds
+    )
+    return {"samples": written}
+
+
 async def startup(ctx: dict[str, Any]) -> None:
     log.info("sdwan worker starting")
+    await ctx["redis"].enqueue_job("telemetry_poll")
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
@@ -49,7 +72,7 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [drift_sweep]
+    functions: list[Any] = [drift_sweep, telemetry_poll]
     cron_jobs = [
         # Offset off the hour so the sweep does not collide with whatever else
         # a fleet runs at :00.

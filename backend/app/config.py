@@ -67,6 +67,12 @@ class Settings(BaseSettings):
 
     rollback_timeout_seconds: int = 120
 
+    # M7 telemetry: how often the poller reads netwatch and system/resource
+    # back from every provisioned site. RouterOS is already measuring this for
+    # SLA-based failover; this just keeps what it already said. 30s matches
+    # the plan's own "one poller pass per site, every 30 seconds by default".
+    telemetry_poll_seconds: int = 30
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:

@@ -18,6 +18,7 @@ from app.api.v1 import logs as logs_api
 from app.api.v1 import ops as ops_api
 from app.api.v1 import policies as policies_api
 from app.api.v1 import sites as sites_api
+from app.api.v1 import telemetry as telemetry_api
 from app.api.v1 import tokens as tokens_api
 from app.config import get_settings
 from app.db import SessionLocal, engine
@@ -126,6 +127,7 @@ def create_app() -> FastAPI:
     app.include_router(ops_api.router, prefix="/api/v1")
     app.include_router(logs_api.router, prefix="/api/v1")
     app.include_router(tokens_api.router, prefix="/api/v1")
+    app.include_router(telemetry_api.router, prefix="/api/v1")
     return app
 
 
