@@ -19,10 +19,11 @@ import { Link } from "react-router-dom";
 import { HowItWorks } from "../components/HowItWorks";
 import { PageHeader } from "../components/PageHeader";
 
-type Section = "setup" | "words" | "steering" | "trouble";
+type Section = "setup" | "builds" | "words" | "steering" | "trouble";
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "setup", label: "Set up a tunnel network" },
+  { id: "builds", label: "What it builds on the router" },
   { id: "words", label: "What the words mean" },
   { id: "steering", label: "Steering traffic" },
   { id: "trouble", label: "When something is wrong" },
@@ -51,6 +52,7 @@ export function GuidePage() {
       </div>
 
       {section === "setup" && <Setup />}
+      {section === "builds" && <Builds />}
       {section === "words" && <Words />}
       {section === "steering" && <Steering />}
       {section === "trouble" && <Trouble />}
@@ -533,6 +535,172 @@ function Trouble() {
             apply, including the exact configuration pushed.
           </li>
         </ul>
+      </div>
+    </>
+  );
+}
+
+// -- what lands on the router -----------------------------------------------
+
+/**
+ * The RouterOS side, menu by menu.
+ *
+ * "Why is there nothing in my IPsec Policies tab" is only answerable if you
+ * know what was supposed to be there. Nothing else in the product says what a
+ * tunnel actually *is* once it reaches a router, so this is the page you open
+ * next to WinBox.
+ *
+ * The rows are the real ones, taken from a rendered plan rather than written
+ * from memory.
+ */
+const BUILDS: { menu: string; row: string; why: string }[] = [
+  {
+    menu: "/ip/ipsec/profile",
+    row: "prof-<tunnel>",
+    why: "Phase 1: how the two routers agree on keys — cipher, hash, DH group, lifetime, dead-peer detection.",
+  },
+  {
+    menu: "/ip/ipsec/proposal",
+    row: "prop-<tunnel>",
+    why: "Phase 2: how the traffic itself is encrypted, and how often the key is replaced.",
+  },
+  {
+    menu: "/ip/ipsec/peer",
+    row: "peer-<tunnel>",
+    why: "The far router's public address, and which of the two dials. This is the destination — it comes from the far uplink's Public IP.",
+  },
+  {
+    menu: "/ip/ipsec/identity",
+    row: "peer-<tunnel>",
+    why: "The pre-shared key. Generated per tunnel, stored encrypted, never shown in a plan or a log.",
+  },
+  {
+    menu: "/ip/ipsec/policy",
+    row: "<local public>/32 → <far public>/32, gre",
+    why: "What to encrypt: the GRE between these two public addresses, and nothing else. If this tab holds only the built-in template row, no tunnel has been pushed here.",
+  },
+  {
+    menu: "/interface/gre",
+    row: "gre-<tunnel>",
+    why: "The tunnel itself, carrying your traffic inside the encryption above. Keepalives take it down when the far end vanishes.",
+  },
+  {
+    menu: "/ip/address",
+    row: "the /31 on gre-<tunnel>",
+    why: "One address at each end of the tunnel, out of the network's pool. This is the inside; the peer above is the outside.",
+  },
+  {
+    menu: "/routing/bgp/template · connection · network",
+    row: "sdwan-<network> · bgp-<tunnel>",
+    why: "How each end learns the other's networks. Your Local prefixes are advertised here — a device with none builds a working tunnel that no traffic enters.",
+  },
+  {
+    menu: "/ip/firewall/filter",
+    row: "three accepts per tunnel",
+    why: "UDP 500 and 4500, ESP, and GRE, from the far public address only. Without these a default-drop input chain blocks the tunnel from ever establishing.",
+  },
+  {
+    menu: "/ip/firewall/nat",
+    row: "bypass, then masquerade",
+    why: "The bypass stops tunnel traffic being masqueraded, which would break it. It must sit above the masquerade rule, and the controller keeps it there.",
+  },
+  {
+    menu: "/interface/bridge",
+    row: "lo-sdwan",
+    why: "A loopback, once per device. It gives routing a stable identity that does not move when an uplink flaps.",
+  },
+  {
+    menu: "/ip/firewall/address-list",
+    row: "sdwan-local-<device>",
+    why: "This device's own prefixes, for traffic rules to match against.",
+  },
+];
+
+function Builds() {
+  return (
+    <>
+      <div className="card">
+        <h2>How a tunnel gets made</h2>
+        <ol>
+          <li>
+            <strong>You declare</strong> devices, their uplinks, and a network
+            with a transport and a shape. Nothing is computed yet.
+          </li>
+          <li>
+            <strong>Expand</strong> pairs the uplinks the shape calls for, takes
+            a <code>/31</code> from the pool for each pair, generates that
+            tunnel's key, and decides which end dials. Still nothing on a router
+            — this all lives in the controller.
+          </li>
+          <li>
+            <strong>Plan</strong> turns that into RouterOS rows, reads what the
+            device currently has, and shows you the difference. Also writes
+            nothing.
+          </li>
+          <li>
+            <strong>Apply</strong> takes a backup, schedules the router to
+            restore it shortly, pushes the difference, then reconnects to prove
+            management still works and cancels the restore. If it cannot
+            reconnect, the router puts itself back.
+          </li>
+        </ol>
+        <p className="muted">
+          Both ends need applying. A tunnel configured on one side only never
+          comes up.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>What appears on the router</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          For the default <code>ipsec_gre</code> transport — GRE carrying your
+          traffic, IPsec encrypting the GRE. Open this next to WinBox.
+        </p>
+        <table className="stack">
+          <thead>
+            <tr>
+              <th>Menu</th>
+              <th>Row</th>
+              <th>What it is for</th>
+            </tr>
+          </thead>
+          <tbody>
+            {BUILDS.map((b) => (
+              <tr key={b.menu}>
+                <td data-label="Menu">
+                  <code>{b.menu}</code>
+                </td>
+                <td data-label="Row" className="muted">
+                  <code>{b.row}</code>
+                </td>
+                <td data-label="What it is for">{b.why}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <h2>Why it will not touch your own configuration</h2>
+        <p>
+          Every row above carries a comment beginning{" "}
+          <code>sdwan:</code>. That comment is how the controller knows what it
+          owns.
+        </p>
+        <ul>
+          <li>
+            Rows with that comment are managed: created, corrected, and removed
+            when they are no longer wanted.
+          </li>
+          <li>
+            Rows without it are left alone entirely. Your existing firewall,
+            addresses and routes are not read as things to delete.
+          </li>
+        </ul>
+        <p className="muted">
+          The corollary is that editing a managed row by hand does not stick —
+          the next apply puts it back. Change it in the controller instead.
+        </p>
       </div>
     </>
   );
