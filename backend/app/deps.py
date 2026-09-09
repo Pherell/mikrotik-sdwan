@@ -77,6 +77,26 @@ async def current_user(
     user = await session.scalar(select(User).where(User.id == payload.get("sub")))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User not found or disabled")
+    if user.tokens_valid_after is not None:
+        # iat is the moment this specific token was issued -- a stolen JWT
+        # from before a revocation is exactly what tokens_valid_after exists
+        # to reject; a token issued after it (from signing in again) is
+        # unaffected. A JWT carries no row to revoke individually, so this
+        # is coarser than that: it invalidates everything issued before the
+        # instant recorded, not one token.
+        #
+        # int(), not a bare float comparison: JWT's NumericDate truncates
+        # iat to whole seconds on encode, but tokens_valid_after keeps
+        # microseconds. Comparing them at mismatched precision means a
+        # login in the same wall-clock second as a revocation can encode an
+        # iat that reads as "before" a revoked_at that has not yet ticked
+        # over to the next second -- rejecting a token that was, in fact,
+        # issued after the revocation. Truncating both sides the same way a
+        # session apart cannot tell within one second, and letting a
+        # same-second login through is the safer failure than the reverse.
+        issued_at = payload.get("iat")
+        if issued_at is None or issued_at < int(_aware(user.tokens_valid_after).timestamp()):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token revoked")
     return user
 
 

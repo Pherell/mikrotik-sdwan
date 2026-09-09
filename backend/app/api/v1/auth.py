@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.deps import CurrentUser, RequireAdmin, SessionDep, get_owned, write_audit
+from app.models.base import utcnow
 from app.models.user import User
 from app.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserRead, UserUpdate
 from app.security import create_access_token, hash_password, verify_password
@@ -68,6 +69,21 @@ async def me(user: CurrentUser) -> User:
     return user
 
 
+@router.post("/logout-everywhere", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_everywhere(
+    user: CurrentUser, session: SessionDep, request: Request
+) -> None:
+    """Invalidate every token issued to this account before this instant --
+    including the one this very request used to authenticate. A stolen
+    laptop's session dies now rather than at its 12-hour default expiry,
+    without needing an admin or the server's whole JWT secret rotated.
+    """
+    user.tokens_valid_after = utcnow()
+    await write_audit(
+        session, actor=user, action="auth.logout_everywhere", request=request
+    )
+
+
 users = APIRouter(prefix="/users", tags=["users"])
 
 
@@ -122,6 +138,9 @@ async def update_user(
     data = body.model_dump(exclude_unset=True)
     if (pw := data.pop("password", None)) is not None:
         user.password_hash = hash_password(pw)
+    # A trigger, not a stored field -- see UserUpdate.revoke_sessions.
+    if data.pop("revoke_sessions", False):
+        user.tokens_valid_after = utcnow()
     for field, value in data.items():
         setattr(user, field, value)
 

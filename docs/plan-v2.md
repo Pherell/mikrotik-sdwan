@@ -261,7 +261,7 @@ issue a certificate per device at enrolment, distribute the root, set
 
 - **Maintenance windows** — queue applies for an approved window rather than now
 - **Token revocation** — a stolen JWT is currently valid until it expires
-- **Multi-tenancy enforcement** — the schema carries `tenant_id`; nothing filters on it
+- ~~**Multi-tenancy enforcement**~~ — done. Every list endpoint filtered by tenant_id already; every by-id fetch did not, which was worse than "nothing filters on it" suggests -- one tenant could reach another's site, fabric, credentials, or user list by UUID. Closed across the whole API surface via a single deps.get_owned() helper, with a regression test per entity (tests/test_tenant_isolation.py).
 - **QoS** — shape and prioritise per policy class, not just steer
 - **Config backup/restore of the controller** — the intent export exists; a full
   operational restore procedure does not

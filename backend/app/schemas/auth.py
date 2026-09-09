@@ -34,6 +34,10 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, repr=False)
     role: Role | None = None
     is_active: bool | None = None
+    # Write-only trigger, not a stored value -- like password above, this
+    # describes an action ("kill every session issued before now") rather
+    # than a field with a value worth reading back.
+    revoke_sessions: bool = False
 
 
 class UserRead(BaseModel):
