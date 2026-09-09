@@ -807,7 +807,10 @@ async def test_policy_steers_onto_the_preferred_uplink(api) -> None:
     assert job.json()["state"] == "succeeded", job.text
 
     spoke = routers["203.0.113.1"]
-    mangle = spoke.rows("ip/firewall/mangle")
+    # Every tunnel on this dual-homed site also carries an MSS clamp rule on
+    # this same menu now (render.fabric._mss_clamp) -- filter to the rows
+    # this policy actually authored, which is what this test is about.
+    mangle = [r for r in spoke.rows("ip/firewall/mangle") if r["action"] == "mark-routing"]
     assert len(mangle) == 1
     assert mangle[0]["new-routing-mark"] == "sdwan-voice"
     assert mangle[0]["protocol"] == "udp"
@@ -868,7 +871,13 @@ async def test_deleting_a_policy_sweeps_its_rules_off_the_device(api) -> None:
         f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
     )
     spoke = routers["203.0.113.1"]
-    assert len(spoke.rows("ip/firewall/mangle")) == 1
+
+    # Same filter as test_policy_steers_onto_the_preferred_uplink: the
+    # tunnels on this fabric also carry their own MSS clamp rows here.
+    def mark_routing() -> list[dict]:
+        return [r for r in spoke.rows("ip/firewall/mangle") if r["action"] == "mark-routing"]
+
+    assert len(mark_routing()) == 1
 
     await client.delete(f"/policies/{created.json()['id']}", headers=headers)
     job = await client.post(
@@ -876,7 +885,7 @@ async def test_deleting_a_policy_sweeps_its_rules_off_the_device(api) -> None:
     )
 
     assert job.json()["state"] == "succeeded"
-    assert spoke.rows("ip/firewall/mangle") == []
+    assert mark_routing() == []
     assert spoke.rows("routing/table") == []
     assert spoke.rows("tool/netwatch") == []
 
@@ -899,7 +908,10 @@ async def test_a_policy_naming_no_uplink_here_is_not_pushed(api) -> None:
         f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
     )
 
-    assert routers["203.0.113.1"].rows("ip/firewall/mangle") == []
+    # The clamp rows for this site's own tunnels are unrelated to this
+    # policy and are expected here; only its own mark-routing row is not.
+    mangle = routers["203.0.113.1"].rows("ip/firewall/mangle")
+    assert [r for r in mangle if r["action"] == "mark-routing"] == []
 
 
 async def test_a_rule_without_a_group_is_rejected(api) -> None:

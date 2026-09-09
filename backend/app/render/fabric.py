@@ -44,7 +44,51 @@ def render_fabric(view: SiteFabricView, transport: TransportDriver) -> list[Conf
     for link in view.links:
         sections.extend(transport.render(link))
     sections.extend(_bgp(view))
+    sections.append(_mss_clamp(view, transport))
     return sections
+
+
+def _mss_clamp(view: SiteFabricView, transport: TransportDriver) -> ConfigSection:
+    """Clamp TCP MSS to PMTU on every tunnel this site has an end of.
+
+    GRE adds 24 bytes and IPsec transport-mode ESP adds ~40 more, which is why
+    the tunnel MTU is 1400 rather than 1500. A TCP endpoint that sets DF and
+    never sees the ICMP Fragmentation Needed reply -- common behind a firewall
+    that drops ICMP -- blackholes silently: small pages load, large ones hang
+    forever. This is the single most common SD-WAN-over-IPsec support call,
+    and it was a defect in what already shipped, not a missing feature.
+
+    Always returns a section, even with no links: an empty one is how a
+    tunnel that has been removed has its clamp rule removed with it, the same
+    reason ``render_firewall`` always returns both of its sections.
+    """
+    scope = owner_tag("fabric", view.fabric.name, view.site_name, "mss") + ":"
+    # key=("comment",), matching render.policy's own mangle section on this
+    # same path: merge_sections requires every renderer sharing a device menu
+    # to agree on the identity columns, since they end up diffed as one. The
+    # comment is the tag itself, exactly as render.policy sets it -- not
+    # left for a later stage to fill in.
+    return section(
+        "/ip/firewall/mangle",
+        "firewall",
+        owner=scope,
+        key=("comment",),
+        items=[
+            ConfigItem(
+                props={
+                    "chain": "forward",
+                    "protocol": "tcp",
+                    "tcp-flags": "syn",
+                    "action": "change-mss",
+                    "new-mss": "clamp-to-pmtu",
+                    "out-interface": transport.interface_name(link.slug),
+                    "comment": f"{scope}{link.slug}",
+                },
+                tag=f"{scope}{link.slug}",
+            )
+            for link in view.links
+        ],
+    )
 
 
 def _bgp(view: SiteFabricView) -> list[ConfigSection]:
