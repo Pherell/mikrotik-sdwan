@@ -11,7 +11,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
-from app.deps import RequireAdmin, RequireOperator, SessionDep, write_audit
+from app.deps import RequireAdmin, RequireOperator, SessionDep, get_owned, write_audit
 from app.drivers.base import DriverError
 from app.drivers.factory import open_driver
 from app.models.job import AuditEvent
@@ -87,7 +87,7 @@ async def list_audit_actions(session: SessionDep, user: RequireAdmin) -> list[st
 async def device_log(
     site_id: str,
     session: SessionDep,
-    _: RequireOperator,
+    user: RequireOperator,
     topic: str | None = None,
     contains: str | None = None,
     limit: int = Query(default=200, ge=1, le=1000),
@@ -98,7 +98,7 @@ async def device_log(
     it can carry anything the router chose to write -- including lines about
     accounts, addresses and failed logins on the device itself.
     """
-    site = await session.get(Site, site_id)
+    site = await get_owned(session, Site, site_id, user.tenant_id)
     if site is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such site")
     try:
@@ -131,7 +131,7 @@ async def console(
     Audited with the exact text, allowed or not: a refused command is the more
     interesting audit row of the two.
     """
-    site = await session.get(Site, site_id)
+    site = await get_owned(session, Site, site_id, user.tenant_id)
     if site is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such site")
 

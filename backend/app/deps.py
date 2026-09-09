@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, TypeVar
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
@@ -25,6 +25,28 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 # Ordered least to most privileged, so a role check is a comparison.
 _RANK = {Role.viewer: 0, Role.operator: 1, Role.admin: 2}
+
+ModelT = TypeVar("ModelT")
+
+
+# TypeVar, not PEP 695 `def get_owned[ModelT](...)`: the CI matrix still runs
+# 3.11 (the oldest supported, per its own comment), and that syntax is a
+# SyntaxError there even though ruff's target-version is 3.12.
+async def get_owned(  # noqa: UP047
+    session: AsyncSession, model: type[ModelT], id_: str, tenant_id: str
+) -> ModelT | None:
+    """Fetch one row of a tenant-scoped model by id, or None.
+
+    ``session.get()`` is a bare primary-key lookup: it has no notion of
+    tenant, so it happily hands back a row belonging to a different tenant
+    than the caller's. Every by-id fetch of a model that carries
+    ``tenant_id`` must go through this instead -- otherwise an authenticated
+    user of any tenant can reach another tenant's row just by knowing (or
+    guessing) its UUID, regardless of what the list endpoints filter.
+    """
+    return await session.scalar(
+        select(model).where(model.id == id_, model.tenant_id == tenant_id)
+    )
 
 
 async def current_user(

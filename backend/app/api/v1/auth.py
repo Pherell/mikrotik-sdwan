@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.deps import CurrentUser, RequireAdmin, SessionDep, write_audit
+from app.deps import CurrentUser, RequireAdmin, SessionDep, get_owned, write_audit
 from app.models.user import User
 from app.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserRead, UserUpdate
 from app.security import create_access_token, hash_password, verify_password
@@ -72,8 +72,12 @@ users = APIRouter(prefix="/users", tags=["users"])
 
 
 @users.get("", response_model=list[UserRead])
-async def list_users(session: SessionDep, _: RequireAdmin) -> list[User]:
-    return list(await session.scalars(select(User).order_by(User.email)))
+async def list_users(session: SessionDep, user: RequireAdmin) -> list[User]:
+    return list(
+        await session.scalars(
+            select(User).where(User.tenant_id == user.tenant_id).order_by(User.email)
+        )
+    )
 
 
 @users.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
@@ -111,7 +115,7 @@ async def update_user(
     admin: RequireAdmin,
     request: Request,
 ) -> User:
-    user = await session.get(User, user_id)
+    user = await get_owned(session, User, user_id, admin.tenant_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such user")
 
@@ -124,7 +128,12 @@ async def update_user(
     # Do not let the last active admin lock everyone out.
     if user.id == admin.id and (data.get("is_active") is False or data.get("role") != admin.role):
         remaining = await session.scalars(
-            select(User).where(User.role == "admin", User.is_active.is_(True), User.id != user.id)
+            select(User).where(
+                User.tenant_id == admin.tenant_id,
+                User.role == "admin",
+                User.is_active.is_(True),
+                User.id != user.id,
+            )
         )
         if not list(remaining):
             raise HTTPException(

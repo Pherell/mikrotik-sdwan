@@ -6,7 +6,14 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.deps import RequireAdmin, RequireOperator, RequireViewer, SessionDep, write_audit
+from app.deps import (
+    RequireAdmin,
+    RequireOperator,
+    RequireViewer,
+    SessionDep,
+    get_owned,
+    write_audit,
+)
 from app.fabric.allocate import capacity
 from app.models.fabric import Fabric, FabricMember, Link
 from app.models.site import Site
@@ -27,8 +34,8 @@ from app.transports.params import validate as validate_params
 router = APIRouter(prefix="/fabrics", tags=["fabrics"])
 
 
-async def _get_or_404(session: SessionDep, fabric_id: str) -> Fabric:
-    fabric = await load_fabric(session, fabric_id)
+async def _get_or_404(session: SessionDep, fabric_id: str, tenant_id: str) -> Fabric:
+    fabric = await load_fabric(session, fabric_id, tenant_id)
     if fabric is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such fabric")
     return fabric
@@ -88,7 +95,9 @@ async def list_fabrics(session: SessionDep, user: RequireViewer) -> list[FabricR
             select(Fabric.id).where(Fabric.tenant_id == user.tenant_id).order_by(Fabric.name)
         )
     )
-    return [await _to_read(session, await _get_or_404(session, fid)) for fid in ids]
+    return [
+        await _to_read(session, await _get_or_404(session, fid, user.tenant_id)) for fid in ids
+    ]
 
 
 @router.post("", response_model=FabricRead, status_code=status.HTTP_201_CREATED)
@@ -112,7 +121,9 @@ async def create_fabric(
         ) from exc
 
     for site_id in body.member_site_ids:
-        if await session.get(Site, site_id) is None:
+        # get_owned, not session.get: a bare id lookup would let a fabric in
+        # this tenant adopt a site that belongs to a different one.
+        if await get_owned(session, Site, site_id, user.tenant_id) is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"No such site {site_id}")
         session.add(FabricMember(fabric_id=fabric.id, site_id=site_id))
     await session.flush()
@@ -126,12 +137,12 @@ async def create_fabric(
         detail={"name": fabric.name, "transport": fabric.transport},
         request=request,
     )
-    return await _to_read(session, await _get_or_404(session, fabric.id))
+    return await _to_read(session, await _get_or_404(session, fabric.id, user.tenant_id))
 
 
 @router.get("/{fabric_id}", response_model=FabricRead)
-async def get_fabric(fabric_id: str, session: SessionDep, _: RequireViewer) -> FabricRead:
-    return await _to_read(session, await _get_or_404(session, fabric_id))
+async def get_fabric(fabric_id: str, session: SessionDep, user: RequireViewer) -> FabricRead:
+    return await _to_read(session, await _get_or_404(session, fabric_id, user.tenant_id))
 
 
 @router.patch("/{fabric_id}", response_model=FabricRead)
@@ -142,7 +153,7 @@ async def update_fabric(
     user: RequireOperator,
     request: Request,
 ) -> FabricRead:
-    fabric = await _get_or_404(session, fabric_id)
+    fabric = await _get_or_404(session, fabric_id, user.tenant_id)
     data = body.model_dump(exclude_unset=True)
 
     switched_to: TransportDriver | None = None
@@ -212,14 +223,14 @@ async def update_fabric(
         detail={"fields": sorted(data), "rekeyed_links": rekeyed},
         request=request,
     )
-    return await _to_read(session, await _get_or_404(session, fabric.id))
+    return await _to_read(session, await _get_or_404(session, fabric.id, user.tenant_id))
 
 
 @router.delete("/{fabric_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_fabric(
     fabric_id: str, session: SessionDep, user: RequireAdmin, request: Request
 ) -> None:
-    fabric = await _get_or_404(session, fabric_id)
+    fabric = await _get_or_404(session, fabric_id, user.tenant_id)
     await write_audit(
         session,
         actor=user,
@@ -245,8 +256,8 @@ async def add_member(
     user: RequireOperator,
     request: Request,
 ) -> MemberRead:
-    fabric = await _get_or_404(session, fabric_id)
-    site = await session.get(Site, body.site_id)
+    fabric = await _get_or_404(session, fabric_id, user.tenant_id)
+    site = await get_owned(session, Site, body.site_id, user.tenant_id)
     if site is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such site")
 
@@ -289,6 +300,10 @@ async def remove_member(
     user: RequireOperator,
     request: Request,
 ) -> None:
+    # Confirms the fabric itself belongs to this tenant before touching
+    # membership -- FabricMember carries no tenant_id of its own, so without
+    # this a caller could name any fabric_id/site_id pair that exists at all.
+    await _get_or_404(session, fabric_id, user.tenant_id)
     member = await session.scalar(
         select(FabricMember).where(
             FabricMember.fabric_id == fabric_id, FabricMember.site_id == site_id
@@ -323,7 +338,7 @@ async def expand_topology(
     Allocates addresses and generates keys for new links. Nothing is pushed --
     apply each affected site to put the tunnels on the devices.
     """
-    fabric = await _get_or_404(session, fabric_id)
+    fabric = await _get_or_404(session, fabric_id, user.tenant_id)
     try:
         result = await expand_fabric(session, fabric)
     except (TransportError, ValueError) as exc:
@@ -357,9 +372,9 @@ async def expand_topology(
 
 @router.get("/{fabric_id}/links", response_model=list[LinkRead])
 async def list_links(
-    fabric_id: str, session: SessionDep, _: RequireViewer
+    fabric_id: str, session: SessionDep, user: RequireViewer
 ) -> list[LinkRead]:
-    await _get_or_404(session, fabric_id)
+    await _get_or_404(session, fabric_id, user.tenant_id)
     links = await session.scalars(
         select(Link).where(Link.fabric_id == fabric_id).order_by(Link.slug)
     )

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.deps import RequireOperator, RequireViewer, SessionDep, write_audit
+from app.deps import RequireOperator, RequireViewer, SessionDep, get_owned, write_audit
 from app.models.policy import AppGroup, Policy, SdwanGroup, SlaProfile
 from app.schemas.policy import (
     AppGroupCreate,
@@ -72,7 +72,7 @@ async def create_sla(
 async def delete_sla(
     profile_id: str, session: SessionDep, user: RequireOperator, request: Request
 ) -> None:
-    profile = await session.get(SlaProfile, profile_id)
+    profile = await get_owned(session, SlaProfile, profile_id, user.tenant_id)
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such SLA profile")
 
@@ -160,7 +160,7 @@ async def create_policy(
     body: PolicyCreate, session: SessionDep, user: RequireOperator, request: Request
 ) -> Policy:
     await _check_references(
-        session, None, body.app_group_id, body.sdwan_group_id
+        session, None, body.app_group_id, body.sdwan_group_id, tenant_id=user.tenant_id
     )
 
     policy = Policy(**body.model_dump(), tenant_id=user.tenant_id)
@@ -193,13 +193,17 @@ async def update_policy(
     user: RequireOperator,
     request: Request,
 ) -> Policy:
-    policy = await session.get(Policy, policy_id)
+    policy = await get_owned(session, Policy, policy_id, user.tenant_id)
     if policy is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such policy")
 
     data = body.model_dump(exclude_unset=True)
     await _check_references(
-        session, None, data.get("app_group_id"), data.get("sdwan_group_id")
+        session,
+        None,
+        data.get("app_group_id"),
+        data.get("sdwan_group_id"),
+        tenant_id=user.tenant_id,
     )
     for field, value in data.items():
         setattr(policy, field, value)
@@ -220,7 +224,7 @@ async def update_policy(
 async def delete_policy(
     policy_id: str, session: SessionDep, user: RequireOperator, request: Request
 ) -> None:
-    policy = await session.get(Policy, policy_id)
+    policy = await get_owned(session, Policy, policy_id, user.tenant_id)
     if policy is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such policy")
     await write_audit(
@@ -241,12 +245,14 @@ async def _check_references(
     sla_id: str | None,
     app_group_id: str | None,
     sdwan_group_id: str | None = None,
+    *,
+    tenant_id: str,
 ) -> None:
-    if sla_id and await session.get(SlaProfile, sla_id) is None:
+    if sla_id and await get_owned(session, SlaProfile, sla_id, tenant_id) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such SLA profile")
-    if app_group_id and await session.get(AppGroup, app_group_id) is None:
+    if app_group_id and await get_owned(session, AppGroup, app_group_id, tenant_id) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such app group")
-    if sdwan_group_id and await session.get(SdwanGroup, sdwan_group_id) is None:
+    if sdwan_group_id and await get_owned(session, SdwanGroup, sdwan_group_id, tenant_id) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such SD-WAN group")
 
 
@@ -267,7 +273,7 @@ async def list_groups(session: SessionDep, user: RequireViewer) -> list[SdwanGro
 async def create_group(
     body: SdwanGroupCreate, session: SessionDep, user: RequireOperator, request: Request
 ) -> SdwanGroup:
-    await _check_references(session, body.sla_profile_id, None)
+    await _check_references(session, body.sla_profile_id, None, tenant_id=user.tenant_id)
 
     data = body.model_dump()
     data["members"] = [m for m in data["members"]]
@@ -301,12 +307,12 @@ async def update_group(
     user: RequireOperator,
     request: Request,
 ) -> SdwanGroup:
-    group = await session.get(SdwanGroup, group_id)
+    group = await get_owned(session, SdwanGroup, group_id, user.tenant_id)
     if group is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such SD-WAN group")
 
     data = body.model_dump(exclude_unset=True)
-    await _check_references(session, data.get("sla_profile_id"), None)
+    await _check_references(session, data.get("sla_profile_id"), None, tenant_id=user.tenant_id)
     for field, value in data.items():
         setattr(group, field, value)
 
@@ -328,7 +334,7 @@ async def update_group(
 async def delete_group(
     group_id: str, session: SessionDep, user: RequireOperator, request: Request
 ) -> None:
-    group = await session.get(SdwanGroup, group_id)
+    group = await get_owned(session, SdwanGroup, group_id, user.tenant_id)
     if group is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such SD-WAN group")
 

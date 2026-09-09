@@ -6,7 +6,14 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import func, select
 
-from app.deps import RequireAdmin, RequireOperator, RequireViewer, SessionDep, write_audit
+from app.deps import (
+    RequireAdmin,
+    RequireOperator,
+    RequireViewer,
+    SessionDep,
+    get_owned,
+    write_audit,
+)
 from app.models.enums import JobState, SiteStatus
 from app.models.fabric import Fabric, Link
 from app.models.job import Job
@@ -31,7 +38,7 @@ async def check_one(
     Honours the site's ``drift_action``: ``auto-remediate`` re-applies, which is
     why this needs operator rather than viewer.
     """
-    site = await session.get(Site, site_id)
+    site = await get_owned(session, Site, site_id, user.tenant_id)
     if site is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such site")
 

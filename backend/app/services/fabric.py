@@ -56,11 +56,23 @@ def set_link_secrets(link: Link, values: dict[str, str], box: SecretBox | None =
 # -- expansion --------------------------------------------------------------
 
 
-async def load_fabric(session: AsyncSession, fabric_id: str) -> Fabric | None:
+async def load_fabric(
+    session: AsyncSession, fabric_id: str, tenant_id: str | None = None
+) -> Fabric | None:
+    """Load a fabric by id.
+
+    ``tenant_id`` is optional only because a few internal callers already
+    reached this fabric through a chain that was tenant-checked earlier (a
+    site's own links, for instance). Every caller reachable from an HTTP
+    request with a live ``user`` must pass it -- a bare ``session.get()``-
+    style lookup by id alone is exactly what let one tenant reach another's
+    fabric.
+    """
+    query = select(Fabric).where(Fabric.id == fabric_id)
+    if tenant_id is not None:
+        query = query.where(Fabric.tenant_id == tenant_id)
     return await session.scalar(
-        select(Fabric)
-        .where(Fabric.id == fabric_id)
-        .options(
+        query.options(
             selectinload(Fabric.members)
             .selectinload(FabricMember.site)
             .selectinload(Site.wans),

@@ -7,7 +7,14 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from app.deps import RequireAdmin, RequireOperator, RequireViewer, SessionDep, write_audit
+from app.deps import (
+    RequireAdmin,
+    RequireOperator,
+    RequireViewer,
+    SessionDep,
+    get_owned,
+    write_audit,
+)
 from app.drivers.base import DriverError
 from app.drivers.factory import open_driver
 from app.models.fabric import Link
@@ -52,8 +59,8 @@ def _to_read(site: Site) -> SiteRead:
     return model
 
 
-async def _get_or_404(session: SessionDep, site_id: str) -> Site:
-    site = await session.get(Site, site_id)
+async def _get_or_404(session: SessionDep, site_id: str, tenant_id: str) -> Site:
+    site = await get_owned(session, Site, site_id, tenant_id)
     if site is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such site")
     return site
@@ -102,8 +109,8 @@ async def create_site(
 
 
 @router.get("/{site_id}", response_model=SiteRead)
-async def get_site(site_id: str, session: SessionDep, _: RequireViewer) -> SiteRead:
-    return _to_read(await _get_or_404(session, site_id))
+async def get_site(site_id: str, session: SessionDep, user: RequireViewer) -> SiteRead:
+    return _to_read(await _get_or_404(session, site_id, user.tenant_id))
 
 
 @router.patch("/{site_id}", response_model=SiteRead)
@@ -114,7 +121,7 @@ async def update_site(
     user: RequireOperator,
     request: Request,
 ) -> SiteRead:
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     data = body.model_dump(exclude_unset=True)
     box = SecretBox()
     if (pw := data.pop("password", None)) is not None:
@@ -140,7 +147,7 @@ async def update_site(
 async def delete_site(
     site_id: str, session: SessionDep, user: RequireAdmin, request: Request
 ) -> None:
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     if site.memberships:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -163,7 +170,7 @@ async def probe(
     site_id: str, session: SessionDep, user: RequireOperator, request: Request
 ) -> ProbeResult:
     """Read-only: connect, report version and capabilities, suggest uplinks."""
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     result = await probe_site(site)
     apply_probe(site, result)
     await write_audit(
@@ -189,7 +196,7 @@ async def add_wan(
     user: RequireOperator,
     request: Request,
 ) -> WanRead:
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     wan = Wan(site_id=site.id, **body.model_dump())
     session.add(wan)
     try:
@@ -220,8 +227,12 @@ async def update_wan(
     user: RequireOperator,
     request: Request,
 ) -> WanRead:
+    # Fetching the site first (tenant-scoped) before trusting site_id in the
+    # WAN comparison below closes the same hole update/delete would otherwise
+    # share with every other by-id lookup in this file.
+    site = await _get_or_404(session, site_id, user.tenant_id)
     wan = await session.get(Wan, wan_id)
-    if wan is None or wan.site_id != site_id:
+    if wan is None or wan.site_id != site.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such WAN on this site")
     data = body.model_dump(exclude_unset=True)
     for field, value in data.items():
@@ -246,8 +257,9 @@ async def delete_wan(
     user: RequireOperator,
     request: Request,
 ) -> None:
+    site = await _get_or_404(session, site_id, user.tenant_id)
     wan = await session.get(Wan, wan_id)
-    if wan is None or wan.site_id != site_id:
+    if wan is None or wan.site_id != site.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such WAN on this site")
     await write_audit(
         session,
@@ -306,31 +318,31 @@ _SENSITIVE = frozenset({"secret", "private-key", "password", "ipsec-secret", "pr
 
 @router.get("/{site_id}/health", response_model=DeviceHealth)
 async def site_health(
-    site_id: str, session: SessionDep, _: RequireViewer
+    site_id: str, session: SessionDep, user: RequireViewer
 ) -> DeviceHealth:
     """CPU, memory, disk and uptime, straight from the device. Read-only."""
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     async with open_driver(site) as driver:
         return await read_health(driver)
 
 
 @router.get("/{site_id}/ports", response_model=list[PortRead])
 async def list_ports(
-    site_id: str, session: SessionDep, _: RequireViewer
+    site_id: str, session: SessionDep, user: RequireViewer
 ) -> list[PortRead]:
     """The device's interfaces, classified and ready to draw.
 
     Read-only, and a viewer may run it: it changes nothing and answers the
     question people otherwise answer by walking to the rack.
     """
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     async with open_driver(site) as driver:
         return await read_ports(driver, site)
 
 
 @router.get("/{site_id}/device/{device_path:path}")
 async def read_device(
-    site_id: str, device_path: str, session: SessionDep, _: RequireOperator
+    site_id: str, device_path: str, session: SessionDep, user: RequireOperator
 ) -> list[dict]:
     """Read one RouterOS menu straight from the device. Never writes."""
     normalized = device_path.strip("/")
@@ -340,7 +352,7 @@ async def read_device(
             f"{normalized!r} is not readable through the controller. "
             f"Allowed: {', '.join(sorted(READABLE_PATHS))}",
         )
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     async with open_driver(site) as driver:
         rows = await driver.read("/" + normalized)
     return [{k: v for k, v in row.items() if k not in _SENSITIVE} for row in rows]
@@ -367,7 +379,7 @@ async def ping_from_site(
     user: RequireOperator,
 ) -> PingResult:
     """Ping an address from the device, optionally out of one uplink."""
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     await write_audit(
         session,
         actor=user,
@@ -395,7 +407,7 @@ async def traceroute_from_site(
     user: RequireOperator,
 ) -> TracerouteResult:
     """Trace the path from the device to an address."""
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
     await write_audit(
         session,
         actor=user,
@@ -414,7 +426,7 @@ async def traceroute_from_site(
 
 @router.get("/{site_id}/tunnels", response_model=list[TunnelHealth])
 async def site_tunnel_health(
-    site_id: str, session: SessionDep, _: RequireViewer
+    site_id: str, session: SessionDep, user: RequireViewer
 ) -> list[TunnelHealth]:
     """Every tunnel this device has an end of, and why each one is or is not up.
 
@@ -423,7 +435,7 @@ async def site_tunnel_health(
     different answer from "the tunnel is down", and conflating them is how an
     unreachable controller looks like a total outage.
     """
-    site = await _get_or_404(session, site_id)
+    site = await _get_or_404(session, site_id, user.tenant_id)
 
     wan_ids = select(Wan.id).where(Wan.site_id == site.id)
     links = (

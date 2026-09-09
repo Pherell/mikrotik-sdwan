@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
 
-from app.deps import RequireOperator, RequireViewer, SessionDep, write_audit
+from app.deps import RequireOperator, RequireViewer, SessionDep, get_owned, write_audit
 from app.drivers.base import ConfigOp, OpKind
 from app.drivers.factory import open_driver
 from app.models.enums import JobKind, JobState
@@ -18,20 +18,20 @@ from app.services.reconcile import apply_site, new_job, plan_site
 router = APIRouter(tags=["jobs"])
 
 
-async def _site_or_404(session: SessionDep, site_id: str) -> Site:
-    site = await session.get(Site, site_id)
+async def _site_or_404(session: SessionDep, site_id: str, tenant_id: str) -> Site:
+    site = await get_owned(session, Site, site_id, tenant_id)
     if site is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such site")
     return site
 
 
 @router.post("/sites/{site_id}/plan", response_model=PlanRead)
-async def plan(site_id: str, session: SessionDep, _: RequireViewer) -> PlanRead:
+async def plan(site_id: str, session: SessionDep, user: RequireViewer) -> PlanRead:
     """Render intent, diff it against the device, change nothing.
 
     Read-only, so a viewer may run it.
     """
-    site = await _site_or_404(session, site_id)
+    site = await _site_or_404(session, site_id, user.tenant_id)
     result = await plan_site(session, site)
     return PlanRead.model_validate(result.to_json())
 
@@ -50,7 +50,7 @@ async def apply(
     cycle is bounded by the rollback timeout, and a job that outlives its HTTP
     request would still hold the device lock.
     """
-    site = await _site_or_404(session, site_id)
+    site = await _site_or_404(session, site_id, user.tenant_id)
 
     if not body.dry_run and not body.confirm:
         raise HTTPException(
@@ -97,7 +97,7 @@ async def apply(
 
 @router.get("/sites/{site_id}/rollbacks")
 async def list_rollbacks(
-    site_id: str, session: SessionDep, _: RequireViewer
+    site_id: str, session: SessionDep, user: RequireViewer
 ) -> list[dict]:
     """Rollback schedulers still armed on the device.
 
@@ -105,7 +105,7 @@ async def list_rollbacks(
     and it will restore a perfectly good configuration when it fires. This is
     how an operator finds out before that happens.
     """
-    site = await _site_or_404(session, site_id)
+    site = await _site_or_404(session, site_id, user.tenant_id)
     async with open_driver(site) as driver:
         rows = await find_stale_rollbacks(driver)
     return [
@@ -128,7 +128,7 @@ async def clear_rollback(
     request: Request,
 ) -> None:
     """Disarm one leftover rollback."""
-    site = await _site_or_404(session, site_id)
+    site = await _site_or_404(session, site_id, user.tenant_id)
     async with open_driver(site) as driver:
         rows = await driver.read("/system/scheduler", {"name": name})
         if not rows:
@@ -180,8 +180,8 @@ async def list_jobs(
 
 
 @router.get("/jobs/{job_id}", response_model=JobRead)
-async def get_job(job_id: str, session: SessionDep, _: RequireViewer) -> Job:
-    job = await session.get(Job, job_id)
+async def get_job(job_id: str, session: SessionDep, user: RequireViewer) -> Job:
+    job = await get_owned(session, Job, job_id, user.tenant_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such job")
     return job
