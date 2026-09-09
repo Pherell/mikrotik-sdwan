@@ -103,8 +103,31 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
 
         lists.extend(_address_lists(policy, view.site_name))
         balanced = _strategy(policy) == "load_balance" and len(paths) > 1
+        sni_patterns = _sni_patterns(policy)
 
-        if balanced:
+        if sni_patterns and balanced:
+            # Rejected at the API layer when a policy is created or updated
+            # (see api.v1.policies._check_sni_load_balance_conflict) -- SNI's
+            # connection mark and PCC's classifier both want to own "the"
+            # connection mark for this policy, and combining them is exactly
+            # the overlap docs/model.md flags as needing its own design
+            # rather than a bolt-on. If a group's strategy changes to
+            # load_balance *after* a conflicting policy already exists, this
+            # is the backstop: fail loudly rather than render silently wrong
+            # mangle rules.
+            raise ValueError(
+                f"policy {policy.name!r} combines SNI matching with "
+                "load_balance, which is not supported"
+            )
+        elif sni_patterns:
+            # Same two-pass shape as PCC, for the same underlying reason: SNI
+            # is only visible in the TLS handshake, so the first packets are
+            # matched on tls-host and marked at the *connection* level, and
+            # every later packet of that connection inherits the mark instead
+            # of being re-inspected -- inspected, since only the handshake
+            # carries it.
+            mangle.extend(_sni_mangle_rules(policy, mark, sni_patterns))
+        elif balanced:
             # PCC needs the connection marked before it can be routed, so the
             # single mark-routing rule becomes a classifier pass followed by a
             # routing pass. Both are appended in order; the section is
@@ -220,6 +243,62 @@ def _match_props(policy: Policy) -> dict[str, object]:
     if dscp is not None:
         props["dscp"] = dscp
     return props
+
+
+def _sni_patterns(policy: Policy) -> list[str]:
+    return list(policy.app_group.sni_patterns or []) if policy.app_group else []
+
+
+def _sni_mangle_rules(policy: Policy, mark: str, patterns: list[str]) -> list[ConfigItem]:
+    """tls-host match -> connection mark -> routing mark, in that order.
+
+    tls-host only ever matches the handshake packet, so the pass that reads
+    it must mark the *connection* (passthrough=True: later classifiers still
+    need to see the packet) and a second pass turns that connection mark into
+    the routing mark every later packet actually needs. src/dst-address-list
+    narrowing from _match_props still applies -- an operator can scope SNI
+    matching to a destination range -- but protocol and port are forced to
+    tcp/443 regardless of anything an app group's own protocol/ports say:
+    SNI is a TLS-handshake property, not a policy-configurable one.
+    """
+    conn_mark = f"{mark}-sni"[:31]
+    items: list[ConfigItem] = []
+    for index, pattern in enumerate(patterns):
+        props = _match_props(policy)
+        props.update(
+            {
+                "chain": "prerouting",
+                "protocol": "tcp",
+                "dst-port": "443",
+                "tls-host": pattern,
+                "action": "mark-connection",
+                "new-connection-mark": conn_mark,
+                "passthrough": True,
+                "comment": owner_tag("policy", policy.name, f"sni-{index}"),
+            }
+        )
+        items.append(
+            ConfigItem(props=props, tag=owner_tag("policy", policy.name, f"sni-{index}"))
+        )
+
+    items.append(
+        ConfigItem(
+            props={
+                "chain": "prerouting",
+                "connection-mark": conn_mark,
+                "action": "mark-routing",
+                "new-routing-mark": mark,
+                "passthrough": False,
+                # Same tag the plain mangle rule would carry: whichever match
+                # mechanism a policy renders through, its mark-routing row is
+                # identified the same way, so per-policy counters (M7) do not
+                # need to know which path a policy took to find its own row.
+                "comment": owner_tag("policy", policy.name),
+            },
+            tag=owner_tag("policy", policy.name),
+        )
+    )
+    return items
 
 
 def _mangle_rule(policy: Policy, mark: str, site_name: str) -> ConfigItem:

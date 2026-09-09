@@ -59,6 +59,12 @@ class AppGroup(Base, UUIDPk, Timestamps, Tenanted):
     ports: Mapped[list | None] = mapped_column(JSONCol, default=list)
     protocol: Mapped[str | None] = mapped_column(String(16))
     dscp: Mapped[int | None] = mapped_column(Integer)
+    # TLS SNI glob patterns ("*.teams.microsoft.com"), matched with RouterOS's
+    # tls-host firewall matcher (6.41+). Real application identification, not
+    # DPI -- but plaintext SNI only, so Encrypted Client Hello defeats it, and
+    # prefix matching above remains the fallback. See app.render.policy for
+    # why this needs a second mangle pass rather than a new match property.
+    sni_patterns: Mapped[list | None] = mapped_column(JSONCol, default=list)
     builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_appgroup_tenant_name"),)

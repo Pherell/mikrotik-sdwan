@@ -162,6 +162,9 @@ async def create_policy(
     await _check_references(
         session, None, body.app_group_id, body.sdwan_group_id, tenant_id=user.tenant_id
     )
+    await _check_sni_load_balance_conflict(
+        session, body.app_group_id, body.sdwan_group_id, tenant_id=user.tenant_id
+    )
 
     policy = Policy(**body.model_dump(), tenant_id=user.tenant_id)
     session.add(policy)
@@ -203,6 +206,12 @@ async def update_policy(
         None,
         data.get("app_group_id"),
         data.get("sdwan_group_id"),
+        tenant_id=user.tenant_id,
+    )
+    await _check_sni_load_balance_conflict(
+        session,
+        data.get("app_group_id", policy.app_group_id),
+        data.get("sdwan_group_id", policy.sdwan_group_id),
         tenant_id=user.tenant_id,
     )
     for field, value in data.items():
@@ -254,6 +263,35 @@ async def _check_references(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such app group")
     if sdwan_group_id and await get_owned(session, SdwanGroup, sdwan_group_id, tenant_id) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No such SD-WAN group")
+
+
+async def _check_sni_load_balance_conflict(
+    session: SessionDep,
+    app_group_id: str | None,
+    sdwan_group_id: str | None,
+    *,
+    tenant_id: str,
+) -> None:
+    """SNI matching marks a connection to identify it; PCC (load_balance)
+    marks a connection to classify it into a bucket. Both want to be *the*
+    connection mark for this policy, and combining them is a real design
+    problem (see docs/model.md), not a validation this can wave through.
+    Existence of each id is _check_references's job; this checks whether the
+    two that exist are compatible.
+    """
+    if not app_group_id or not sdwan_group_id:
+        return
+    app_group = await get_owned(session, AppGroup, app_group_id, tenant_id)
+    group = await get_owned(session, SdwanGroup, sdwan_group_id, tenant_id)
+    if app_group is None or group is None:
+        return  # _check_references already reports the real problem
+    if (app_group.sni_patterns or []) and str(group.strategy) == "load_balance":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{app_group.name!r} matches by TLS SNI, which load_balance "
+            "cannot combine with yet. Point this policy at a failover "
+            "group, or remove the app group's SNI patterns.",
+        )
 
 
 # -- SD-WAN groups ----------------------------------------------------------

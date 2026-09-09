@@ -543,3 +543,118 @@ def test_a_single_member_group_never_balances() -> None:
     mangle = result["/ip/firewall/mangle"].items
     assert len(mangle) == 1
     assert mangle[0].props["action"] == "mark-routing"
+
+
+
+# -- TLS SNI matching --------------------------------------------------------
+#
+# SNI is only visible in the TLS handshake, so a policy that matches on it
+# renders two mangle passes instead of one: tls-host marks the *connection*,
+# and a second rule turns that connection mark into the routing mark every
+# later packet actually needs. See app.render.policy._sni_mangle_rules.
+
+
+def sni_group(patterns: list[str], **kw) -> AppGroup:
+    return AppGroup(
+        id="app-" + "-".join(patterns).replace("*", "").replace(".", "-"),
+        name=kw.pop("name", "teams"),
+        tenant_id="default",
+        sni_patterns=patterns,
+        prefixes=kw.pop("prefixes", []),
+        ports=kw.pop("ports", []),
+    )
+
+
+def test_an_sni_policy_renders_a_connection_mark_then_a_routing_mark() -> None:
+    p = policy(app_group=sni_group(["*.teams.microsoft.com"]))
+    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
+        "/ip/firewall/mangle"
+    ].items
+
+    assert len(mangle) == 2
+    conn, routing = mangle
+
+    assert conn.props["action"] == "mark-connection"
+    assert conn.props["tls-host"] == "*.teams.microsoft.com"
+    assert conn.props["protocol"] == "tcp"
+    assert conn.props["dst-port"] == "443"
+    assert conn.props["passthrough"] is True
+
+    assert routing.props["action"] == "mark-routing"
+    assert routing.props["connection-mark"] == conn.props["new-connection-mark"]
+    assert routing.props["new-routing-mark"] == "sdwan-voice"
+    assert routing.props["passthrough"] is False
+
+
+def test_every_sni_pattern_gets_its_own_connection_mark_rule_but_one_routing_rule() -> None:
+    p = policy(app_group=sni_group(["*.teams.microsoft.com", "*.office.com"]))
+    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
+        "/ip/firewall/mangle"
+    ].items
+
+    conn_rules = [i for i in mangle if i.props["action"] == "mark-connection"]
+    routing_rules = [i for i in mangle if i.props["action"] == "mark-routing"]
+    assert {r.props["tls-host"] for r in conn_rules} == {
+        "*.teams.microsoft.com", "*.office.com",
+    }
+    assert len(routing_rules) == 1
+    assert {r.props["new-connection-mark"] for r in conn_rules} == {
+        routing_rules[0].props["connection-mark"]
+    }
+
+
+def test_the_sni_routing_rule_carries_the_same_tag_a_plain_rule_would() -> None:
+    """Per-policy telemetry (M7) matches mangle rows by comment; that lookup
+    must not need to know which match mechanism a policy took."""
+    plain = sections_of(
+        view([policy()], mpls=[path("wan1", ["10.255.0.0"])])
+    )["/ip/firewall/mangle"].items[0]
+    sni = sections_of(
+        view([policy(app_group=sni_group(["*.teams.microsoft.com"]))],
+             mpls=[path("wan1", ["10.255.0.0"])])
+    )["/ip/firewall/mangle"].items[-1]
+
+    assert plain.props["comment"] == sni.props["comment"]
+    assert plain.tag == sni.tag
+
+
+def test_sni_narrows_by_destination_prefix_when_both_are_set() -> None:
+    p = policy(
+        app_group=sni_group(["*.teams.microsoft.com"]),
+        dst_prefixes=["10.9.0.0/24"],
+    )
+    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
+        "/ip/firewall/mangle"
+    ].items
+    conn = mangle[0]
+    assert conn.props["tls-host"] == "*.teams.microsoft.com"
+    assert "dst-address-list" in conn.props
+
+
+def test_a_policy_with_no_sni_patterns_renders_the_plain_single_rule() -> None:
+    """No behaviour change for every policy that existed before this."""
+    p = policy(app_group=sni_group([], name="plain-group", prefixes=["10.9.0.0/24"]))
+    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
+        "/ip/firewall/mangle"
+    ].items
+    assert len(mangle) == 1
+    assert mangle[0].props["action"] == "mark-routing"
+    assert "tls-host" not in mangle[0].props
+
+
+def test_sni_combined_with_load_balance_is_refused_by_the_renderer() -> None:
+    """Rejected earlier at the API layer (see test_api.py-style validation in
+    api.v1.policies); this is the backstop for a group whose strategy changed
+    to load_balance after a conflicting policy already existed."""
+    p = policy(
+        app_group=sni_group(["*.teams.microsoft.com"]),
+        sdwan_group=balanced(["fibre", "lte"], [1, 1]),
+    )
+    with pytest.raises(ValueError, match="load_balance"):
+        render_policies(
+            view(
+                [p],
+                fibre=[path("fibre", ["10.255.0.1"])],
+                lte=[path("lte", ["10.255.1.1"])],
+            )
+        )

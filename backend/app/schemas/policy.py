@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from ipaddress import ip_network
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -48,6 +49,14 @@ class SlaProfileRead(SlaProfileBase):
     detection_seconds: int = 0
 
 
+# A tls-host pattern: hostname characters plus the single leading "*." a
+# glob needs. Rejects anything that could break out of the RouterOS
+# property it is rendered into -- the same reasoning PingRequest's target
+# validator gives for a console command line.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+_SNI_PATTERN = re.compile(rf"^(\*\.)?{_LABEL}(\.{_LABEL})*$")
+
+
 class AppGroupBase(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
@@ -55,8 +64,20 @@ class AppGroupBase(BaseModel):
     ports: list[int] = Field(default_factory=list)
     protocol: str | None = None
     dscp: int | None = Field(default=None, ge=0, le=63)
+    sni_patterns: list[str] = Field(default_factory=list)
 
     _check_prefixes = field_validator("prefixes")(_prefixes)
+
+    @field_validator("sni_patterns")
+    @classmethod
+    def _check_sni_patterns(cls, v: list[str]) -> list[str]:
+        for pattern in v:
+            if not _SNI_PATTERN.match(pattern):
+                raise ValueError(
+                    f"{pattern!r} is not a valid SNI pattern -- a hostname, "
+                    "optionally with one leading '*.'"
+                )
+        return v
 
 
 class AppGroupCreate(AppGroupBase):
