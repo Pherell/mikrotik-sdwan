@@ -197,3 +197,40 @@ def api_secret_matches(secret: str, stored_hash: str) -> bool:
     leak the secret of a *known* token rather than merely its existence.
     """
     return secrets.compare_digest(hash_api_secret(secret), stored_hash)
+
+
+# -- Enrollment tokens --------------------------------------------------------
+
+# A one-time bootstrap credential, fetched over an unauthenticated URL by a
+# factory-default router that has no other credentials yet. Deliberately its
+# own functions rather than new_api_token() with a different label: an
+# enrollment credential is never presented as a Bearer token and never
+# reaches current_user()'s split_api_token() path, and conflating the two
+# would make it too easy for a future change to one to silently change the
+# other's contract. hash_api_secret / api_secret_matches are reused as-is --
+# the digest and the constant-time comparison are generic, not label-specific.
+ENROLL_LABEL = "enroll"
+_ENROLL_PREFIX_BYTES = 6
+_ENROLL_SECRET_BYTES = 32
+
+
+def new_enrollment_token() -> tuple[str, str, str]:
+    """Mint an enrollment token. Returns (whole credential, prefix, hash).
+
+    Shown once, in the response to creating it -- the same discipline as
+    new_api_token, for the same reason.
+    """
+    prefix = secrets.token_hex(_ENROLL_PREFIX_BYTES)
+    secret = secrets.token_urlsafe(_ENROLL_SECRET_BYTES)
+    return f"{ENROLL_LABEL}_{prefix}_{secret}", prefix, hash_api_secret(secret)
+
+
+def split_enrollment_token(credential: str) -> tuple[str, str] | None:
+    """(prefix, secret) from a whole credential, or None if it is not one."""
+    parts = credential.split("_", 2)
+    if len(parts) != 3 or parts[0] != ENROLL_LABEL:
+        return None
+    prefix, secret = parts[1], parts[2]
+    if not prefix or not secret:
+        return None
+    return prefix, secret

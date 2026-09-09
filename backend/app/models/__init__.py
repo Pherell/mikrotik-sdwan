@@ -5,6 +5,7 @@ autogenerate and the test fixtures both rely on.
 """
 
 from app.models.base import Base
+from app.models.enrollment import EnrollmentToken
 from app.models.fabric import Fabric, FabricMember, Link
 from app.models.job import AuditEvent, Job
 from app.models.policy import AppGroup, Policy, SdwanGroup, SlaProfile
@@ -18,6 +19,7 @@ __all__ = [
     "AppGroup",
     "AuditEvent",
     "Base",
+    "EnrollmentToken",
     "Fabric",
     "FabricMember",
     "Job",

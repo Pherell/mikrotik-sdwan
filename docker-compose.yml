@@ -10,6 +10,9 @@ x-backend-env: &backend-env
   SDWAN_BOOTSTRAP_ADMIN_EMAIL: ${SDWAN_BOOTSTRAP_ADMIN_EMAIL:-admin@local}
   SDWAN_BOOTSTRAP_ADMIN_PASSWORD: ${SDWAN_BOOTSTRAP_ADMIN_PASSWORD:?set SDWAN_BOOTSTRAP_ADMIN_PASSWORD in .env}
   SDWAN_CORS_ORIGINS: ${SDWAN_CORS_ORIGINS:-http://localhost:8080}
+  # M8 enrollment: the address a factory-default router calls back to.
+  # No default -- see app/config.py's public_url docstring for why.
+  SDWAN_PUBLIC_URL: ${SDWAN_PUBLIC_URL:-}
 
 services:
   db:

@@ -73,6 +73,15 @@ class Settings(BaseSettings):
     # the plan's own "one poller pass per site, every 30 seconds by default".
     telemetry_poll_seconds: int = 30
 
+    # M8 provisioning: the address a factory-default router calls back to.
+    # Baked into every generated bootstrap script (it is on the far side of a
+    # /tool fetch run by a device that has no other way to find the
+    # controller), so it has to be the address actually reachable from the
+    # field -- not localhost, not a Docker-internal name. No default: a
+    # silently-wrong URL baked into a script already pasted into a real
+    # router is worse than refusing to mint the token at all.
+    public_url: str | None = None
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:

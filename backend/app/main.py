@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from app.api.v1 import auth as auth_api
+from app.api.v1 import enrollment as enrollment_api
 from app.api.v1 import fabrics as fabrics_api
 from app.api.v1 import jobs as jobs_api
 from app.api.v1 import logs as logs_api
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(logs_api.router, prefix="/api/v1")
     app.include_router(tokens_api.router, prefix="/api/v1")
     app.include_router(telemetry_api.router, prefix="/api/v1")
+    app.include_router(enrollment_api.router, prefix="/api/v1")
     return app
 
 
