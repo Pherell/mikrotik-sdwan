@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -389,3 +390,237 @@ async def test_clear_refuses_a_scheduler_the_controller_does_not_own(
 
     assert resp.status_code == 400
     assert len(ros.rows("system/scheduler")) == 1
+
+
+
+# -- maintenance windows ------------------------------------------------------
+#
+# scheduled_for queues an apply instead of pushing it; app.tasks.worker.
+# run_scheduled_applies is what actually pushes it once the window opens.
+# Called directly here rather than through arq/redis: it takes ctx only
+# because arq's job-function signature requires one, and never reads it.
+
+
+async def test_scheduling_an_apply_does_not_push_immediately(api) -> None:
+    client, _, ros = api
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+
+    resp = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={"confirm": True, "scheduled_for": "2099-01-01T00:00:00Z"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "queued"
+    assert body["scheduled_for"] is not None
+    assert ros.rows("interface/bridge") == []  # nothing pushed
+
+
+async def test_a_scheduled_for_already_in_the_past_applies_immediately(api) -> None:
+    """Scheduling is additive: an already-past instant is not an error, it is
+    just not a reason to wait."""
+    client, _, ros = api
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+
+    resp = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={"confirm": True, "scheduled_for": "2000-01-01T00:00:00Z"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "succeeded"
+    assert ros.rows("interface/bridge") != []
+
+
+async def test_window_closes_at_without_scheduled_for_is_rejected(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+
+    resp = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={"confirm": True, "window_closes_at": "2099-01-01T00:00:00Z"},
+    )
+    assert resp.status_code == 400
+    assert "scheduled_for" in resp.json()["detail"]
+
+
+async def test_a_window_that_closes_before_it_opens_is_rejected(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+
+    resp = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={
+            "confirm": True,
+            "scheduled_for": "2099-01-02T00:00:00Z",
+            "window_closes_at": "2099-01-01T00:00:00Z",
+        },
+    )
+    assert resp.status_code == 400
+
+
+async def test_a_second_apply_is_blocked_while_one_is_scheduled(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+    await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={"confirm": True, "scheduled_for": "2099-01-01T00:00:00Z"},
+    )
+
+    resp = await client.post(
+        f"/sites/{site_id}/apply", headers=headers, json={"confirm": True}
+    )
+    assert resp.status_code == 409
+
+
+async def test_cancelling_a_scheduled_apply_unblocks_the_site(api) -> None:
+    client, _, ros = api
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+    scheduled = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={"confirm": True, "scheduled_for": "2099-01-01T00:00:00Z"},
+    )
+    job_id = scheduled.json()["id"]
+
+    cancelled = await client.post(f"/jobs/{job_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["state"] == "cancelled"
+
+    # The site is free again: a normal apply now goes through.
+    resp = await client.post(
+        f"/sites/{site_id}/apply", headers=headers, json={"confirm": True}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "succeeded"
+    assert ros.rows("interface/bridge") != []
+
+
+async def test_cancelling_a_job_that_already_ran_is_refused(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+    applied = await client.post(
+        f"/sites/{site_id}/apply", headers=headers, json={"confirm": True}
+    )
+    job_id = applied.json()["id"]
+
+    resp = await client.post(f"/jobs/{job_id}/cancel", headers=headers)
+    assert resp.status_code == 409
+
+
+async def test_run_scheduled_applies_pushes_a_due_job(api, monkeypatch) -> None:
+    from app.models.enums import JobKind
+    from app.tasks.worker import run_scheduled_applies
+
+    client, maker, ros = api
+    # run_scheduled_applies opens its own session via app.db.SessionLocal,
+    # which the HTTP fixture never touches -- point it at this test's own
+    # in-memory engine instead of the app's default (tableless) one.
+    monkeypatch.setattr("app.tasks.worker.SessionLocal", maker)
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+    # Scheduled for a real future instant, so the API queues it rather than
+    # applying immediately -- then backdated in the DB to simulate the
+    # window having opened, the same way the token-revocation tests control
+    # a timestamp the API itself cannot be asked to fake.
+    scheduled = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={"confirm": True, "scheduled_for": "2099-01-01T00:00:00Z"},
+    )
+    job_id = scheduled.json()["id"]
+    assert scheduled.json()["state"] == "queued"
+
+    async with maker() as s:
+        job = await s.get(Job, job_id)
+        job.scheduled_for = datetime(2000, 1, 1, tzinfo=UTC)
+        await s.commit()
+
+    result = await run_scheduled_applies({})
+    assert result["pushed"] == 1
+
+    async with maker() as s:
+        job = await s.get(Job, job_id)
+        assert job.state == JobState.succeeded
+        assert job.kind == JobKind.apply
+    assert ros.rows("interface/bridge") != []
+
+
+async def test_run_scheduled_applies_leaves_a_not_yet_due_job_alone(
+    api, monkeypatch
+) -> None:
+    from app.tasks.worker import run_scheduled_applies
+
+    client, maker, ros = api
+    monkeypatch.setattr("app.tasks.worker.SessionLocal", maker)
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+    scheduled = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={"confirm": True, "scheduled_for": "2099-01-01T00:00:00Z"},
+    )
+    job_id = scheduled.json()["id"]
+
+    result = await run_scheduled_applies({})
+    assert result["pushed"] == 0
+
+    async with maker() as s:
+        job = await s.get(Job, job_id)
+        assert job.state == JobState.queued
+    assert ros.rows("interface/bridge") == []
+
+
+async def test_run_scheduled_applies_fails_a_job_whose_window_closed(
+    api, monkeypatch
+) -> None:
+    """The point of a window: late is not the same as now, and a missed one
+    must say so rather than push anyway."""
+    from app.tasks.worker import run_scheduled_applies
+
+    client, maker, ros = api
+    monkeypatch.setattr("app.tasks.worker.SessionLocal", maker)
+    headers = await _auth(client)
+    site_id = await _make_site(client, headers)
+    scheduled = await client.post(
+        f"/sites/{site_id}/apply",
+        headers=headers,
+        json={
+            "confirm": True,
+            "scheduled_for": "2099-01-01T00:00:00Z",
+            "window_closes_at": "2099-01-01T02:00:00Z",
+        },
+    )
+    job_id = scheduled.json()["id"]
+    assert scheduled.json()["state"] == "queued"
+
+    # Backdate both ends of the window into the past: it opened and closed
+    # while nothing was watching, which is exactly the case this guards.
+    async with maker() as s:
+        job = await s.get(Job, job_id)
+        job.scheduled_for = datetime(2000, 1, 1, tzinfo=UTC)
+        job.window_closes_at = datetime(2000, 1, 1, 2, tzinfo=UTC)
+        await s.commit()
+
+    result = await run_scheduled_applies({})
+    assert result["missed"] == 1
+    assert result["pushed"] == 0
+
+    async with maker() as s:
+        job = await s.get(Job, job_id)
+        assert job.state == JobState.failed
+        assert "window" in (job.error or "").lower()
+    assert ros.rows("interface/bridge") == []

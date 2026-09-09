@@ -46,10 +46,21 @@ class JobRead(BaseModel):
     started_at: UtcDatetime | None
     finished_at: UtcDatetime | None
     created_at: UtcDatetime
+    scheduled_for: UtcDatetime | None = None
+    window_closes_at: UtcDatetime | None = None
 
 
 class ApplyRequest(BaseModel):
     # Refuse to push unless the operator confirms. Restoring a backup reboots
-    # the router, so this is not a click-through.
+    # the router, so this is not a click-through. Required whether the push
+    # happens now or is queued for a window: scheduling *is* the approval,
+    # so it needs the same confirmation an immediate apply does.
     confirm: bool = False
     dry_run: bool = False
+    # Set to queue this apply for a maintenance window instead of pushing it
+    # now. Omitted or in the past: applies immediately, exactly as before.
+    scheduled_for: UtcDatetime | None = None
+    # Optional. Past this instant the window has closed: the sweep marks the
+    # job failed rather than push outside the hours it was approved for.
+    # Meaningless without scheduled_for; rejected on its own by the endpoint.
+    window_closes_at: UtcDatetime | None = None

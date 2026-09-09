@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.deps import RequireOperator, RequireViewer, SessionDep, get_owned, write_audit
 from app.drivers.base import ConfigOp, OpKind
 from app.drivers.factory import open_driver
+from app.models.base import utcnow
 from app.models.enums import JobKind, JobState
 from app.models.job import Job
 from app.models.site import Site
@@ -58,6 +59,16 @@ async def apply(
             "Set confirm=true to apply. If the push breaks management access the "
             "router restores its pre-apply backup, which reboots it.",
         )
+    if body.window_closes_at and not body.scheduled_for:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "window_closes_at needs scheduled_for -- a window has an open "
+            "and a close.",
+        )
+    if body.window_closes_at and body.scheduled_for and body.window_closes_at <= body.scheduled_for:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "window_closes_at must be after scheduled_for"
+        )
 
     running = await session.scalar(
         select(Job).where(
@@ -69,13 +80,40 @@ async def apply(
     if running is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"Job {running.id} is already running against this site",
+            f"Job {running.id} is already running or scheduled against this site",
         )
 
     job = new_job(site, JobKind.apply, user.id)
+    job.scheduled_for = body.scheduled_for
+    job.window_closes_at = body.window_closes_at
     session.add(job)
-    await session.flush()
 
+    # A future scheduled_for: leave it queued for
+    # app.tasks.worker.run_scheduled_applies to pick up when its window
+    # opens. Omitted, or already in the past, applies exactly as before --
+    # scheduling a maintenance window is additive, not a second code path
+    # for what was already the common case.
+    is_scheduled = body.scheduled_for is not None and body.scheduled_for > utcnow()
+    if is_scheduled:
+        await session.flush()
+        await write_audit(
+            session,
+            actor=user,
+            action="site.apply.scheduled",
+            object_type="site",
+            object_id=site.id,
+            detail={
+                "job": job.id,
+                "scheduled_for": body.scheduled_for.isoformat() if body.scheduled_for else None,
+                "window_closes_at": (
+                    body.window_closes_at.isoformat() if body.window_closes_at else None
+                ),
+            },
+            request=request,
+        )
+        return job
+
+    await session.flush()
     await apply_site(session, site, job, dry_run=body.dry_run)
 
     await write_audit(
@@ -184,4 +222,37 @@ async def get_job(job_id: str, session: SessionDep, user: RequireViewer) -> Job:
     job = await get_owned(session, Job, job_id, user.tenant_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such job")
+    return job
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobRead)
+async def cancel_job(
+    job_id: str, session: SessionDep, user: RequireOperator, request: Request
+) -> Job:
+    """Withdraw an apply queued for a window before it runs.
+
+    Only while it is still queued: once run_scheduled_applies has picked a
+    job up its state is running or later, and cancelling a push already in
+    flight is a different, more dangerous operation than this endpoint
+    means to be -- the dead-man rollback exists for that case instead.
+    """
+    job = await get_owned(session, Job, job_id, user.tenant_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such job")
+    if job.state != JobState.queued:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Job is {job.state}, not queued -- nothing to cancel",
+        )
+    job.state = JobState.cancelled
+    job.finished_at = utcnow()
+    await write_audit(
+        session,
+        actor=user,
+        action="site.apply.cancelled",
+        object_type="job",
+        object_id=job.id,
+        detail={"site_id": job.site_id},
+        request=request,
+    )
     return job

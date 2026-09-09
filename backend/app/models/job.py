@@ -50,6 +50,21 @@ class Job(Base, UUIDPk, Timestamps, Tenanted):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # M10 maintenance windows. Null on every job before this and on every
+    # apply that still runs the old way, now or never. Set together: an
+    # apply queued for a window is approved *at scheduling time* (confirm is
+    # still required to create it) and pushed unattended once the window
+    # opens, by app.tasks.worker.run_scheduled_applies -- reusing
+    # services.reconcile.apply_site exactly as the interactive endpoint
+    # does, on the same Job row rather than a new one.
+    scheduled_for: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    # Optional. Past this instant the window has closed: the sweep marks the
+    # job failed rather than push a change outside the hours it was approved
+    # for, which is the entire point of naming a window in the first place.
+    window_closes_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
 
 class AuditEvent(Base, UUIDPk, Timestamps, Tenanted):
     """Append-only record of who did what. Written for auth events and every

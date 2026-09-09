@@ -259,8 +259,8 @@ issue a certificate per device at enrolment, distribute the root, set
 
 ### The rest
 
-- **Maintenance windows** — queue applies for an approved window rather than now
-- **Token revocation** — a stolen JWT is currently valid until it expires
+- ~~**Maintenance windows**~~ — done. Job gained scheduled_for/window_closes_at; POST /sites/{id}/apply with scheduled_for queues rather than pushes, a worker cron (run_scheduled_applies) pushes it once the window opens and fails it with a clear reason if it was never picked up before window_closes_at, and POST /jobs/{id}/cancel unblocks the site again while it's still queued.
+- ~~**Token revocation**~~ — done (see below). A stolen JWT can now be killed via User.tokens_valid_after, self-service or admin-forced.
 - ~~**Multi-tenancy enforcement**~~ — done. Every list endpoint filtered by tenant_id already; every by-id fetch did not, which was worse than "nothing filters on it" suggests -- one tenant could reach another's site, fabric, credentials, or user list by UUID. Closed across the whole API surface via a single deps.get_owned() helper, with a regression test per entity (tests/test_tenant_isolation.py).
 - **QoS** — shape and prioritise per policy class, not just steer
 - **Config backup/restore of the controller** — the intent export exists; a full
