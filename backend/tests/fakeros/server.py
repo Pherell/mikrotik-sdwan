@@ -97,6 +97,8 @@ class FakeRouterOS:
             # it to diff, and a 404 there reads as "unreadable" and fails the
             # apply.
             "routing/bgp/instance",
+            # Always present; the policy "any" fallback lives here.
+            "routing/rule",
         ):
             self.menus[always_present] = []
         if wireguard:
@@ -212,6 +214,12 @@ class FakeRouterOS:
             return JSONResponse(
                 {"detail": "unknown parameter comment"}, status_code=400
             )
+        # ROS 7 netwatch has no "thr-latency"; the latency fail threshold is
+        # thr-avg (thr-max for peak). Mirror the rejection.
+        if path == "tool/netwatch" and "thr-latency" in body:
+            return JSONResponse(
+                {"detail": "unknown parameter thr-latency"}, status_code=400
+            )
         # ROS 7.24's /routing/bgp/template has no router-id (it lives on the
         # instance now) and names the address family "afi", not
         # "address-families". Both are rejected as unknown parameters.
@@ -282,6 +290,11 @@ class FakeRouterOS:
                 body["address"] = addr + "/32"
             if str(body.get("passive", "")).lower() in ("false", ""):
                 body.pop("passive", None)
+        # ROS stores a routing table's fib flag but reads it back as an empty
+        # string, so a render that keeps sending fib=true diffs dirty forever
+        # unless it ignores the field. Model that here.
+        if path == "routing/table" and str(body.get("fib", "")).lower() in ("true", "yes"):
+            body["fib"] = ""
         if path not in self.menus:
             self.menus[path] = []
         row = self._with_id(dict(body))

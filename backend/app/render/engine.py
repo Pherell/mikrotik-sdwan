@@ -56,6 +56,7 @@ ORDER: Final[dict[str, int]] = {
     "tunnel": 40,         # gre / ipip / wireguard interfaces
     "address": 50,        # ip addresses on those interfaces
     "routing": 60,        # bgp connections, static routes
+    "routing_rule": 62,   # /routing/rule -- references a table, so after 15
     "firewall": 70,       # mangle marks, nat
     "policy": 80,         # routing rules and tables
     "monitoring": 90,     # netwatch probes

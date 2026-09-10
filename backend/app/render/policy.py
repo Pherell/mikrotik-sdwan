@@ -81,13 +81,14 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     if not view.policies:
         # Still emit the empty sections: a policy that was deleted must have its
         # rules swept off the device.
-        return _sections(view, [], [], [], [], [])
+        return _sections(view, [], [], [], [], [], [])
 
     lists: list[ConfigItem] = []
     mangle: list[ConfigItem] = []
     tables: list[ConfigItem] = []
     routes: list[ConfigItem] = []
     probes: list[ConfigItem] = []
+    rules: list[ConfigItem] = []
 
     seen_marks: set[str] = set()
     for policy in sorted(view.policies, key=lambda p: (p.priority, p.name)):
@@ -143,12 +144,18 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
                 tables.extend(_balanced_tables(mark, paths, view.site_name))
                 routes.extend(_balanced_routes(policy, mark, paths, view.site_name))
                 probes.extend(_probes(policy, paths, view.site_name, mark=mark))
+                rules.extend(
+                    _fallback_rules(
+                        policy, [_bucket_mark(mark, i) for i in range(len(paths))]
+                    )
+                )
             else:
                 tables.append(_routing_table(mark, view.site_name))
                 routes.extend(_routes(policy, mark, paths, view.site_name))
                 probes.extend(_probes(policy, paths, view.site_name))
+                rules.extend(_fallback_rules(policy, [mark]))
 
-    return _sections(view, lists, mangle, tables, routes, probes)
+    return _sections(view, lists, mangle, tables, routes, probes, rules)
 
 
 # -- pieces -----------------------------------------------------------------
@@ -352,20 +359,8 @@ def _routes(
                     tag=f"{tag}:{path.wan_name}",
                 )
             )
-    if policy.fallback == "any":
-        # Last resort: fall back to whatever the main table would have done.
-        items.append(
-            ConfigItem(
-                props={
-                    "dst-address": "0.0.0.0/0",
-                    "gateway": "main",
-                    "routing-table": mark,
-                    "distance": 250,
-                    "comment": f"{tag}:fallback",
-                },
-                tag=f"{tag}:fallback",
-            )
-        )
+    # The "any" fallback is a /routing/rule (action=lookup), not a route:
+    # RouterOS 7 has no gateway-is-a-table route. See _fallback_rules.
     return items
 
 
@@ -531,20 +526,36 @@ def _balanced_routes(
                         tag=f"{tag}:{table}:{path.wan_name}",
                     )
                 )
-        if policy.fallback == "any":
-            items.append(
-                ConfigItem(
-                    props={
-                        "dst-address": "0.0.0.0/0",
-                        "gateway": "main",
-                        "routing-table": table,
-                        "distance": 250,
-                        "comment": f"{tag}:{table}:fallback",
-                    },
-                    tag=f"{tag}:{table}:fallback",
-                )
-            )
+        # "any" fallback for this bucket table is a /routing/rule, not a route
+        # (RouterOS 7 has no gateway=main). See _fallback_rules.
     return items
+
+
+def _fallback_rules(policy: Policy, table_names: list[str]) -> list[ConfigItem]:
+    """The "any" fallback, as a /routing/rule per table.
+
+    RouterOS 7 has no route whose gateway is another table, so "if this table
+    has no live route, use the main table" is expressed as a routing rule with
+    ``action=lookup`` -- which, unlike ``lookup-only-in-table``, falls through
+    to the next rule (ultimately the main table) on a miss. Without a rule a
+    routing-mark is looked up only in its own table and dropped on a miss, so
+    a non-"any" policy needs none: strict is the default.
+    """
+    if policy.fallback != "any":
+        return []
+    tag = owner_tag("policy", policy.name, "rule")
+    return [
+        ConfigItem(
+            props={
+                "routing-mark": table,
+                "action": "lookup",  # not lookup-only-in-table: allow fallthrough
+                "table": table,
+                "comment": f"{tag}:{table}",
+            },
+            tag=f"{tag}:{table}",
+        )
+        for table in table_names
+    ]
 
 
 def _probes(
@@ -583,7 +594,10 @@ def _probes(
                 "interval": f"{sla.probe_interval_seconds}s",
                 "packet-count": sla.probe_count,
                 "thr-loss-percent": sla.loss_percent,
-                "thr-latency": f"{sla.latency_ms}ms",
+                # ROS 7 netwatch has no "thr-latency"; the latency fail
+                # threshold is thr-avg (fail above this average RTT). thr-max
+                # exists too, for peak RTT; avg is the SLA metric we mean.
+                "thr-avg": f"{sla.latency_ms}ms",
                 "disabled": False,
                 # Demote rather than delete: the route stays in the table so the
                 # path can be re-preferred the moment it recovers.
@@ -630,6 +644,7 @@ def _sections(
     tables: list[ConfigItem],
     routes: list[ConfigItem],
     probes: list[ConfigItem],
+    rules: list[ConfigItem],
 ) -> list[ConfigSection]:
     scope = owner_tag("policy") + ":"
     return [
@@ -645,6 +660,9 @@ def _sections(
             "routing_table",  # before the mangle (70) and routes (80) using it
             owner=scope,
             key=("name",),
+            # ROS returns fib as an empty string even when it was set true, so
+            # comparing it diffs dirty on every run. It is set once on create.
+            ignore=("fib",),
             items=tables,
         ),
         section(
@@ -652,6 +670,13 @@ def _sections(
             "policy",
             owner=scope,
             key=("dst-address", "gateway", "routing-table"),
+            # distance is netwatch's at runtime: its scripts raise a breaching
+            # path by SLA_PENALTY and restore it on recovery. The reconciler
+            # sets the baseline on create and must not re-assert it, or every
+            # apply would briefly un-demote a path netwatch had correctly
+            # dropped. (Verified on hardware: a down tunnel sat at 101, and
+            # re-planning wanted it back at 1.)
+            ignore=("distance",),
             items=routes,
         ),
         section(
@@ -669,6 +694,13 @@ def _sections(
             key=("host",),
             ignore=("status", "since", "sent-count", "loss-count", "rtt-avg", "rtt-jitter"),
             items=probes,
+        ),
+        section(
+            "/routing/rule",
+            "routing_rule",
+            owner=scope,
+            key=("comment",),
+            items=rules,
         ),
     ]
 

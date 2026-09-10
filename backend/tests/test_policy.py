@@ -76,6 +76,9 @@ def test_a_policy_renders_the_whole_chain() -> None:
         "/ip/route",
         "/ip/firewall/mangle",
         "/tool/netwatch",
+        # fallback="any" (the default) renders a lookup rule for the main-table
+        # fallback -- ROS 7 has no gateway=main route.
+        "/routing/rule",
     }
     assert s["/ip/firewall/mangle"].items[0].props["new-routing-mark"] == "sdwan-voice"
     assert s["/routing/table"].items[0].props["name"] == "sdwan-voice"
@@ -127,16 +130,25 @@ def test_cheaper_uplink_wins_within_the_same_tag() -> None:
     assert distances["10.255.0.0"] < distances["10.255.0.4"]
 
 
-def test_fallback_any_adds_a_last_resort_route() -> None:
+def test_fallback_any_adds_a_lookup_rule() -> None:
+    # RouterOS 7 has no gateway=main route; "fall back to main" is a
+    # /routing/rule with action=lookup (which falls through on a miss, unlike
+    # lookup-only-in-table).
     s = sections_of(view([policy(fallback="any")], mpls=[path("wan1", ["10.255.0.0"])]))
-    fallback = [i for i in s["/ip/route"].items if i.props["gateway"] == "main"]
+    rules = s["/routing/rule"].items
 
-    assert len(fallback) == 1
-    assert fallback[0].props["distance"] == 250
+    assert len(rules) == 1
+    assert rules[0].props["action"] == "lookup"
+    # The rule points its own mark's table at itself; the miss falls through.
+    assert rules[0].props["routing-mark"] == rules[0].props["table"]
+    assert all(i.props["gateway"] != "main" for i in s["/ip/route"].items)
 
 
 def test_fallback_drop_leaves_no_escape_route() -> None:
+    # drop = strict: no fallthrough rule, so a marked packet with no live route
+    # is dropped rather than leaking to the main table.
     s = sections_of(view([policy(fallback="drop")], mpls=[path("wan1", ["10.255.0.0"])]))
+    assert s["/routing/rule"].items == []
     assert all(i.props["gateway"] != "main" for i in s["/ip/route"].items)
 
 
@@ -221,7 +233,7 @@ def test_netwatch_carries_the_profile_thresholds() -> None:
     props = s["/tool/netwatch"].items[0].props
 
     assert props["thr-loss-percent"] == 2
-    assert props["thr-latency"] == "150ms"
+    assert props["thr-avg"] == "150ms"  # ROS7 latency threshold is thr-avg
     assert props["thr-jitter"] == "30ms"
     assert props["interval"] == "5s"
     assert props["packet-count"] == 20

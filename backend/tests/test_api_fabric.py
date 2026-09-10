@@ -829,11 +829,16 @@ async def test_policy_steers_onto_the_preferred_uplink(api) -> None:
     routes = {r["gateway"]: r["distance"] for r in spoke.rows("ip/route")}
     assert routes["10.255.0.0"] == "1"   # via wan1
     assert routes["10.255.0.2"] == "2"   # via wan2
-    assert routes["main"] == "250"       # fallback
+    # The "any" fallback to main is a routing rule (action=lookup), not a
+    # route -- ROS 7 has no gateway=main.
+    rules = spoke.rows("routing/rule")
+    assert any(
+        r["action"] == "lookup" and r["routing-mark"] == "sdwan-voice" for r in rules
+    )
 
     probes = {p["host"]: p for p in spoke.rows("tool/netwatch")}
     assert probes["10.255.0.0"]["thr-loss-percent"] == "2"
-    assert probes["10.255.0.0"]["thr-latency"] == "150ms"
+    assert probes["10.255.0.0"]["thr-avg"] == "150ms"
     # Breaching demotes below the backup but stays above the fallback.
     assert "distance=101" in probes["10.255.0.0"]["down-script"]
     assert "distance=1" in probes["10.255.0.0"]["up-script"]
