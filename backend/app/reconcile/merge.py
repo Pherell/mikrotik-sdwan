@@ -53,6 +53,7 @@ def merge_sections(sections: list[ConfigSection]) -> list[ConfigSection]:
                 ignore=section.ignore,
                 ordered=section.ordered,
                 order=section.order,
+                comment_capable=section.comment_capable,
             )
             continue
 
@@ -68,6 +69,9 @@ def merge_sections(sections: list[ConfigSection]) -> list[ConfigSection]:
         existing.write_once = tuple(sorted({*existing.write_once, *section.write_once}))
         existing.ignore = tuple(sorted({*existing.ignore, *section.ignore}))
         existing.ordered = existing.ordered or section.ordered
+        # If any contributor's menu rejects a comment, the merged section must
+        # too -- one comment-incapable renderer poisons the whole path.
+        existing.comment_capable = existing.comment_capable and section.comment_capable
         # Apply at the earliest point any contributor asked for: a dependency
         # is satisfied by being early, never by being late.
         existing.order = min(existing.order, section.order)

@@ -79,8 +79,21 @@ class ConfigSection:
     before: dict[str, Any] | None = None
     ordered: bool = False           # firewall/mangle care about position
     order: int = 50                 # apply order; see app.render.engine.ORDER
+    # A few RouterOS menus reject a comment entirely -- /ip/ipsec/profile is
+    # the one this project hits. Those rows cannot carry the ownership comment
+    # every other menu is tracked by, so a comment-less section is owned by
+    # name instead: a live row is ours only if its name is one this section
+    # currently renders. The trade-off is no orphan sweep for such a menu (a
+    # row we stop rendering is left, not deleted) -- correct by omission is
+    # far safer here than a name-prefix guess that could delete a user's own
+    # profile.
+    comment_capable: bool = True
 
     def owns(self, row: dict[str, Any]) -> bool:
+        if not self.comment_capable:
+            return row.get("name") in {
+                it.props.get("name") for it in self.items if it.props.get("name")
+            }
         return str(row.get("comment", "")).startswith(self.owner_tag)
 
 

@@ -642,7 +642,7 @@ def _sections(
         ),
         section(
             "/routing/table",
-            "policy",
+            "routing_table",  # before the mangle (70) and routes (80) using it
             owner=scope,
             key=("name",),
             items=tables,

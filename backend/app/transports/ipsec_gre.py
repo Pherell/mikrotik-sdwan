@@ -91,9 +91,14 @@ class IpsecGreTransport:
         tag = f"{link.tag}:profile"
         return section(
             "/ip/ipsec/profile",
-            "crypto",
+            "crypto_profile",
             owner=tag,
             key=("name",),
+            # RouterOS 7's /ip/ipsec/profile rejects a comment ("unknown
+            # parameter comment"), unlike every other ipsec menu. Owned by
+            # name instead. Verified against ROS 7.24: peer/proposal/policy
+            # all take a comment; only profile does not.
+            comment_capable=False,
             items=[
                 ConfigItem(
                     props={
@@ -119,13 +124,19 @@ class IpsecGreTransport:
             "pfs-group": params["pfs_group"],
             "lifetime": params["lifetime"],
         }
-        # AEAD ciphers carry their own integrity; RouterOS rejects a separate
-        # auth algorithm alongside GCM.
-        if not _is_aead(str(params["enc_algorithm"])):
+        # AEAD ciphers carry their own integrity. RouterOS rejects a proposal
+        # that names an auth algorithm alongside GCM ("AEAD already provides
+        # authentication") -- and rejects the sha1 default it would otherwise
+        # keep if the field is simply omitted. So it must be set *explicitly
+        # empty*, not left off. (Verified on ROS 7.24: "none" is invalid, ""
+        # is accepted and stored empty.)
+        if _is_aead(str(params["enc_algorithm"])):
+            props["auth-algorithms"] = ""
+        else:
             props["auth-algorithms"] = params["auth_algorithm"]
         return section(
             "/ip/ipsec/proposal",
-            "crypto",
+            "crypto_proposal",
             owner=tag,
             key=("name",),
             items=[ConfigItem(props=props, tag=tag)],
@@ -154,7 +165,7 @@ class IpsecGreTransport:
             props["local-address"] = link.local.public_ip
         return section(
             "/ip/ipsec/peer",
-            "crypto",
+            "crypto_peer",
             owner=tag,
             key=("name",),
             items=[ConfigItem(props=props, tag=tag)],
@@ -164,7 +175,7 @@ class IpsecGreTransport:
         tag = f"{link.tag}:identity"
         return section(
             "/ip/ipsec/identity",
-            "crypto",
+            "crypto_identity",
             owner=tag,
             key=("peer",),
             # RouterOS never returns the secret, so comparing it would diff
@@ -210,7 +221,7 @@ class IpsecGreTransport:
             )
         return section(
             "/ip/ipsec/policy",
-            "crypto",
+            "crypto_policy",
             owner=tag,
             key=("src-address", "dst-address", "protocol"),
             items=items,

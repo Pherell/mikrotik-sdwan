@@ -85,6 +85,9 @@ class SectionDiff:
     owner_tag: str
     items: list[ItemDiff] = field(default_factory=list)
     order: int = 50
+    # False for a menu that rejects a comment (e.g. /ip/ipsec/profile): the op
+    # must not carry one, or the driver re-injects it and the write is refused.
+    comment_capable: bool = True
 
     @property
     def empty(self) -> bool:
@@ -110,7 +113,7 @@ class SectionDiff:
             path=self.path,
             props=item.props,
             item_id=item.item_id,
-            comment=item.tag,
+            comment=item.tag if self.comment_capable else "",
             place_before=item.place_before,
         )
 
@@ -120,7 +123,12 @@ class SectionDiff:
 
 def diff_section(section: ConfigSection, live_rows: list[dict[str, Any]]) -> SectionDiff:
     """Compare one rendered section against what the device currently holds."""
-    result = SectionDiff(path=section.path, owner_tag=section.owner_tag, order=section.order)
+    result = SectionDiff(
+        path=section.path,
+        owner_tag=section.owner_tag,
+        order=section.order,
+        comment_capable=section.comment_capable,
+    )
     ignored = _ALWAYS_IGNORED | set(section.ignore)
 
     managed = [row for row in live_rows if section.owns(row)]
@@ -136,13 +144,14 @@ def diff_section(section: ConfigSection, live_rows: list[dict[str, Any]]) -> Sec
         live = current.get(identity)
         if live is None:
             props = dict(item.props)
-            props["comment"] = item.tag or section.owner_tag
+            if section.comment_capable:
+                props["comment"] = item.tag or section.owner_tag
             result.items.append(
                 ItemDiff(kind=OpKind.add, identity=identity, tag=item.tag, props=props)
             )
             continue
 
-        changes = _compare(item, live, ignored, section.write_once)
+        changes = _compare(item, live, ignored, section.write_once, section.comment_capable)
         if changes:
             result.items.append(
                 ItemDiff(
@@ -250,6 +259,7 @@ def _compare(
     live: dict[str, Any],
     ignored: set[str],
     write_once: tuple[str, ...],
+    comment_capable: bool = True,
 ) -> list[FieldChange]:
     """Which managed properties differ, comparing canonically."""
     changes: list[FieldChange] = []
@@ -262,7 +272,9 @@ def _compare(
             changes.append(FieldChange(prop=prop, before=got, after=want))
 
     # The ownership comment is intent too: a retagged row must be corrected.
-    if item.tag:
+    # Skip it where the menu has no comment field (RouterOS would reject the
+    # write, and such a section is owned by name, not comment).
+    if item.tag and comment_capable:
         got = canonical(live.get("comment"))
         if got != item.tag:
             changes.append(FieldChange(prop="comment", before=got, after=item.tag))

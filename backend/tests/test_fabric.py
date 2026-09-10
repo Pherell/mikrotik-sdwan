@@ -395,15 +395,18 @@ def test_psk_is_write_once_so_it_never_diffs() -> None:
     assert "secret" in identity.write_once
 
 
-def test_aead_cipher_omits_a_separate_auth_algorithm() -> None:
-    """RouterOS rejects auth-algorithms alongside GCM."""
+def test_aead_cipher_sets_auth_algorithm_explicitly_empty() -> None:
+    """RouterOS rejects auth-algorithms alongside GCM -- but also rejects the
+    sha1 default it keeps if the field is simply omitted ("AEAD already
+    provides authentication"). It must be set explicitly empty. Verified on
+    ROS 7.24."""
     proposal = next(
         s for s in IPSEC.render(make_link()) if s.path == "/ip/ipsec/proposal"
     )
     props = proposal.items[0].props
 
     assert props["enc-algorithms"] == "aes-256-gcm"
-    assert "auth-algorithms" not in props
+    assert props["auth-algorithms"] == ""
 
 
 def test_cbc_cipher_keeps_its_auth_algorithm() -> None:

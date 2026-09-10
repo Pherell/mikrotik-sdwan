@@ -188,6 +188,66 @@ class FakeRouterOS:
 
     async def _put(self, path: str, request: Request) -> Response:
         body = await _json(request)
+        # Real RouterOS validates cross-references at insert time: an ipsec
+        # identity or policy naming a peer that does not exist yet is refused
+        # with "input does not match any value of peer". Without mirroring
+        # that here, an apply-ordering bug (identity pushed before its peer)
+        # passes against the fake and only blows up on real hardware, which is
+        # exactly what happened once.
+        if path in ("ip/ipsec/identity", "ip/ipsec/policy") and body.get("peer"):
+            peers = {r.get("name") for r in self.menus.get("ip/ipsec/peer", [])}
+            if body["peer"] not in peers:
+                return JSONResponse(
+                    {"detail": "input does not match any value of peer"},
+                    status_code=400,
+                )
+        # ROS 7's /ip/ipsec/profile rejects a comment; the reconciler must own
+        # it by name, not comment. Mirror the rejection so a regression that
+        # re-adds the comment is caught here instead of on real hardware.
+        if path == "ip/ipsec/profile" and "comment" in body:
+            return JSONResponse(
+                {"detail": "unknown parameter comment"}, status_code=400
+            )
+        # A BGP connection naming a template it has never seen is rejected;
+        # the template must be created first.
+        if path == "routing/bgp/connection" and body.get("templates"):
+            names = {r.get("name") for r in self.menus.get("routing/bgp/template", [])}
+            if body["templates"] not in names:
+                return JSONResponse(
+                    {"detail": "input does not match any value of template"},
+                    status_code=400,
+                )
+        # ROS 7.24 accepts only ibgp / ebgp / ibgp-rr for a BGP connection's
+        # local.role; "ibgp-rr-client" (which the code once assumed) is not a
+        # value. Mirror the rejection so the suite catches a regression.
+        if path == "routing/bgp/connection" and body.get("local.role") not in (
+            None, "ibgp", "ebgp", "ibgp-rr",
+        ):
+            return JSONResponse(
+                {"detail": "input does not match any value of local.role"},
+                status_code=400,
+            )
+        # A mangle new-routing-mark / a route's routing-table must name a
+        # /routing/table that already exists.
+        if path in ("ip/firewall/mangle", "ip/route"):
+            field = "new-routing-mark" if "new-routing-mark" in body else "routing-table"
+            mark = body.get("new-routing-mark") or body.get("routing-table")
+            if mark and mark != "main":
+                tables = {r.get("name") for r in self.menus.get("routing/table", [])}
+                if mark not in tables:
+                    return JSONResponse(
+                        {"detail": f"input does not match any value of {field}"},
+                        status_code=400,
+                    )
+        # An AEAD proposal (GCM) must set auth-algorithms explicitly empty; a
+        # non-empty value -- including the sha1 default kept when the field is
+        # omitted -- is rejected as "AEAD already provides authentication".
+        if path == "ip/ipsec/proposal" and "gcm" in str(body.get("enc-algorithms", "")):
+            if body.get("auth-algorithms", "sha1") != "":
+                return JSONResponse(
+                    {"detail": "failure: AEAD already provides authentication"},
+                    status_code=400,
+                )
         if path not in self.menus:
             self.menus[path] = []
         row = self._with_id(dict(body))

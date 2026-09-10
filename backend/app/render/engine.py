@@ -18,11 +18,43 @@ from app.drivers.base import OWNER_PREFIX, ConfigSection
 
 ORDER: Final[dict[str, int]] = {
     "address_list": 10,   # prefix groups other rules reference
+    # A policy's routing table must exist before anything names it: real
+    # RouterOS rejects new-routing-mark=<table> (mangle) and routing-table=
+    # <table> (route) for a table it has never heard of. It must beat not just
+    # those menus but the *earliest* order any of them can reach -- and the
+    # mark-routing mangle shares /ip/firewall/mangle with the fabric MSS clamp
+    # (tunnel, 40), so merge_sections pulls the whole mangle menu down to 40.
+    # Hence 15, before that. FakeRouterOS did not enforce the reference, so
+    # this only ever failed on real hardware.
+    "routing_table": 15,  # /routing/table entries a later mark/route references
+    # A BGP connection names a template that must exist first, or ROS rejects
+    # it ("input does not match any value of template"). Ordering this is
+    # subtler than it looks: services.fabric._cleanup_sections emits an empty
+    # /routing/bgp/template AND /routing/bgp/connection at ORDER["tunnel"] (40),
+    # and merge_sections takes the *minimum* order per path -- so a template
+    # rendered at, say, 58 collapses to 40, ties the connection (also 40), and
+    # the (order, path) tie-break then runs alphabetically: "connection" before
+    # "template", exactly backwards. It must therefore sort below 40 to win.
+    # Same shape as routing_table above; only real hardware caught it.
+    "bgp_template": 16,   # /routing/bgp/template -- referenced by a connection
     "interface": 20,      # loopbacks, bridges
-    "crypto": 30,         # ipsec profiles, proposals, peers, identities
+    # ipsec has intra-block dependencies that real RouterOS enforces by
+    # reference: an identity names a peer, a policy names a peer and a
+    # proposal, a peer names a profile. They must be applied in that order or
+    # the referring row is rejected ("input does not match any value of
+    # peer"). A single shared order let merge_sections' (order, path) tie-break
+    # decide, which is alphabetical -- identity before peer -- exactly wrong.
+    # FakeRouterOS did not validate the reference, so only real hardware caught
+    # it. These stay within the old crypto slot (30-34, before tunnel=40).
+    "crypto": 30,         # generic crypto, for a transport that has no ordering
+    "crypto_profile": 30,  # phase-1 profile -- no dependency
+    "crypto_proposal": 31,  # phase-2 proposal -- no dependency
+    "crypto_peer": 32,     # names a profile
+    "crypto_identity": 33,  # names a peer -- peer must exist first
+    "crypto_policy": 34,   # names a peer and a proposal -- both must exist first
     "tunnel": 40,         # gre / ipip / wireguard interfaces
     "address": 50,        # ip addresses on those interfaces
-    "routing": 60,        # bgp templates and connections, static routes
+    "routing": 60,        # bgp connections, static routes
     "firewall": 70,       # mangle marks, nat
     "policy": 80,         # routing rules and tables
     "monitoring": 90,     # netwatch probes

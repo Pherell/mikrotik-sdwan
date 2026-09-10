@@ -23,7 +23,13 @@ from app.transports.base import Endpoint, FabricView, LinkView, TransportDriver
 
 # RouterOS 7 BGP roles. A hub reflects between spokes that have no session with
 # each other; a spoke is a plain client.
-_ROLE = {SiteRole.hub: "ibgp-rr", SiteRole.spoke: "ibgp-rr-client"}
+# RouterOS 7.24 accepts only ibgp / ebgp / ibgp-rr as local.role -- there is no
+# "ibgp-rr-client" value (the code assumed one; real hardware rejects it). The
+# hub is the route reflector; a spoke is a plain internal peer and still
+# receives the routes the RR reflects to it. Spoke-to-spoke reachability under
+# hub_spoke_dynamic comes from an on-demand direct tunnel, not from RR
+# reflection, so a plain-ibgp spoke does not lose connectivity here.
+_ROLE = {SiteRole.hub: "ibgp-rr", SiteRole.spoke: "ibgp"}
 
 
 @dataclass(slots=True)
@@ -103,7 +109,7 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
 
     template = section(
         "/routing/bgp/template",
-        "routing",
+        "bgp_template",
         owner=template_tag,
         key=("name",),
         items=[

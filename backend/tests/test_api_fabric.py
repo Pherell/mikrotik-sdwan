@@ -414,7 +414,9 @@ async def test_hub_is_a_route_reflector_and_spokes_are_clients(api) -> None:
     assert len(hub_conns) == 2  # one per spoke
     assert all(c["local.role"] == "ibgp-rr" for c in hub_conns)
     assert len(spoke_conns) == 1
-    assert spoke_conns[0]["local.role"] == "ibgp-rr-client"
+    # ROS 7.24 has no "ibgp-rr-client" role; a spoke is a plain internal peer
+    # and the hub (ibgp-rr) reflects to it. See render.fabric._ROLE.
+    assert spoke_conns[0]["local.role"] == "ibgp"
 
 
 async def test_local_prefixes_are_advertised(api) -> None:
