@@ -103,6 +103,23 @@ export function AddSiteWizard({ onClose }: { onClose: () => void }) {
               </dd>
             </dl>
 
+            {probe.lan_interfaces?.length > 0 && (
+              <div className="warn" style={{ marginTop: 16 }}>
+                <strong>Not offered as uplinks</strong>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+                  {probe.lan_interfaces.map((note) => (
+                    <li key={note.interface}>
+                      <code>{note.interface}</code> — {note.reason}.
+                    </li>
+                  ))}
+                </ul>
+                <p className="muted" style={{ margin: "6px 0 0" }}>
+                  Add one by hand on the device page if you really do route
+                  through it.
+                </p>
+              </div>
+            )}
+
             <h2 style={{ marginTop: 20 }}>Discovered uplinks</h2>
             {probe.suggested_wans.length === 0 ? (
               <p className="muted">

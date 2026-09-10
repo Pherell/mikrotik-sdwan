@@ -15,7 +15,7 @@ from app.drivers.factory import open_driver
 from app.drivers.identity import IdentityMismatch
 from app.models.enums import SiteStatus
 from app.models.site import Site
-from app.schemas.site import ProbeResult, WanCreate
+from app.schemas.site import InterfaceNote, ProbeResult, WanCreate
 from app.security import SecretBox
 
 log = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ async def probe_site(site: Site, box: SecretBox | None = None) -> ProbeResult:
     try:
         async with open_driver(site, box) as driver:
             caps = await driver.capabilities()
-            wans = await _suggest_wans(driver)
+            wans, lan = await _suggest_wans(driver)
     except IdentityMismatch as exc:
         # Not a reachability problem: something answered, and it was not the
         # device this site is pinned to.
@@ -51,6 +51,7 @@ async def probe_site(site: Site, box: SecretBox | None = None) -> ProbeResult:
         has_netwatch_thresholds=caps.has_netwatch_thresholds,
         packages=caps.packages,
         suggested_wans=wans,
+        lan_interfaces=lan,
     )
 
 
@@ -77,16 +78,27 @@ def apply_probe(site: Site, result: ProbeResult) -> None:
     }
 
 
-async def _suggest_wans(driver: DeviceDriver) -> list[WanCreate]:
+async def _suggest_wans(
+    driver: DeviceDriver,
+) -> tuple[list[WanCreate], list[InterfaceNote]]:
     """Infer uplinks from the routing table and DHCP clients.
 
     An interface is a WAN candidate when it carries a default route or runs a
     DHCP client. The operator confirms or edits the list in the wizard -- this
     is a starting point, not an authority.
+
+    Those are *inclusion* signals only, which is how a LAN used to end up
+    offered as an uplink: nothing here knew what a LAN looks like. Bridge
+    membership and DHCP *servers* are the exclusion signal, and the interfaces
+    they rule out are returned alongside so the wizard can say why rather than
+    silently dropping them.
     """
     routes = await _safe_read(driver, "/ip/route")
     addresses = await _safe_read(driver, "/ip/address")
     dhcp = await _safe_read(driver, "/ip/dhcp-client")
+    membership = await _bridge_membership(driver)
+    bridges = await _bridge_names(driver)
+    serving = await _dhcp_serving(driver)
 
     # interface -> gateway, from active default routes only.
     gateways: dict[str, str | None] = {}
@@ -112,8 +124,19 @@ async def _suggest_wans(driver: DeviceDriver) -> list[WanCreate]:
         if iface:
             gateways.setdefault(iface, client.get("gateway"))
 
+    # Separate before numbering, so dropping a LAN does not leave a gap in the
+    # wan1/wan2 sequence or in the cost ladder derived from it.
+    candidates: list[tuple[str, str | None]] = []
+    lan: list[InterfaceNote] = []
+    for iface, gw in sorted(gateways.items()):
+        reason = _lan_reason(iface, membership, bridges, serving)
+        if reason is None:
+            candidates.append((iface, gw))
+        else:
+            lan.append(InterfaceNote(interface=iface, reason=reason))
+
     suggestions: list[WanCreate] = []
-    for index, (iface, gw) in enumerate(sorted(gateways.items()), start=1):
+    for index, (iface, gw) in enumerate(candidates, start=1):
         addr = _address_on(iface, addresses)
         is_dhcp = any(
             str(c.get("interface", "")) == iface and not c.get("disabled") for c in dhcp
@@ -132,7 +155,58 @@ async def _suggest_wans(driver: DeviceDriver) -> list[WanCreate]:
                 cost=float(index),
             )
         )
-    return suggestions
+    return suggestions, lan
+
+
+async def _bridge_membership(driver: DeviceDriver) -> dict[str, str]:
+    """Port interface -> the bridge it is a member of."""
+    return {
+        str(row.get("interface", "")): str(row.get("bridge", ""))
+        for row in await _safe_read(driver, "/interface/bridge/port")
+        if row.get("interface") and row.get("bridge") and not row.get("disabled")
+    }
+
+
+async def _bridge_names(driver: DeviceDriver) -> set[str]:
+    return {
+        str(row.get("name", ""))
+        for row in await _safe_read(driver, "/interface/bridge")
+        if row.get("name")
+    }
+
+
+async def _dhcp_serving(driver: DeviceDriver) -> set[str]:
+    """Interfaces with an enabled DHCP server handing out addresses."""
+    return {
+        str(row.get("interface", ""))
+        for row in await _safe_read(driver, "/ip/dhcp-server")
+        if row.get("interface") and not row.get("disabled")
+    }
+
+
+def _lan_reason(
+    interface: str,
+    membership: dict[str, str],
+    bridges: set[str],
+    serving: set[str],
+) -> str | None:
+    """Why this interface is a LAN rather than an uplink, or None.
+
+    Both signals are required, not either alone: a bridge can legitimately
+    carry the uplink, and a DHCP server can sit on a routed sub-interface, so
+    either on its own would throw away real WANs. Together they describe a
+    switched segment this router hands addresses out on, which is a LAN.
+    """
+    bridge = membership.get(interface)
+    if bridge is None and interface not in bridges:
+        return None
+    if not (interface in serving or (bridge is not None and bridge in serving)):
+        return None
+    where = f"bridged into {bridge}" if bridge else "a bridge"
+    return (
+        f"{where} and running a DHCP server, so it looks like a LAN "
+        "rather than an uplink"
+    )
 
 
 async def _safe_read(driver: DeviceDriver, path: str) -> list[dict]:

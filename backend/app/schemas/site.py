@@ -169,6 +169,18 @@ class SiteRead(SiteBase):
     wans: list[WanRead] = Field(default_factory=list)
 
 
+class InterfaceNote(BaseModel):
+    """An interface the probe deliberately did not offer, and why.
+
+    Returned rather than silently dropped: the operator may still have a
+    reason to use it, and a suggestion that quietly disappears is worse than
+    one that explains itself.
+    """
+
+    interface: str
+    reason: str
+
+
 class ProbeResult(BaseModel):
     """What the onboarding wizard shows after touching a device."""
 
@@ -185,3 +197,6 @@ class ProbeResult(BaseModel):
     packages: list[str] = Field(default_factory=list)
     # Interfaces that look like uplinks, offered as WAN candidates in the wizard.
     suggested_wans: list[WanCreate] = Field(default_factory=list)
+    # Interfaces that carried an uplink signal but look like a LAN (bridged and
+    # serving DHCP), with the reason they were not offered.
+    lan_interfaces: list[InterfaceNote] = Field(default_factory=list)

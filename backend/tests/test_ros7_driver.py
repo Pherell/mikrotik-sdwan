@@ -160,7 +160,7 @@ def test_at_least_compares_component_wise() -> None:
 
 
 async def test_suggest_wans_finds_both_uplinks(driver: Ros7RestDriver) -> None:
-    wans = await _suggest_wans(driver)
+    wans, _lan = await _suggest_wans(driver)
     by_iface = {w.interface: w for w in wans}
 
     assert set(by_iface) == {"ether1", "ether2"}
@@ -177,6 +177,118 @@ async def test_suggest_wans_finds_both_uplinks(driver: Ros7RestDriver) -> None:
 
     # The LAN bridge is not offered as an uplink.
     assert "bridge" not in by_iface
+
+
+async def _lan_driver(**menus) -> tuple[Ros7RestDriver, FakeRouterOS]:
+    """A router whose bridge carries the default route -- so it *is* an uplink
+    candidate by the old rules, and only the LAN signals can rule it out."""
+    base = {
+        "ip/address": [
+            {"address": "192.168.1.1/24", "interface": "bridge-local", "disabled": False},
+        ],
+        "ip/route": [
+            {
+                "dst-address": "0.0.0.0/0",
+                "gateway": "192.168.1.254",
+                "distance": 1,
+                "disabled": False,
+                "inactive": False,
+            },
+        ],
+        "ip/dhcp-client": [],
+        "interface/bridge": [{"name": "bridge-local"}],
+        "interface/bridge/port": [
+            {"interface": "ether3", "bridge": "bridge-local", "disabled": False}
+        ],
+        "ip/dhcp-server": [],
+    }
+    base.update(menus)
+    fake = FakeRouterOS(password="secret", menus=base)
+    d = Ros7RestDriver(
+        "test-router", "admin", "secret", transport=httpx.ASGITransport(app=fake.app)
+    )
+    await d.connect()
+    return d, fake
+
+
+async def test_a_bridge_serving_dhcp_is_reported_as_a_lan_not_an_uplink() -> None:
+    """Bridged *and* handing out addresses is a switched segment, not a WAN.
+    Offering it produced a site whose 'uplink' could never accept a tunnel."""
+    d, _ = await _lan_driver(
+        **{"ip/dhcp-server": [{"interface": "bridge-local", "disabled": False}]}
+    )
+    try:
+        wans, lan = await _suggest_wans(d)
+    finally:
+        await d.close()
+
+    assert [w.interface for w in wans] == []
+    assert [n.interface for n in lan] == ["bridge-local"]
+    assert "DHCP server" in lan[0].reason
+
+
+async def test_a_bridge_without_a_dhcp_server_is_still_a_valid_uplink() -> None:
+    """Either signal alone is too weak: a bridge can legitimately carry the
+    uplink, so excluding on bridging alone would throw away real WANs."""
+    d, _ = await _lan_driver()
+    try:
+        wans, lan = await _suggest_wans(d)
+    finally:
+        await d.close()
+
+    assert [w.interface for w in wans] == ["bridge-local"]
+    assert lan == []
+
+
+async def test_dropping_a_lan_leaves_no_gap_in_the_uplink_numbering() -> None:
+    """wan1/wan2 and the cost ladder come from the position in the list."""
+    d, _ = await _lan_driver(
+        **{
+            "ip/address": [
+                {"address": "192.168.1.1/24", "interface": "bridge-local", "disabled": False},
+                {"address": "203.0.113.10/24", "interface": "ether1", "disabled": False},
+            ],
+            "ip/route": [
+                {
+                    "dst-address": "0.0.0.0/0",
+                    "gateway": "192.168.1.254",
+                    "distance": 1,
+                    "disabled": False,
+                    "inactive": False,
+                },
+                {
+                    "dst-address": "0.0.0.0/0",
+                    "gateway": "203.0.113.1",
+                    "distance": 2,
+                    "disabled": False,
+                    "inactive": False,
+                },
+            ],
+            "ip/dhcp-server": [{"interface": "bridge-local", "disabled": False}],
+        }
+    )
+    try:
+        wans, lan = await _suggest_wans(d)
+    finally:
+        await d.close()
+
+    assert [n.interface for n in lan] == ["bridge-local"]
+    assert [(w.name, w.interface, w.cost) for w in wans] == [
+        ("wan1", "ether1", 1.0)
+    ]
+
+
+async def test_a_disabled_dhcp_server_does_not_make_an_uplink_a_lan() -> None:
+    d, _ = await _lan_driver(
+        **{"ip/dhcp-server": [{"interface": "bridge-local", "disabled": True}]}
+    )
+    try:
+        wans, lan = await _suggest_wans(d)
+    finally:
+        await d.close()
+
+    assert [w.interface for w in wans] == ["bridge-local"]
+    assert lan == []
 
 
 async def test_probe_site_reports_unreachable_without_raising() -> None:

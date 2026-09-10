@@ -164,6 +164,7 @@ export interface ProbeResult {
   has_netwatch_thresholds: boolean;
   packages: string[];
   suggested_wans: Array<Omit<Wan, "id" | "site_id" | "dial_out_only">>;
+  lan_interfaces: Array<{ interface: string; reason: string }>;
 }
 
 export interface CurrentUser {
