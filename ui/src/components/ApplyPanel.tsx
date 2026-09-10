@@ -80,6 +80,17 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
         )}
       </div>
 
+      {doApply.isPending && (
+        <div className="warn">
+          <strong>Applying — do not navigate away.</strong>
+          <p className="muted" style={{ margin: "4px 0 0" }}>
+            Saving a backup on the device, arming the rollback, writing each row,
+            then reconnecting to confirm management still works. Every step is
+            listed here when it finishes.
+          </p>
+        </div>
+      )}
+
       {doPlan.isError && <div className="error">{(doPlan.error as Error).message}</div>}
       {doApply.isError && <div className="error">{(doApply.error as Error).message}</div>}
 

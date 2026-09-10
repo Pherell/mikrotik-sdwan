@@ -1,4 +1,5 @@
 import type { Job, JobState } from "../lib/api";
+import { ApplySteps } from "./ApplySteps";
 
 const STATE_CLASS: Record<JobState, string> = {
   queued: "",
@@ -41,14 +42,7 @@ export function JobResult({ job }: { job: Job }) {
         </>
       )}
 
-      {job.log && (
-        <>
-          <div className="muted" style={{ marginBottom: 4 }}>
-            Job log
-          </div>
-          <pre className="diff">{job.log}</pre>
-        </>
-      )}
+      {job.log && <ApplySteps log={job.log} />}
     </div>
   );
 }
