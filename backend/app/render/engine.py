@@ -36,6 +36,7 @@ ORDER: Final[dict[str, int]] = {
     # the (order, path) tie-break then runs alphabetically: "connection" before
     # "template", exactly backwards. It must therefore sort below 40 to win.
     # Same shape as routing_table above; only real hardware caught it.
+    "bgp_instance": 14,   # /routing/bgp/instance (ROS 7.20+) -- named by a connection
     "bgp_template": 16,   # /routing/bgp/template -- referenced by a connection
     "interface": 20,      # loopbacks, bridges
     # ipsec has intra-block dependencies that real RouterOS enforces by

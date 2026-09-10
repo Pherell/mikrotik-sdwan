@@ -93,6 +93,10 @@ class FakeRouterOS:
             "ip/firewall/address-list",
             # Every router has a log, even a freshly booted one.
             "log",
+            # ROS 7.20+ always has the BGP instance menu; the reconciler reads
+            # it to diff, and a 404 there reads as "unreadable" and fails the
+            # apply.
+            "routing/bgp/instance",
         ):
             self.menus[always_present] = []
         if wireguard:
@@ -208,6 +212,26 @@ class FakeRouterOS:
             return JSONResponse(
                 {"detail": "unknown parameter comment"}, status_code=400
             )
+        # ROS 7.24's /routing/bgp/template has no router-id (it lives on the
+        # instance now) and names the address family "afi", not
+        # "address-families". Both are rejected as unknown parameters.
+        if path == "routing/bgp/template":
+            for bad in ("router-id", "address-families"):
+                if bad in body:
+                    return JSONResponse(
+                        {"detail": f"unknown parameter {bad}"}, status_code=400
+                    )
+        # ROS 7.20+ requires a BGP connection to name an instance
+        # (/routing/bgp/instance) that already exists.
+        if path == "routing/bgp/connection":
+            if not body.get("instance"):
+                return JSONResponse({"detail": "missing =instance="}, status_code=400)
+            insts = {r.get("name") for r in self.menus.get("routing/bgp/instance", [])}
+            if body["instance"] not in insts:
+                return JSONResponse(
+                    {"detail": "input does not match any value of instance"},
+                    status_code=400,
+                )
         # A BGP connection naming a template it has never seen is rejected;
         # the template must be created first.
         if path == "routing/bgp/connection" and body.get("templates"):
@@ -248,6 +272,16 @@ class FakeRouterOS:
                     {"detail": "failure: AEAD already provides authentication"},
                     status_code=400,
                 )
+        # Model the two normalisations real ROS applies to an ipsec peer on
+        # read, so a render that fights them shows up as non-convergence here:
+        # a bare host address becomes /32, and passive=false is dropped (false
+        # is the default and is not stored).
+        if path == "ip/ipsec/peer":
+            addr = body.get("address")
+            if isinstance(addr, str) and addr and "/" not in addr and ":" not in addr:
+                body["address"] = addr + "/32"
+            if str(body.get("passive", "")).lower() in ("false", ""):
+                body.pop("passive", None)
         if path not in self.menus:
             self.menus[path] = []
         row = self._with_id(dict(body))

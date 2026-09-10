@@ -104,9 +104,33 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
         # uplink address makes the session identity move when a WAN flaps.
         return []
 
-    template_tag = f"{scope}:bgp-template"
-    template_name = f"sdwan-{view.fabric.name}"[:31]
+    bgp_name = f"sdwan-{view.fabric.name}"[:31]
+    template_name = bgp_name
 
+    # RouterOS 7.20+ requires an explicit BGP instance, and that is where the
+    # router-id lives now -- it is not a property of the template or the
+    # connection on this version (both reject "router-id" as unknown, and a
+    # connection with no instance is refused with "missing instance"). The
+    # connection references this instance by name.
+    instance_tag = f"{scope}:bgp-instance"
+    instance = section(
+        "/routing/bgp/instance",
+        "bgp_instance",
+        owner=instance_tag,
+        key=("name",),
+        items=[
+            ConfigItem(
+                props={
+                    "name": bgp_name,
+                    "as": view.fabric.asn,
+                    "router-id": view.loopback_ip,
+                },
+                tag=instance_tag,
+            )
+        ],
+    )
+
+    template_tag = f"{scope}:bgp-template"
     template = section(
         "/routing/bgp/template",
         "bgp_template",
@@ -117,8 +141,9 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
                 props={
                     "name": template_name,
                     "as": view.fabric.asn,
-                    "router-id": view.loopback_ip,
-                    "address-families": "ip",
+                    # ROS 7.24 names the address-family property "afi", not
+                    # "address-families"; the latter is rejected as unknown.
+                    "afi": "ip",
                     "output.redistribute": "connected",
                     "hold-time": "30s",
                     "keepalive-time": "10s",
@@ -141,6 +166,7 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
             ConfigItem(
                 props={
                     "name": f"bgp-{link.slug}"[:31],
+                    "instance": bgp_name,
                     "templates": template_name,
                     "remote.address": link.remote.tunnel_ip,
                     "remote.as": view.fabric.asn,
@@ -168,7 +194,7 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
         ],
     )
 
-    return [template, connections, networks]
+    return [instance, template, connections, networks]
 
 
 def link_view(

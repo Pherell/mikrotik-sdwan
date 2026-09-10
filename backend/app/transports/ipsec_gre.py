@@ -148,19 +148,20 @@ class IpsecGreTransport:
             "name": self._name(link, "peer"),
             "profile": self._name(link, "prof"),
             "exchange-mode": params["exchange_mode"],
-            # Only the listening side is passive. A NAT'd endpoint must dial.
-            "passive": not link.initiator,
         }
-        if link.initiator:
-            # Dialling: we need somewhere to dial. The remote must be reachable,
-            # which validate_pair has already guaranteed.
-            props["address"] = link.remote.public_ip
-        else:
-            # Listening: accept from the remote's address when we know it, and
-            # from anywhere when the remote is behind a dynamic NAT.
-            props["address"] = (
-                f"{link.remote.public_ip}/32" if link.remote.public_ip else "0.0.0.0/0"
-            )
+        # Only the listening side is passive. A NAT'd endpoint must dial.
+        # RouterOS drops passive=false on read (false is the default), so
+        # sending it makes every re-diff see empty-vs-false and re-apply
+        # forever. Emit it only when it is actually true.
+        if not link.initiator:
+            props["passive"] = True
+        # The device normalises a bare host address to /32 on read, so send it
+        # that way or every re-diff re-sets it. /32 for a known remote, and
+        # 0.0.0.0/0 when the initiator dials a remote behind a dynamic NAT.
+        if link.remote.public_ip:
+            props["address"] = f"{link.remote.public_ip}/32"
+        elif not link.initiator:
+            props["address"] = "0.0.0.0/0"
         if link.local.public_ip:
             props["local-address"] = link.local.public_ip
         return section(

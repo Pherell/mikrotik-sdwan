@@ -368,8 +368,11 @@ def test_ipsec_policy_encrypts_only_gre_between_the_two_uplinks() -> None:
 
 def test_initiator_dials_and_responder_listens() -> None:
     dialer = next(s for s in IPSEC.render(make_link(initiator=True)) if s.path == "/ip/ipsec/peer")
-    assert dialer.items[0].props["passive"] is False
-    assert dialer.items[0].props["address"] == "198.51.100.5"
+    # The dialer is not passive -- but passive=false is omitted, not sent,
+    # because ROS drops it on read and it would diff dirty forever. The
+    # address is /32 to match how the device normalises it back.
+    assert "passive" not in dialer.items[0].props
+    assert dialer.items[0].props["address"] == "198.51.100.5/32"
 
     listener = next(
         s for s in IPSEC.render(make_link(initiator=False)) if s.path == "/ip/ipsec/peer"

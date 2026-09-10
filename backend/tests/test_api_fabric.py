@@ -385,7 +385,12 @@ async def test_both_ends_of_a_link_agree(api) -> None:
     hub_peer = [p for p in hub.rows("ip/ipsec/peer") if "spoke1" in p["name"]][0]
     spoke_peer = [p for p in spoke.rows("ip/ipsec/peer") if "hub1" in p["name"]][0]
     # The fake device stores what was sent, in RouterOS wire form.
-    assert {hub_peer["passive"], spoke_peer["passive"]} == {"true", "false"}
+    # passive=false is omitted (ROS drops it on read), so the dialer's row
+    # has no passive key at all -- treat absent as false.
+    assert {hub_peer.get("passive", "false"), spoke_peer.get("passive", "false")} == {
+        "true",
+        "false",
+    }
 
     # Both ends of the /31, one each.
     hub_addr = {

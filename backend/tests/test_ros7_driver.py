@@ -75,7 +75,9 @@ async def test_apply_add_set_remove(driver: Ros7RestDriver, fake_ros: FakeRouter
 
     rows = await driver.read("/ip/ipsec/peer")
     assert len(rows) == 1
-    assert rows[0]["passive"] is False
+    # ROS drops passive=false on read (it is the default), so it comes back
+    # absent, not False -- the fake models that.
+    assert rows[0].get("passive", False) is False
     assert rows[0]["comment"] == "sdwan:core:hub1-spoke1"
 
     item_id = rows[0][".id"]

@@ -251,6 +251,7 @@ _EXTRA_OWNED: dict[str, tuple[str, ...]] = {
     "/ip/firewall/mangle": ("comment",),
     "/routing/table": ("name",),
     "/ip/route": ("dst-address", "gateway", "routing-table"),
+    "/routing/bgp/instance": ("name",),
     "/routing/bgp/template": ("name",),
     "/routing/bgp/connection": ("name",),
     "/routing/bgp/network": ("network",),
