@@ -413,7 +413,15 @@ class FakeRouterOS:
             # A hop that never answers has no address at all. Reproducing that
             # is the point: it is what a broken path looks like.
             hops.append({"loss": 100, "sent": 1, "status": "timeout"})
-        return [_row_out(h) for h in hops]
+        # RouterOS does not answer a traceroute once: it streams, re-emitting
+        # every hop each round until the duration expires, with `sent`
+        # counting the rounds. Reproducing that is the point -- reading the
+        # rows in arrival order otherwise invents hops.
+        rounds: list[dict[str, Any]] = []
+        for round_no in (1, 2):
+            for hop in hops:
+                rounds.append({**hop, "sent": round_no})
+        return [_row_out(h) for h in rounds]
 
 
 async def _json(request: Request) -> dict[str, Any]:

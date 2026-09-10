@@ -280,7 +280,11 @@ def test_new_links_reuse_free_addresses_after_a_removal() -> None:
     s2 = site("spoke2", SiteRole.spoke, [("wan1", "203.0.113.2", False)])
 
     existing = expand(f, members(f, hub, s1, s2), existing=[], transport=IPSEC).created
-    keep = [link for link in existing if "spoke2" in link.slug]
+    # Keep only the hub<->spoke2 link. Match on the WAN it joins rather than a
+    # substring of the slug: the slug is truncated and digest-suffixed, so it
+    # is not a place to look up identity.
+    s2_wan = s2.wans[0].id
+    keep = [link for link in existing if s2_wan in (link.a_wan_id, link.b_wan_id)]
 
     s3 = site("spoke3", SiteRole.spoke, [("wan1", "203.0.113.3", False)])
     result = expand(f, members(f, hub, s2, s3), existing=keep, transport=IPSEC)
@@ -301,6 +305,40 @@ def test_slug_fits_in_a_routeros_interface_name() -> None:
     assert len(slug) <= 26
     # gre- prefix plus slug must still fit RouterOS's 31-character limit.
     assert len(f"gre-{slug}") <= 31
+
+
+def test_slugs_stay_distinct_when_truncation_would_collide() -> None:
+    """The readable part of a slug is truncated hard to fit RouterOS's 31-char
+    interface name, and truncation loses exactly the characters that tell two
+    uplinks apart: "ISP-1" and "ISP-2" both cut to "isp-", and two sites named
+    "Mikrotik3"/"Mikrotik4" both cut to "mikrotik". Colliding slugs would give
+    two tunnels the same GRE/peer/profile names and the same ownership
+    comment, so the reconciler would treat them as one row.
+    """
+    f = fabric()
+    a = site(
+        "Router-A",
+        SiteRole.hub,
+        [("ISP-1", "198.51.100.5", False), ("ISP-2", "198.51.100.6", False)],
+    )
+    b = site("Router-B", SiteRole.spoke, [("ISP-A", "203.0.113.1", False)])
+
+    result = expand(f, members(f, a, b), existing=[], transport=IPSEC)
+
+    slugs = [link.slug for link in result.created]
+    assert len(slugs) == 2
+    assert len(set(slugs)) == 2, f"slugs collided: {slugs}"
+    assert all(len(f"peer-{s}") <= 31 for s in slugs)
+
+
+def test_slug_is_stable_for_the_same_endpoints() -> None:
+    """It names live device objects, so it must not move between runs."""
+    f = fabric()
+    a = site("alpha", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    b = site("bravo", SiteRole.spoke, [("wan1", "203.0.113.1", False)])
+    refs = members_to_wans(members(f, a, b))
+
+    assert link_slug(refs[0], refs[1]) == link_slug(refs[0], refs[1])
 
 
 def test_slug_is_order_independent() -> None:

@@ -371,19 +371,30 @@ async def test_both_ends_of_a_link_agree(api) -> None:
     hub = routers["198.51.100.5"]
     spoke = routers["203.0.113.1"]
 
-    hub_gre = [g for g in hub.rows("interface/gre") if "spoke1" in g["name"]]
-    spoke_gre = [g for g in spoke.rows("interface/gre") if "hub1" in g["name"]]
-    assert len(hub_gre) == 1 and len(spoke_gre) == 1
+    # spoke1 links only to the hub, so it has exactly one of each. Identify
+    # the hub's matching rows by that shared name rather than by searching for
+    # a site name inside it -- the slug is truncated and digest-suffixed, so it
+    # is not a place to look up identity.
+    spoke_gres = spoke.rows("interface/gre")
+    assert len(spoke_gres) == 1
+    spoke_gre = spoke_gres[0]
 
     # Same interface name on both ends -- it is derived from the shared slug.
-    assert hub_gre[0]["name"] == spoke_gre[0]["name"]
+    hub_gre = next(
+        (g for g in hub.rows("interface/gre") if g["name"] == spoke_gre["name"]), None
+    )
+    assert hub_gre is not None, "the hub has no interface matching the spoke's"
     # Endpoints are mirrored.
-    assert hub_gre[0]["remote-address"] == "203.0.113.1"
-    assert spoke_gre[0]["remote-address"] == "198.51.100.5"
+    assert hub_gre["remote-address"] == "203.0.113.1"
+    assert spoke_gre["remote-address"] == "198.51.100.5"
 
     # Exactly one side is passive.
-    hub_peer = [p for p in hub.rows("ip/ipsec/peer") if "spoke1" in p["name"]][0]
-    spoke_peer = [p for p in spoke.rows("ip/ipsec/peer") if "hub1" in p["name"]][0]
+    spoke_peers = spoke.rows("ip/ipsec/peer")
+    assert len(spoke_peers) == 1
+    spoke_peer = spoke_peers[0]
+    hub_peer = next(
+        p for p in hub.rows("ip/ipsec/peer") if p["name"] == spoke_peer["name"]
+    )
     # The fake device stores what was sent, in RouterOS wire form.
     # passive=false is omitted (ROS drops it on read), so the dialer's row
     # has no passive key at all -- treat absent as false.
@@ -478,7 +489,9 @@ async def test_removing_a_site_from_the_fabric_tears_its_tunnels_down(api) -> No
     assert resp.json()["state"] == "succeeded"
     gres = routers["198.51.100.5"].rows("interface/gre")
     assert len(gres) == 1
-    assert "spoke1" in gres[0]["name"]
+    # The survivor is the spoke1 tunnel -- identified by the endpoint it dials,
+    # not by a site name inside the (truncated, digest-suffixed) slug.
+    assert gres[0]["remote-address"] == "203.0.113.1"
 
 
 # -- read-only device passthrough -------------------------------------------

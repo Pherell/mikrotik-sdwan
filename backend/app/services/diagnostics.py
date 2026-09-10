@@ -175,11 +175,10 @@ async def run_traceroute(
     raw = await driver.run("/tool/traceroute", params)
 
     hops: list[TraceHop] = []
-    for index, row in enumerate(_rows(raw), start=1):
+    for position, row in sorted(_traceroute_rounds(_rows(raw)).items()):
         hops.append(
             TraceHop(
-                # Most builds number hops by row order rather than a field.
-                hop=_int(row.get("hop")) or index,
+                hop=_int(row.get("hop")) or position,
                 address=_text(row.get("address")) or None,
                 loss_percent=_float(row.get("loss")),
                 sent=_int(row.get("sent")),
@@ -191,6 +190,34 @@ async def run_traceroute(
             )
         )
     return TracerouteResult(target=request.target, hops=hops)
+
+
+def _traceroute_rounds(rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Collapse RouterOS's repeated probe rounds into one row per hop.
+
+    RouterOS does not return a trace, it returns a *stream*: one row per hop,
+    re-emitted every round until the duration runs out. Numbering rows in
+    arrival order therefore invents hops -- an 11-hop trace probed twice reads
+    as 22 hops, with hop 12 showing the first router again. ``sent`` is the
+    round counter (it is cumulative per hop), so a change in it marks the start
+    of the next round and the hop number is the position within that round.
+
+    The stats RouterOS reports are cumulative, so where a hop appears in
+    several rounds the last one wins -- it carries the fullest sample.
+    """
+    by_hop: dict[int, dict[str, Any]] = {}
+    position = 0
+    previous_sent: int | None = None
+
+    for row in rows:
+        sent = _int(row.get("sent"))
+        if previous_sent is not None and sent != previous_sent:
+            position = 0  # a new round began
+        previous_sent = sent
+        position += 1
+        by_hop[position] = row
+
+    return by_hop
 
 
 # -- tunnel health ----------------------------------------------------------

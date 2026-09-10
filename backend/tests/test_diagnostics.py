@@ -185,6 +185,27 @@ async def test_traceroute_numbers_hops_and_parses_times() -> None:
     assert result.hops[1].avg_ms == 12.0
 
 
+async def test_repeated_probe_rounds_do_not_invent_hops() -> None:
+    """RouterOS streams a traceroute: it re-emits every hop each round until
+    the duration expires. Numbering rows in arrival order turns an 11-hop path
+    probed twice into 22 hops, with "hop 12" showing the first router again.
+    The rounds have to collapse onto the hop they belong to.
+    """
+    fake = FakeRouterOS(password="secret")  # emits two rounds, as ROS does
+    driver = await _driver(fake)
+    try:
+        result = await run_traceroute(driver, TracerouteRequest(target="8.8.8.8"))
+    finally:
+        await driver.close()
+
+    assert [h.hop for h in result.hops] == [1, 2]
+    # No hop repeats an earlier hop's address.
+    addresses = [h.address for h in result.hops]
+    assert len(addresses) == len(set(addresses))
+    # The surviving sample is the latest round: ROS's stats are cumulative.
+    assert result.hops[0].sent == 2
+
+
 async def test_a_hop_that_never_answers_keeps_its_place_in_the_path() -> None:
     """Dropping unanswered hops would renumber every hop after them."""
     fake = FakeRouterOS(password="secret", reachable=set())

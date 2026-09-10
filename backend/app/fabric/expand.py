@@ -11,6 +11,7 @@ their keys, so re-expanding a fabric does not renumber a live overlay.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from itertools import combinations
 
@@ -191,19 +192,38 @@ def expand(
     return result
 
 
+# "peer-" is the longest prefix hung off a slug, and RouterOS caps a name at
+# 31 characters, so the slug itself gets 26.
+_SLUG_MAX = 26
+_DIGEST_LEN = 6
+
+
 def link_slug(a: WanRef, b: WanRef) -> str:
     """A short, stable identifier used in interface names and ownership tags.
 
-    RouterOS caps interface names at 31 characters and the slug is embedded in
-    several of them, so each component is truncated hard.
-    """
-    def part(ref: WanRef) -> str:
-        site = _clean(ref.site_name)[:8]
-        wan = _clean(ref.wan.name)[:4]
-        return f"{site}-{wan}"
+    RouterOS caps interface names at 31 characters, so the readable part has to
+    be truncated hard -- and truncation *alone* is not safe. "Mikrotik3" and
+    "Mikrotik4" both cut to "mikrotik"; "ISP-1" and "ISP-2" both cut to "isp-".
+    Two distinct links then land on the same slug and collide on every name
+    derived from it: the GRE interface, the ipsec peer/profile/proposal, and
+    the ownership comment the reconciler matches rows by -- so it would treat
+    two tunnels as one. A deterministic digest of the full endpoint identity is
+    appended so the slug stays unique whatever the truncation drops.
 
+    Existing links keep the slug stored on their row (expansion matches them by
+    WAN-id pair), so changing this format never renames a live tunnel.
+    """
     first, second = sorted((a, b), key=lambda r: r.key)
-    return f"{part(first)}-{part(second)}"[:26]
+    identity = "|".join(
+        (first.site_name, first.wan.name, second.site_name, second.wan.name)
+    )
+    digest = hashlib.blake2s(identity.encode(), digest_size=8).hexdigest()[:_DIGEST_LEN]
+
+    def part(ref: WanRef) -> str:
+        return f"{_clean(ref.site_name)[:5]}-{_clean(ref.wan.name)[:3]}"
+
+    readable = f"{part(first)}-{part(second)}"[: _SLUG_MAX - _DIGEST_LEN - 1]
+    return f"{readable}-{digest}"
 
 
 def _clean(value: str) -> str:
