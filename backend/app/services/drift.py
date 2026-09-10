@@ -56,6 +56,23 @@ async def check_site(session: AsyncSession, site: Site) -> Job:
         site.last_error = str(exc)
         await session.flush()
         return job
+    except Exception as exc:
+        # Anything else -- a renderer disagreeing with itself, a malformed row,
+        # a transport failure that is not a DriverError -- still has to land
+        # the job somewhere terminal. The sweep above catches and moves on, so
+        # an unhandled error here left the job flushed as `running` forever:
+        # invisible to the operator, and indistinguishable from one still in
+        # flight. (Seen live: colliding link slugs made render_device raise,
+        # and every hourly drift check for those sites piled up as `running`.)
+        #
+        # The site is not marked unreachable: the device answered fine, the
+        # fault is on our side of the wire.
+        log.exception("drift check for %s failed unexpectedly", site.name)
+        job.state = JobState.failed
+        job.error = f"{type(exc).__name__}: {exc}"
+        job.finished_at = datetime.now(UTC)
+        await session.flush()
+        return job
 
     job.plan = plan.to_json()
     job.diff = {"text": plan.render()}

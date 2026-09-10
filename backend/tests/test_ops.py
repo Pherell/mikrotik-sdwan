@@ -172,6 +172,30 @@ async def test_auto_remediate_puts_it_back(api) -> None:
     assert ros.rows("interface/bridge")[0]["protocol-mode"] == "none"
 
 
+async def test_an_unexpected_error_fails_the_drift_job_instead_of_hanging(
+    api, monkeypatch
+) -> None:
+    """A drift job left in `running` is invisible. The sweep catches the error
+    and moves on, so nothing updates the row -- the operator sees a check that
+    never finishes and no reason why. Colliding link slugs did exactly this:
+    render_device raised, and every hourly check piled up as `running`.
+    """
+    client, _, _ = api
+    headers = await _auth(client)
+    site_id = await _applied_site(client, headers)
+
+    async def boom(*_args, **_kwargs):
+        raise ValueError("Two renderers both claim /interface/gre")
+
+    monkeypatch.setattr("app.services.drift.render_device", boom)
+
+    job = (await client.post(f"/sites/{site_id}/drift", headers=headers)).json()
+
+    assert job["state"] == "failed"
+    assert "Two renderers both claim" in job["error"]
+    assert job["finished_at"] is not None
+
+
 async def test_a_deleted_row_is_drift_too(api) -> None:
     client, _, ros = api
     headers = await _auth(client)
