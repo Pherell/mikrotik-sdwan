@@ -353,6 +353,12 @@ READABLE_PATHS = frozenset(
         "ip/dhcp-client",
         "ip/firewall/address-list",
         "ip/firewall/mangle",
+        # The chain that actually drops things. Being able to read mangle but
+        # not filter meant the one question worth asking when a tunnel will not
+        # establish -- "is this device's own input chain eating IKE?" -- could
+        # not be asked through the controller at all. Rules carry no secrets.
+        "ip/firewall/filter",
+        "ip/firewall/nat",
         "ip/ipsec/active-peers",
         "ip/ipsec/installed-sa",
         "ip/ipsec/policy",
