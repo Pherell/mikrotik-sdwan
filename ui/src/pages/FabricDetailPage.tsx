@@ -20,6 +20,10 @@ export function FabricDetailPage() {
   const [editing, setEditing] = useState(false);
   const navigate = useNavigate();
   const me = useQuery({ queryKey: ["me"], queryFn: endpoints.me });
+  const transports = useQuery({
+    queryKey: ["transports"],
+    queryFn: endpoints.transports,
+  });
   const [addSiteId, setAddSiteId] = useState("");
 
   const fabric = useQuery({
@@ -132,6 +136,23 @@ export function FabricDetailPage() {
           <dt>Tunnel MTU</dt>
           <dd>{f.mtu}</dd>
         </dl>
+
+        {(() => {
+          const spec = (transports.data ?? []).find((t) => t.name === f.transport);
+          if (!spec || spec.required_ports.length === 0) return null;
+          return (
+            <div className="warn" style={{ marginTop: 12 }}>
+              <strong>Must be reachable end to end:</strong>{" "}
+              {spec.required_ports.join(" · ")}
+              <p className="muted" style={{ margin: "6px 0 0" }}>
+                These are opened automatically on the devices this controller
+                manages — but not on anything between them. A firewall or NAT in
+                the path drops them silently: every layer reports down, and ping
+                still works, because ICMP was never what was blocked.
+              </p>
+            </div>
+          );
+        })()}
 
         {expand.isError && <div className="error">{(expand.error as Error).message}</div>}
         {expansion && <ExpansionResult result={expansion} />}

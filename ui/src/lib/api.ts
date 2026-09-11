@@ -278,7 +278,13 @@ export interface TransportInfo {
   name: string;
   supported_ros: number[];
   requires_reachable_responder: boolean;
+  // Whether the far side can discover a peer's address rather than being told
+  // it. Only WireGuard can, which is what lets a NAT'd peer work at all.
+  learns_peer_address: boolean;
   supports_dynamic_mesh: boolean;
+  // What has to be permitted end to end. The controller opens these on the two
+  // devices it manages; anything between them is the operator's to open.
+  required_ports: string[];
   // Empty for transports with nothing to negotiate: GRE and IPIP have no
   // ciphers to agree on, and WireGuard's are not selectable by design.
   options: TransportOption[];

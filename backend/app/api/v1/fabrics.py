@@ -17,6 +17,7 @@ from app.deps import (
 from app.fabric.allocate import capacity
 from app.models.fabric import Fabric, FabricMember, Link
 from app.models.site import Site
+from app.render.firewall import required_ports
 from app.schemas.fabric import (
     ExpansionRead,
     FabricCreate,
@@ -82,6 +83,12 @@ async def list_transports(_: RequireViewer) -> list[dict]:
                 "supported_ros": sorted(driver.supported_ros),
                 "requires_reachable_responder": driver.requires_reachable_responder,
                 "supports_dynamic_mesh": driver.supports_dynamic_mesh,
+                "learns_peer_address": getattr(driver, "learns_peer_address", False),
+                # What has to be open end to end. The controller writes these
+                # on both devices; anything in between is the operator's.
+                "required_ports": required_ports(
+                    name, str(driver.defaults().get("listen_port") or "") or None
+                ),
                 "options": describe(name, driver.defaults()).options,
             }
         )

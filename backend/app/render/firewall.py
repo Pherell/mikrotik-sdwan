@@ -52,6 +52,35 @@ _TRANSPORT_PROTOCOLS: dict[str, tuple[tuple[str, str | None], ...]] = {
 _WIREGUARD_DEFAULT_PORT = "13231"
 
 
+# How each protocol reads to a person who has to open it on a firewall they
+# own. IP protocol numbers are included because that is what a non-RouterOS
+# device will ask for.
+_PROTOCOL_LABEL = {
+    "udp": "UDP",
+    "ipsec-esp": "IP protocol 50 (ESP)",
+    "gre": "IP protocol 47 (GRE)",
+    "ipencap": "IP protocol 4 (IPIP)",
+}
+
+
+def required_ports(transport: str, listen_port: str | None = None) -> list[str]:
+    """What has to be permitted end to end for this transport to establish.
+
+    The controller opens these on the two devices it manages. It cannot open
+    them on anything *between* them, and that gap is where a tunnel quietly
+    fails: every layer reports down, ping still works because ICMP was never
+    the thing being blocked, and nothing logs a packet that never arrived.
+    Saying it out loud in the UI is the cheapest fix available.
+    """
+    if transport == "wireguard":
+        return [f"UDP {listen_port or _WIREGUARD_DEFAULT_PORT}"]
+    out = []
+    for protocol, ports in _TRANSPORT_PROTOCOLS.get(transport, ()):
+        label = _PROTOCOL_LABEL.get(protocol, protocol)
+        out.append(f"{label} {ports}" if ports else label)
+    return out
+
+
 @dataclass(slots=True)
 class UplinkNat:
     """One uplink and whether traffic steered onto it should be NATted."""
