@@ -113,6 +113,9 @@ export interface Wan {
   dynamic: boolean;
   nat_behind: boolean;
   gateway: string | null;
+  // Mask length of public_ip. Says whether a tunnel's far end is on this
+  // uplink's own segment or out through the next hop — different routes.
+  prefix_len: number | null;
   provider: string | null;
   bandwidth_mbps: number | null;
   cost: number;

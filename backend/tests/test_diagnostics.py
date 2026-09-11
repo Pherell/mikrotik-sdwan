@@ -524,6 +524,86 @@ async def test_a_transport_without_ipsec_reports_unknown_rather_than_down() -> N
     assert row.ipsec_detail is None
 
 
+async def test_an_endpoint_reached_through_a_tunnel_is_named_as_the_cause() -> None:
+    """The failure that cannot self-heal: the route to a tunnel's own far end
+    runs through another tunnel, so its underlay depends on an overlay that
+    depends on it. Reported ahead of every protocol-specific check, because
+    all of those would describe a symptom of this instead."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13231
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": True},
+                {"name": "wg-other", "type": "wireguard", "running": True},
+            ],
+            "interface/wireguard": [
+                {"name": "wg-branch-hq", "listen-port": "13231", "running": True}
+            ],
+            "interface/wireguard/peers": [
+                {"interface": "wg-branch-hq", "public-key": "k", "rx": "0"}
+            ],
+            "ip/address": [{"address": "203.0.113.10/24", "interface": "ether1"}],
+            "ip/route": [
+                # What BGP installs when a neighbour redistributes its own
+                # uplink subnet: the far endpoint, via the other tunnel.
+                {"dst-address": "198.51.100.0/24", "gateway": "10.255.0.3",
+                 "immediate-gw": "10.255.0.3%wg-other", "active": "true",
+                 "disabled": "false", "distance": "200"},
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert "wg-other" in (row.diagnosis or "")
+    assert "itself a tunnel" in (row.diagnosis or "")
+
+
+async def test_a_working_session_is_not_second_guessed_about_its_routes() -> None:
+    """A tunnel carrying an established session is working. Reporting a route
+    shape at it would put a red diagnosis on a green tunnel."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13231
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": True},
+                {"name": "wg-other", "type": "wireguard", "running": True},
+            ],
+            "interface/wireguard": [
+                {"name": "wg-branch-hq", "listen-port": "13231", "running": True}
+            ],
+            "interface/wireguard/peers": [
+                {"interface": "wg-branch-hq", "public-key": "k",
+                 "last-handshake": "20s", "rx": "9000"}
+            ],
+            "ip/route": [
+                {"dst-address": "198.51.100.0/24", "gateway": "10.255.0.3",
+                 "immediate-gw": "10.255.0.3%wg-other", "active": "true",
+                 "disabled": "false"},
+            ],
+            "routing/bgp/session": [
+                {"name": "bgp-branch-hq", "remote.address": "10.255.0.1",
+                 "established": "true"}
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert row.bgp_established is True
+    assert row.diagnosis is None
+
+
 # -- wireguard ---------------------------------------------------------------
 
 

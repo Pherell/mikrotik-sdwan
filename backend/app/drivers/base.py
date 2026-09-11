@@ -35,6 +35,17 @@ class ConfigItem:
     # "sdwan:core:hub1-wan1-spoke2-wan1". Also the diff identity when the
     # section declares no key columns.
     tag: str = ""
+    # Properties this row insists on even though its section ignores them.
+    #
+    # ``ignore`` is a property of the menu once sections merge, but two
+    # renderers can write the same menu for opposite reasons: the policy
+    # routes let netwatch own their distance at runtime, while the underlay
+    # routes use distance to order one uplink ahead of another and are
+    # meaningless without it. Left to the section, the stricter renderer loses
+    # and its rows all land at the same distance -- which is ECMP, not a
+    # preference. Observed on hardware: two host routes to one endpoint, both
+    # distance 1, traffic hashed across an uplink that could not carry it.
+    enforce: tuple[str, ...] = ()
 
     def identity(self, key: tuple[str, ...]) -> tuple[Any, ...]:
         from app.drivers.coerce import canonical

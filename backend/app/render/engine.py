@@ -56,6 +56,12 @@ ORDER: Final[dict[str, int]] = {
     "tunnel": 40,         # gre / ipip / wireguard interfaces
     "address": 50,        # ip addresses on those interfaces
     "routing": 60,        # bgp connections, static routes
+    # Host routes pinning each tunnel's far endpoint to the underlay. Shares
+    # /ip/route with the policy routes, which point at tunnel interfaces, so it
+    # must not sort before the tunnels exist -- merge_sections takes the
+    # minimum order per path, and anything below 40 would drag the whole menu
+    # ahead of the interfaces those other routes name.
+    "underlay_route": 60,
     "routing_rule": 62,   # /routing/rule -- references a table, so after 15
     "firewall": 70,       # mangle marks, nat
     "policy": 80,         # routing rules and tables

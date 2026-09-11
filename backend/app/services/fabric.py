@@ -377,6 +377,9 @@ def _endpoint(site: Site, wan: Wan, tunnel_ip: str, loopback: str | None) -> End
         nat_behind=wan.nat_behind,
         loopback_ip=loopback,
         ros_major=int(caps.get("ros_major") or 7),
+        gateway=wan.gateway,
+        prefix_len=wan.prefix_len,
+        cost=wan.cost,
     )
 
 

@@ -28,6 +28,9 @@ class WanBase(BaseModel):
     dynamic: bool = False
     nat_behind: bool = False
     gateway: str | None = None
+    # Mask length of public_ip, so an on-link peer can be told from one reached
+    # through the gateway -- they need different routes.
+    prefix_len: int | None = Field(default=None, ge=1, le=32)
     provider: str | None = None
     bandwidth_mbps: int | None = Field(default=None, ge=1)
     cost: float = 1.0
@@ -54,6 +57,7 @@ class WanUpdate(BaseModel):
     dynamic: bool | None = None
     nat_behind: bool | None = None
     gateway: str | None = None
+    prefix_len: int | None = None
     provider: str | None = None
     bandwidth_mbps: int | None = None
     cost: float | None = None

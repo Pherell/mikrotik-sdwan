@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field
+from ipaddress import ip_address, ip_interface
 from typing import Literal, Protocol, runtime_checkable
 
 from app.drivers.base import ConfigSection
@@ -36,11 +37,36 @@ class Endpoint:
     nat_behind: bool = False
     loopback_ip: str | None = None
     ros_major: int = 7
+    # The underlay next hop out of this uplink, and the mask on its own
+    # address. Both are needed to pin a route to the far endpoint that BGP
+    # cannot displace -- see app.render.fabric._underlay_routes.
+    gateway: str | None = None
+    prefix_len: int | None = None
+    # The site's declared preference between its own uplinks. Lower is better,
+    # matching /ip/route distance, which is how it is used.
+    cost: float = 1.0
 
     @property
     def dial_out_only(self) -> bool:
         """Cannot accept an inbound tunnel: no public address, or behind NAT."""
         return self.public_ip is None or self.nat_behind
+
+    def on_link(self, address: str) -> bool:
+        """Is ``address`` on this uplink's own segment?
+
+        Unknown when the mask is -- an uplink entered by hand has no mask, and
+        guessing one would be worse than admitting it. False is the safe
+        answer: it routes through the gateway, which reaches an on-link peer
+        anyway, just by way of a hairpin.
+        """
+        if self.public_ip is None or self.prefix_len is None:
+            return False
+        try:
+            return ip_address(address) in ip_interface(
+                f"{self.public_ip}/{self.prefix_len}"
+            ).network
+        except ValueError:
+            return False
 
 
 @dataclass(slots=True, frozen=True)

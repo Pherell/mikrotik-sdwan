@@ -254,7 +254,25 @@ function WanForm({
             onChange={(e) => setForm({ ...form, provider: e.target.value })}
           />
         </label>
+        <label>
+          Next hop
+          <input
+            placeholder="10.0.0.1"
+            value={form.gateway}
+            onChange={(e) => setForm({ ...form, gateway: e.target.value })}
+          />
+        </label>
       </div>
+
+      {!form.gateway && (
+        <p className="muted" style={{ margin: "4px 0 0" }}>
+          Probing the device fills the next hop in. Without it the controller
+          cannot pin a route to the far end of each tunnel on this uplink, and a
+          neighbour advertising its own uplink subnet can pull that route into
+          the overlay — which works until the tunnel drops, and then stops it
+          coming back.
+        </p>
+      )}
 
       <div className="row" style={{ justifyContent: "flex-start", gap: 20 }}>
         <label className="no-grow" style={{ whiteSpace: "nowrap" }}>

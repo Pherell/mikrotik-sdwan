@@ -130,6 +130,68 @@ def test_diff_on_an_empty_device_is_all_adds() -> None:
     assert result.items[0].props["comment"].startswith("sdwan:site:branch-1")
 
 
+def test_a_row_can_insist_on_a_property_its_menu_ignores() -> None:
+    """Two renderers write /ip/route for opposite reasons: the policy routes
+    let netwatch own their distance at runtime, while the underlay routes use
+    distance to rank one uplink above another and are meaningless without it.
+    Once the sections merge, ignore belongs to the menu -- so without a way
+    back in, the stricter renderer loses and its rows all settle at whatever
+    distance the device already had. Two at one distance is ECMP."""
+    sec = section(
+        "/ip/route",
+        "routing",
+        owner="sdwan:t:",
+        key=("dst-address", "gateway"),
+        ignore=("distance",),
+        items=[
+            ConfigItem(
+                props={"dst-address": "10.0.0.1/32", "gateway": "a", "distance": 1},
+                tag="sdwan:t:relaxed",
+            ),
+            ConfigItem(
+                props={"dst-address": "10.0.0.2/32", "gateway": "b", "distance": 2},
+                tag="sdwan:t:strict",
+                enforce=("distance",),
+            ),
+        ],
+    )
+    live = [
+        {".id": "*1", "dst-address": "10.0.0.1/32", "gateway": "a",
+         "distance": 101, "comment": "sdwan:t:relaxed"},
+        {".id": "*2", "dst-address": "10.0.0.2/32", "gateway": "b",
+         "distance": 1, "comment": "sdwan:t:strict"},
+    ]
+
+    changed = {i.identity: i for i in diff_section(sec, live_rows=live).items}
+
+    # The relaxed row is left where netwatch put it.
+    assert ("10.0.0.1/32", "a") not in changed
+    # The strict row is pulled back to the distance that orders it. Props are
+    # canonicalised for the wire, so the value arrives as RouterOS takes it.
+    assert str(changed[("10.0.0.2/32", "b")].props["distance"]) == "2"
+
+
+def test_an_enforced_property_cannot_reopen_a_write_once_secret() -> None:
+    """Re-asserting a key is a secret round-trip whatever asks for it."""
+    sec = section(
+        "/interface/wireguard",
+        "tunnel",
+        owner="sdwan:t:",
+        key=("name",),
+        write_once=("private-key",),
+        items=[
+            ConfigItem(
+                props={"name": "wg0", "private-key": "fresh"},
+                tag="sdwan:t:wg0",
+                enforce=("private-key",),
+            )
+        ],
+    )
+    live = [{".id": "*1", "name": "wg0", "private-key": "stored", "comment": "sdwan:t:wg0"}]
+
+    assert diff_section(sec, live_rows=live).items == []
+
+
 def test_diff_ignores_rows_the_controller_does_not_own() -> None:
     sections = render_site(make_site())
     bridge = next(s for s in sections if s.path == "/interface/bridge")

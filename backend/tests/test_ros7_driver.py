@@ -178,6 +178,43 @@ async def test_suggest_wans_finds_both_uplinks(driver: Ros7RestDriver) -> None:
     # The LAN bridge is not offered as an uplink.
     assert "bridge" not in by_iface
 
+    # The mask is kept alongside the address: it is the only thing that says
+    # whether a tunnel's far end is on this segment or out through the
+    # gateway, and recovering it later means going back to the device.
+    assert by_iface["ether1"].prefix_len == 24
+
+
+async def test_uplink_cost_follows_the_device_not_the_interface_name() -> None:
+    """The router has already said which uplink it prefers, in the distance on
+    each default route. Numbering by the order interfaces happen to sort in
+    contradicts it -- and cost decides failover order and which uplink carries
+    a tunnel's underlay route, so getting it backwards puts the overlay on the
+    wrong link."""
+    ros = FakeRouterOS(
+        password="secret",
+        menus={
+            "ip/route": [
+                {"dst-address": "0.0.0.0/0", "gateway": "10.0.0.1",
+                 "immediate-gw": "10.0.0.1%ether9", "distance": 1},
+                {"dst-address": "0.0.0.0/0", "gateway": "10.1.0.1",
+                 "immediate-gw": "10.1.0.1%ether1", "distance": 5},
+            ],
+            "ip/address": [
+                {"address": "10.0.0.2/24", "interface": "ether9"},
+                {"address": "10.1.0.2/24", "interface": "ether1"},
+            ],
+        },
+    )
+    async with Ros7RestDriver(
+        "r", "admin", "secret", transport=httpx.ASGITransport(app=ros.app)
+    ) as d:
+        wans, _lan = await _suggest_wans(d)
+
+    # ether9 sorts after ether1 by name but is the router's preferred path.
+    assert [w.interface for w in wans] == ["ether9", "ether1"]
+    assert [w.cost for w in wans] == [1.0, 2.0]
+    assert wans[0].name == "wan1"
+
 
 async def _lan_driver(**menus) -> tuple[Ros7RestDriver, FakeRouterOS]:
     """A router whose bridge carries the default route -- so it *is* an uplink

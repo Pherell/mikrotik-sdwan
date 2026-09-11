@@ -50,8 +50,107 @@ def render_fabric(view: SiteFabricView, transport: TransportDriver) -> list[Conf
     for link in view.links:
         sections.extend(transport.render(link))
     sections.extend(_bgp(view))
+    sections.append(_underlay_routes(view))
     sections.append(_mss_clamp(view, transport))
     return sections
+
+
+def _underlay_routes(view: SiteFabricView) -> ConfigSection:
+    """Pin every tunnel's far endpoint to the underlay.
+
+    The fabric advertises connected networks (``output.redistribute``), and a
+    site's uplink subnet is one of its connected networks -- so a member ends
+    up learning, over the overlay, the route to an address the overlay itself
+    depends on reaching. Router-1's path to 10.1.11.229, the far end of its own
+    tunnel, became "through that tunnel", distance 200. Observed on live
+    hardware.
+
+    With one tunnel this survives: the route is withdrawn along with the tunnel
+    that carried it, so the underlay path comes back and the tunnel
+    re-establishes. That was measured -- a flapped tunnel recovered in under
+    twelve seconds. With two tunnels it does not: A's endpoint stays reachable
+    via B, so A can never re-handshake over its own uplink, and the two paths
+    stop being independent, which is the entire point of having two.
+
+    A host route fixes it for good, because longest-prefix match is decided
+    before distance is: a /32 beats any /24 a neighbour advertises, whatever
+    its distance, and beats a more specific advertisement too as long as
+    nothing announces the same /32. Filtering BGP instead cannot express this
+    -- RouterOS's ``dst in X`` asks whether a received route falls inside X,
+    and the question here is the reverse, whether a received route covers an
+    address of ours.
+
+    Two shapes, because an endpoint on the uplink's own segment is not reached
+    through the gateway:
+
+    * on-link  -> ``gateway=<interface>``, so the device ARPs for it directly;
+    * anywhere else -> ``gateway=<the uplink's next hop>``.
+
+    A dual-homed site pointing at a single-homed one has two links to the same
+    far address, one per uplink -- and a destination can only have one best
+    route, so the two tunnels cannot take different paths to it whatever this
+    renders. (They already could not: RouterOS WireGuard has no source
+    binding, so both leave by whichever uplink routing picks.) Every uplink
+    that could carry it is still written, ordered by the uplink's cost, so the
+    device has a backup to fall to when the preferred interface goes down.
+    Picking just one would throw that away.
+
+    An uplink with no gateway recorded gets no route and keeps the exposure;
+    ``app.services.diagnostics`` reports that rather than leaving it silent.
+    """
+    scope = owner_tag("fabric", view.fabric.name, view.site_name)
+
+    # far address -> the uplinks that could reach it, best first. Cost is the
+    # site's own declared preference between its uplinks, which is the only
+    # evidence available here; the device's live routing is not.
+    candidates: dict[str, list[Endpoint]] = {}
+    for link in sorted(view.links, key=lambda k: (k.local.cost, k.local.wan_name)):
+        # Nothing to pin: a dial-out-only peer has no address to route to, and
+        # its endpoint is learned from the handshake instead.
+        if not link.remote.public_ip:
+            continue
+        near = link.local
+        if not near.gateway and not near.on_link(link.remote.public_ip):
+            continue
+        by_far = candidates.setdefault(link.remote.public_ip, [])
+        if not any(e.interface == near.interface for e in by_far):
+            by_far.append(near)
+
+    items: list[ConfigItem] = []
+    for address, uplinks in sorted(candidates.items()):
+        for distance, near in enumerate(uplinks, start=1):
+            hop = near.interface if near.on_link(address) else near.gateway
+            items.append(
+                ConfigItem(
+                    props={
+                        "dst-address": f"{address}/32",
+                        "gateway": hop,
+                        "routing-table": "main",
+                        "distance": distance,
+                    },
+                    # These rows are ordered by distance and mean nothing
+                    # without it -- two at the same distance is ECMP, which
+                    # hashes the handshake across an uplink that may not
+                    # carry it. The menu ignores distance for the policy
+                    # routes' sake; say so here rather than let that win.
+                    enforce=("distance",),
+                    tag=f"{scope}:underlay:{address}:{near.interface}",
+                )
+            )
+
+    return section(
+        "/ip/route",
+        "underlay_route",
+        owner=f"{scope}:underlay",
+        # Must match every other renderer writing this menu, or the merge
+        # refuses to combine them.
+        key=("dst-address", "gateway", "routing-table"),
+        # Shared with the policy routes, whose distance netwatch owns at
+        # runtime. Each row above opts back in individually, because these
+        # rows *are* their distance.
+        ignore=("distance",),
+        items=items,
+    )
 
 
 def _mss_clamp(view: SiteFabricView, transport: TransportDriver) -> ConfigSection:

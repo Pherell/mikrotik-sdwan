@@ -263,6 +263,10 @@ def _compare(
 ) -> list[FieldChange]:
     """Which managed properties differ, comparing canonically."""
     changes: list[FieldChange] = []
+    # A row may insist on a property the menu otherwise ignores; write_once is
+    # not overridable, because re-asserting a secret is a round-trip whatever
+    # asks for it.
+    ignored = ignored - set(item.enforce)
     for prop, value in item.props.items():
         if prop in ignored or prop in write_once:
             continue

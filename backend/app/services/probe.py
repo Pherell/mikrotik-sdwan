@@ -102,6 +102,12 @@ async def _suggest_wans(
 
     # interface -> gateway, from active default routes only.
     gateways: dict[str, str | None] = {}
+    # interface -> the distance of its default route. The device has already
+    # said which uplink it prefers; deriving cost from the order interfaces
+    # happen to sort in would contradict it, and cost is what the controller
+    # uses to order failover and to pick which uplink carries a tunnel's
+    # underlay route.
+    preference: dict[str, float] = {}
     for route in routes:
         if str(route.get("dst-address", "")) not in _DEFAULT_ROUTE:
             continue
@@ -109,13 +115,15 @@ async def _suggest_wans(
             continue
         iface = route.get("immediate-gw") or route.get("gateway") or ""
         gw, _, name = str(iface).partition("%")
-        if name:
-            gateways.setdefault(name, gw or None)
-        elif _is_ip(gw):
+        if not name and _is_ip(gw):
             # Gateway given as a bare address; match it to an interface subnet.
-            owner = _interface_for(gw, addresses)
-            if owner:
-                gateways.setdefault(owner, gw)
+            name = _interface_for(gw, addresses) or ""
+        if not name:
+            continue
+        gateways.setdefault(name, gw or None)
+        distance = _as_float(route.get("distance"))
+        if distance is not None:
+            preference[name] = min(preference.get(name, distance), distance)
 
     for client in dhcp:
         if client.get("disabled"):
@@ -125,10 +133,14 @@ async def _suggest_wans(
             gateways.setdefault(iface, client.get("gateway"))
 
     # Separate before numbering, so dropping a LAN does not leave a gap in the
-    # wan1/wan2 sequence or in the cost ladder derived from it.
+    # wan1/wan2 sequence or in the cost ladder derived from it. Ordered by the
+    # device's own default-route distance, so wan1 is the uplink it actually
+    # prefers; an interface with no default route sorts last rather than
+    # jumping the queue on its name.
     candidates: list[tuple[str, str | None]] = []
     lan: list[InterfaceNote] = []
-    for iface, gw in sorted(gateways.items()):
+    ordered = sorted(gateways.items(), key=lambda kv: (preference.get(kv[0], _NO_ROUTE), kv[0]))
+    for iface, gw in ordered:
         reason = _lan_reason(iface, membership, bridges, serving)
         if reason is None:
             candidates.append((iface, gw))
@@ -137,7 +149,8 @@ async def _suggest_wans(
 
     suggestions: list[WanCreate] = []
     for index, (iface, gw) in enumerate(candidates, start=1):
-        addr = _address_on(iface, addresses)
+        found = _address_on(iface, addresses)
+        addr, prefix_len = found if found else (None, None)
         is_dhcp = any(
             str(c.get("interface", "")) == iface and not c.get("disabled") for c in dhcp
         )
@@ -149,6 +162,10 @@ async def _suggest_wans(
                 # A private address on the uplink means the router sits behind
                 # NAT and can only ever dial out.
                 public_ip=None if (private or addr is None) else addr,
+                # Kept even when the address is not usable as a public one: the
+                # mask describes the segment, which is what the underlay route
+                # needs, and that is true whether or not the address routes.
+                prefix_len=prefix_len,
                 dynamic=is_dhcp,
                 nat_behind=private,
                 gateway=gw if gw and _is_ip(str(gw)) else None,
@@ -216,15 +233,34 @@ async def _safe_read(driver: DeviceDriver, path: str) -> list[dict]:
         return []
 
 
-def _address_on(interface: str, addresses: list[dict]) -> str | None:
+# Sorts after any real route distance, which RouterOS caps at 255.
+_NO_ROUTE = 1e6
+
+
+def _as_float(value: object) -> float | None:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _address_on(interface: str, addresses: list[dict]) -> tuple[str, int] | None:
+    """The interface's address and its mask length.
+
+    The mask is kept, not discarded: it is the only thing that says whether a
+    tunnel's far endpoint is on this segment or out through the gateway, and
+    those two need different routes. Recovering it later means going back to
+    the device.
+    """
     for row in addresses:
         if str(row.get("interface", "")) == interface and not row.get("disabled"):
             raw = str(row.get("address", ""))
             if "/" in raw:
                 try:
-                    return str(ip_interface(raw).ip)
+                    parsed = ip_interface(raw)
                 except ValueError:
                     continue
+                return str(parsed.ip), parsed.network.prefixlen
     return None
 
 

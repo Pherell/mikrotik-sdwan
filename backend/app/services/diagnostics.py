@@ -41,6 +41,10 @@ log = logging.getLogger(__name__)
 # a warning -- it is a wrong answer to a question that was never asked.
 _IPSEC_TRANSPORTS = frozenset({"ipsec_gre", "ipsec_policy"})
 
+# What RouterOS calls the interfaces that carry an overlay. Used to spot a
+# tunnel whose own endpoint is routed through another tunnel.
+_TUNNEL_TYPES = frozenset({"gre", "ipip", "wireguard", "eoip", "vxlan", "ipsec"})
+
 # RouterOS reports times as concatenated units: "11ms391us", "1s200ms", "4ms".
 _DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(us|ms|s|m|h|d)")
 _UNIT_MS = {
@@ -419,6 +423,25 @@ def _diagnose(
             "tunnel network only works it out -- open this device and Apply to "
             "push it."
         )
+
+    # The endpoint is reached through a tunnel. Check this before anything
+    # protocol-specific: it explains a tunnel that cannot re-establish no
+    # matter which transport carries it, and every lower branch would report a
+    # symptom of it instead. Only when the link is actually in trouble -- a
+    # session that is up is working, whatever the route looks like.
+    if far.public_ip and health.bgp_established is not True:
+        egress, _hop = _egress(routes, addresses, far.public_ip)
+        carrier = _text(interfaces.get(egress or "", {}).get("type"))
+        if egress and carrier in _TUNNEL_TYPES:
+            return (
+                f"The route to {far.public_ip} -- this tunnel's own far end -- "
+                f"leaves via {egress}, which is itself a tunnel. Its underlay "
+                "runs through an overlay that depends on it, so once it drops "
+                "it cannot come back. Usually a neighbour advertising its own "
+                "uplink subnet into the fabric. The controller pins a host "
+                "route to each endpoint to prevent this; this uplink has no "
+                "gateway recorded, so it got none."
+            )
 
     if transport == "wireguard":
         wireguard = _diagnose_wireguard(

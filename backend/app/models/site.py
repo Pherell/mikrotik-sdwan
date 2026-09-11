@@ -99,6 +99,12 @@ class Wan(Base, UUIDPk, Timestamps):
     nat_behind: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     gateway: Mapped[str | None] = mapped_column(String(64))
+    # Mask length of public_ip on this interface, so the controller can tell an
+    # on-link peer from one reached through the gateway. Storing an address
+    # with no mask is lossy: the two cases need different routes and there is
+    # no way to distinguish them afterwards. Null when the uplink was entered
+    # by hand rather than probed.
+    prefix_len: Mapped[int | None] = mapped_column(Integer)
     provider: Mapped[str | None] = mapped_column(String(128))
     bandwidth_mbps: Mapped[int | None] = mapped_column(Integer)
     cost: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
