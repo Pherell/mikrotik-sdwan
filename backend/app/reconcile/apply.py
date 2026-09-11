@@ -219,14 +219,27 @@ async def _prune_backups(driver: DeviceDriver) -> int:
     being logged.
     """
     try:
-        files = await driver.read("/file")
-    except DriverError as exc:
+        # Only the columns needed to pick the stale ones. Without .proplist
+        # RouterOS returns every field it has for every file, and on a router
+        # holding a binary one (a firmware package, a hotspot image) the
+        # response is not valid UTF-8 -- decoding it raised UnicodeDecodeError
+        # and failed an apply that had already finished successfully.
+        files = await driver.read(
+            "/file", {".proplist": ".id,name,creation-time,last-modified"}
+        )
+    except Exception as exc:
+        # Deliberately broad. This is cleanup *after* a successful push: there
+        # is no failure here worth turning a good apply into a bad one, and
+        # DriverError alone does not cover what a device can do to a response.
         log.info("could not list files to prune backups: %s", exc)
         return 0
 
     ours = sorted(
         (f for f in files if str(f.get("name", "")).startswith(_BACKUP_PREFIX)),
-        key=lambda f: str(f.get("creation-time", "")),
+        # 7.24 reports last-modified; older builds report creation-time. Keying
+        # on a field the device does not have sorts every backup equal, which
+        # silently makes "keep the most recent" keep an arbitrary one.
+        key=lambda f: str(f.get("last-modified") or f.get("creation-time") or ""),
     )
     removed = 0
     for stale in ours[:-_KEEP_BACKUPS] if len(ours) > _KEEP_BACKUPS else []:
@@ -238,7 +251,7 @@ async def _prune_backups(driver: DeviceDriver) -> int:
                 [ConfigOp(kind=OpKind.remove, path="/file", item_id=item_id)]
             )
             removed += 1 if result.ok else 0
-        except DriverError as exc:  # pragma: no cover - device-specific
+        except Exception as exc:  # pragma: no cover - device-specific
             log.info("could not remove %s: %s", stale.get("name"), exc)
     return removed
 

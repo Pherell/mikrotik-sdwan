@@ -354,6 +354,33 @@ async def test_safe_apply_backs_up_arms_and_disarms(bare_driver, bare_ros) -> No
     assert outcome.rollback_armed is False
 
 
+async def test_a_file_listing_that_will_not_decode_does_not_fail_the_apply(
+    bare_driver, bare_ros, monkeypatch
+) -> None:
+    """Pruning old backups runs *after* a successful push, and RouterOS returns
+    every column of every file unless told otherwise -- so a router holding a
+    binary file (firmware package, hotspot image) answers /file with bytes that
+    are not valid UTF-8. That raised UnicodeDecodeError, which is not a
+    DriverError, and turned a finished apply into a failed one.
+    """
+    plan = await build_plan(bare_driver, render_site(make_site()))
+    real_read = bare_driver.read
+
+    async def read(path, query=None):
+        if path.strip("/") == "file":
+            raise UnicodeDecodeError("utf-8", b"\x89", 0, 1, "invalid start byte")
+        return await real_read(path, query)
+
+    monkeypatch.setattr(bare_driver, "read", read)
+
+    outcome = await safe_apply(
+        bare_driver, plan.ops(), job_id="job-abcdef12", timeout_seconds=90
+    )
+
+    assert outcome.ok, outcome.error
+    assert outcome.rollback_armed is False
+
+
 async def test_safe_apply_arms_before_pushing(bare_ros) -> None:
     """The scheduler must exist before the first mutating op, or a push that
     kills management access has no safety net."""
