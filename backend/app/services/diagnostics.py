@@ -572,7 +572,23 @@ def _diagnose_wireguard(
         )
 
     if _handshaked(peer):
-        return None  # the wire works; let the BGP branch below speak
+        # The wire works. That is not the same as the tunnel carrying
+        # anything: allowed-address filters what WireGuard will encrypt to
+        # this peer, so a prefix routed onto the interface but outside it is
+        # dropped there, and the router answers its own packet with an
+        # unreachable. Nothing else reports that -- the interface is running,
+        # the handshake is current, and BGP is established over the /31 --
+        # which is how it survived being called verified.
+        stranded = _outside_allowed(peer, routes, health.interface)
+        if stranded:
+            return (
+                f"The tunnel is up but {', '.join(stranded)} is routed onto "
+                f"{health.interface} without being covered by the peer's "
+                "allowed-address, so WireGuard drops it rather than "
+                "encrypting it. Traffic to it fails while every layer still "
+                "reports healthy. Apply this device to restore the peer."
+            )
+        return None  # let the BGP branch below speak
 
     if not far.public_ip:
         return (
@@ -605,6 +621,45 @@ def _diagnose_wireguard(
         f"addresses.{where}{roamed} A successful ping proves nothing about it "
         "-- ICMP is not what is being blocked."
     )
+
+
+def _outside_allowed(
+    peer: dict[str, Any], routes: list[dict[str, Any]], interface: str | None
+) -> list[str]:
+    """Prefixes routed onto this interface that its peer will not carry.
+
+    Reported rather than inferred from the render, so a peer someone narrowed
+    by hand is caught too.
+    """
+    allowed: list[Any] = []
+    for part in _text(peer.get("allowed-address")).split(","):
+        try:
+            allowed.append(ip_network(part.strip(), strict=False))
+        except ValueError:
+            continue
+    if not allowed:
+        return []
+
+    stranded: list[str] = []
+    for row in routes:
+        if row.get("disabled") or not _truthy(row.get("active")):
+            continue
+        hop = _text(row.get("immediate-gw"))
+        egress = hop.partition("%")[2] if "%" in hop else _text(row.get("gateway"))
+        if egress != interface:
+            continue
+        try:
+            dst = ip_network(_text(row.get("dst-address")), strict=False)
+        except ValueError:
+            continue
+        # subnet_of needs both to be the same family, which mixed tables are
+        # not; comparing versions first keeps it from raising.
+        if not any(
+            dst.version == net.version and dst.subnet_of(net)  # type: ignore[arg-type]
+            for net in allowed
+        ):
+            stranded.append(str(dst))
+    return stranded
 
 
 def _handshaked(peer: dict[str, Any]) -> bool:

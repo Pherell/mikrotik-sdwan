@@ -180,6 +180,25 @@ def test_wireguard_listens_on_the_port_the_link_was_given() -> None:
     assert peer.items[0].props["endpoint-port"] == 13244
 
 
+def test_wireguard_lets_routed_traffic_cross_not_just_the_overlay() -> None:
+    """allowed-address is a filter on what a peer may carry, not a routing
+    table -- RouterOS installs no routes from it (verified on 7.24.2: a peer
+    set to 0.0.0.0/0 added nothing to /ip/route).
+
+    Narrowed to the link's own /31 the tunnel carried its BGP session and
+    nothing else: a packet to the far LAN was routed onto the interface and
+    dropped there, with the router generating the unreachable itself. Control
+    plane up, data plane dead. It cannot be a list either, because BGP decides
+    what crosses at runtime.
+    """
+    driver = get_transport("wireguard")
+    view = link(secrets=driver.allocate(), listen_port=13231)
+
+    peer = next(s for s in driver.render(view) if s.path == "/interface/wireguard/peers")
+
+    assert peer.items[0].props["allowed-address"] == "0.0.0.0/0"
+
+
 def test_wireguard_falls_back_to_the_fabric_port_when_a_link_has_none() -> None:
     """Links created before ports were per link carry None until the next
     expansion backfills them. Rendering nothing at all would be worse than
@@ -211,16 +230,23 @@ def test_wireguard_key_assignment_does_not_move_when_the_initiator_changes() -> 
     assert a.items[0].props["private-key"] == b.items[0].props["private-key"]
 
 
-def test_wireguard_allows_only_the_overlay_subnet() -> None:
-    """allowed-address is WireGuard's routing table. 0.0.0.0/0 here would
-    swallow every packet on the device."""
+def test_wireguard_installs_no_routes_of_its_own() -> None:
+    """The peer used to be pinned to the link's /31, guarded by a test whose
+    reasoning was "allowed-address is WireGuard's routing table, 0.0.0.0/0
+    would swallow every packet". Neither half is true on RouterOS -- a peer
+    creates no route at all, verified on 7.24.2 -- and the test held the bug
+    in place: the tunnel carried its BGP session and dropped every LAN packet.
+
+    What the transport must never do is emit a route, because that is the
+    thing that was actually feared and the only thing that could swallow
+    traffic. It does not; routing stays the controller's to decide.
+    """
     driver = get_transport("wireguard")
-    peer = next(
-        s
-        for s in driver.render(link(secrets=driver.allocate()))
-        if s.path == "/interface/wireguard/peers"
-    )
-    assert peer.items[0].props["allowed-address"] == "10.255.0.0/31"
+
+    paths = {s.path for s in driver.render(link(secrets=driver.allocate()))}
+
+    assert "/ip/route" not in paths
+    assert paths == {"/interface/wireguard", "/interface/wireguard/peers", "/ip/address"}
 
 
 def test_wireguard_keeps_a_natted_peer_alive() -> None:

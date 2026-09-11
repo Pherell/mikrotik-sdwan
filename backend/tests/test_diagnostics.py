@@ -711,6 +711,91 @@ async def test_bytes_received_are_not_mistaken_for_a_handshake() -> None:
     assert "103.210.35.189" in (row.diagnosis or "")
 
 
+async def test_a_prefix_the_peer_will_not_carry_is_reported() -> None:
+    """The hardest failure shape in this whole system: interface running,
+    handshake current, BGP established -- and no traffic crosses, because
+    allowed-address does not cover what routing sends to the interface, so
+    WireGuard drops it and the router answers its own packet. Verified on
+    7.24.2: with the link's /31 alone, a LAN-to-LAN ping got 'host
+    unreachable' from the sender's own tunnel address; widened, 3/3 both
+    ways. Every other layer reported healthy throughout."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13231
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": True}
+            ],
+            "interface/wireguard": [
+                {"name": "wg-branch-hq", "listen-port": "13231", "running": True}
+            ],
+            "interface/wireguard/peers": [
+                {"interface": "wg-branch-hq", "public-key": "k",
+                 "allowed-address": "10.255.0.0/31", "last-handshake": "18s"}
+            ],
+            "ip/route": [
+                # Learned over the tunnel, routed onto it, outside the filter.
+                {"dst-address": "192.168.2.0/24", "gateway": "10.255.0.1",
+                 "immediate-gw": "10.255.0.1%wg-branch-hq", "active": "true",
+                 "disabled": "false"},
+                # The overlay itself is covered and must not be reported.
+                {"dst-address": "10.255.0.0/31", "gateway": "wg-branch-hq",
+                 "immediate-gw": "wg-branch-hq", "active": "true",
+                 "disabled": "false"},
+            ],
+            "routing/bgp/session": [
+                {"name": "s", "remote.address": "10.255.0.1", "established": "true"}
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert "192.168.2.0/24" in (row.diagnosis or "")
+    assert "allowed-address" in (row.diagnosis or "")
+    assert "10.255.0.0/31" not in (row.diagnosis or "")
+
+
+async def test_a_peer_carrying_everything_routed_to_it_is_left_alone() -> None:
+    """0.0.0.0/0 covers whatever BGP decides to send, which is the point."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13231
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": True}
+            ],
+            "interface/wireguard": [
+                {"name": "wg-branch-hq", "listen-port": "13231", "running": True}
+            ],
+            "interface/wireguard/peers": [
+                {"interface": "wg-branch-hq", "public-key": "k",
+                 "allowed-address": "0.0.0.0/0", "last-handshake": "18s"}
+            ],
+            "ip/route": [
+                {"dst-address": "192.168.2.0/24", "gateway": "10.255.0.1",
+                 "immediate-gw": "10.255.0.1%wg-branch-hq", "active": "true",
+                 "disabled": "false"},
+            ],
+            "routing/bgp/session": [
+                {"name": "s", "remote.address": "10.255.0.1", "established": "true"}
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert row.diagnosis is None
+
+
 async def test_a_handshaking_wireguard_tunnel_is_not_blamed_for_the_path() -> None:
     """Once a handshake has happened the wire demonstrably works, so the
     diagnosis has to move on to what is actually wrong above it."""

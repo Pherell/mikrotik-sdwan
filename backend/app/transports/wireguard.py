@@ -163,9 +163,26 @@ class WireGuardTransport:
         peer_props: dict[str, object] = {
             "interface": iface,
             "public-key": remote_public,
-            # Only the overlay /31 crosses this peer. A 0.0.0.0/0 allowed-ips
-            # would make WireGuard's cryptokey routing swallow everything.
-            "allowed-address": link.subnet_cidr,
+            # What WireGuard will encrypt to this peer, and what it will
+            # accept back. It is a filter, not a routing table: on RouterOS a
+            # peer installs no routes of its own, which was verified rather
+            # than assumed -- setting 0.0.0.0/0 on a live peer added nothing
+            # to /ip/route.
+            #
+            # This was the link's own /31, on the reasoning that a wide value
+            # would "swallow everything". It does not, and the narrow value
+            # meant the tunnel carried its BGP session and nothing else: a
+            # packet to the far LAN was routed onto the interface and dropped
+            # there, the router generating the unreachable itself. Control
+            # plane up, data plane dead, which is the hardest shape to spot.
+            #
+            # It cannot be narrowed to a list either, because BGP decides what
+            # crosses at runtime -- a site redistributing a connected network
+            # advertises prefixes no renderer knew about. Routing picks what
+            # goes to the interface; this says only that the peer may carry
+            # it. There is exactly one peer per interface, so there is nothing
+            # here for a wide value to make ambiguous.
+            "allowed-address": "0.0.0.0/0",
             "preshared-key": link.secrets.get("preshared", ""),
         }
         if link.remote.public_ip:
