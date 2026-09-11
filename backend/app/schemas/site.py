@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from ipaddress import ip_address, ip_network
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from app.models.enums import DeviceKind, SiteRole, SiteStatus
+from app.netaddr import private_uplink_note
 from app.schemas.time import UtcDatetime
 
 
@@ -72,6 +73,19 @@ class WanRead(WanBase):
     id: str
     site_id: str
     dial_out_only: bool
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def warnings(self) -> list[str]:
+        """Things worth a second look that are not worth refusing.
+
+        An uplink whose "public" address is not routable is the one that has
+        actually cost time: it is correct for private transit and wrong for an
+        uplink behind NAT, and the two are indistinguishable from here. Better
+        said once, next to the value, than discovered when no tunnel comes up.
+        """
+        note = private_uplink_note(self.public_ip, self.nat_behind)
+        return [note] if note else []
 
 
 class SiteBase(BaseModel):
@@ -185,6 +199,25 @@ class InterfaceNote(BaseModel):
     reason: str
 
 
+class UplinkConflict(BaseModel):
+    """A stored uplink fact the device contradicts.
+
+    The controller has always held both numbers and never compared them, and
+    the gap is expensive: an uplink marked reachable that is really behind NAT
+    renders an IPsec peer pinned to an address the far end never sees, so IKE
+    arrives, matches no peer, and is discarded. Every layer then reports "no
+    exchange" and the configuration looks right on both routers.
+    """
+
+    wan_id: str
+    wan_name: str
+    interface: str
+    field: str
+    stored: str
+    observed: str
+    why: str
+
+
 class ProbeResult(BaseModel):
     """What the onboarding wizard shows after touching a device."""
 
@@ -204,3 +237,5 @@ class ProbeResult(BaseModel):
     # Interfaces that carried an uplink signal but look like a LAN (bridged and
     # serving DHCP), with the reason they were not offered.
     lan_interfaces: list[InterfaceNote] = Field(default_factory=list)
+    # Uplinks already on this site whose stored facts the device contradicts.
+    uplink_conflicts: list[UplinkConflict] = Field(default_factory=list)

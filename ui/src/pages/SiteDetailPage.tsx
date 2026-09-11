@@ -104,6 +104,36 @@ export function SiteDetailPage() {
         </div>
 
         {s.last_error && <div className="error" style={{ marginTop: 12 }}>{s.last_error}</div>}
+
+        {/* The controller has always held both the stored uplink facts and the
+            device's own; it never compared them. An uplink marked reachable
+            that is really behind NAT builds tunnels to an address the far end
+            never sees, and every layer then reports nothing arriving. */}
+        {(probe.data?.uplink_conflicts?.length ?? 0) > 0 && (
+          <div className="warn" style={{ marginTop: 12 }}>
+            <strong>The device disagrees with what is stored for these uplinks.</strong>
+            <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+              {probe.data!.uplink_conflicts.map((c) => (
+                <li key={`${c.wan_id}:${c.field}`} style={{ marginBottom: 8 }}>
+                  <strong>{c.wan_name}</strong> ({c.interface}) — stored as{" "}
+                  <em>{c.stored}</em>, but {c.observed}.
+                  <div className="muted">{c.why}</div>
+                </li>
+              ))}
+            </ul>
+            <p className="muted" style={{ margin: "8px 0 0" }}>
+              Nothing has been changed. Edit the uplink if the device is right —
+              it usually is, but not always: an uplink can be reachable on an
+              address the router cannot see on itself, which is what a port
+              forward does.
+            </p>
+          </div>
+        )}
+        {probe.data?.reachable && probe.data.uplink_conflicts?.length === 0 && (
+          <p className="muted" style={{ marginTop: 12 }}>
+            Probed just now — the stored uplinks match what the device reports.
+          </p>
+        )}
         {drift.data && !drift.data.result?.drifted && (
           <p className="muted" style={{ marginTop: 12 }}>
             Checked just now — the device matches intent.

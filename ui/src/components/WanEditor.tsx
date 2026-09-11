@@ -5,6 +5,29 @@ import { endpoints, type Site, type Wan } from "../lib/api";
 import { InterfacePicker } from "./InterfacePicker";
 
 /**
+ * Can the far end reach this address over the internet?
+ *
+ * Deliberately narrower than "is it private": the question is only whether a
+ * peer could dial it. Mirrors UNROUTABLE in app/netaddr.py — keep them in step.
+ */
+function isUnroutable(value: string): boolean {
+  const octets = value.trim().split(".").map(Number);
+  if (octets.length !== 4) return false;
+  if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const a = octets[0] ?? -1;
+  const b = octets[1] ?? -1;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) || // CGNAT
+    (a === 169 && b === 254) // link-local
+  );
+}
+
+/**
  * Add, edit and remove uplinks.
  *
  * Tags are the vocabulary steering policies use, so they are edited here as
@@ -319,6 +342,25 @@ function WanForm({
           Correct for private transit — MPLS, a partner link — and wrong for an
           internet connection, where it will be dropped upstream.
         </p>
+      )}
+
+      {/* An address that is not routable is correct for private transit and
+          wrong for an uplink behind NAT, and the two look identical from here.
+          Getting it wrong is expensive: the far end dials an address the
+          traffic never arrives from, so IKE matches no peer and is dropped
+          without a log. Better said next to the field than discovered when no
+          tunnel comes up. */}
+      {!form.nat_behind && isUnroutable(form.public_ip) && (
+        <div className="warn">
+          <strong>{form.public_ip} is not routable on the internet.</strong>
+          <p style={{ margin: "4px 0 0" }}>
+            That is right for private transit — MPLS, a partner link, a lab —
+            and wrong if this uplink is really behind NAT. If it is, tick{" "}
+            <strong>Behind NAT</strong>: the far end would otherwise be told to
+            dial an address the traffic never arrives from, and the tunnel
+            fails with nothing logged anywhere.
+          </p>
+        </div>
       )}
 
       {dialOutOnly && (

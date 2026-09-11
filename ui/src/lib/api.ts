@@ -113,6 +113,9 @@ export interface Wan {
   dynamic: boolean;
   nat_behind: boolean;
   gateway: string | null;
+  // Things worth a second look that are not worth refusing — an uplink whose
+  // "public" address is not routable, most usefully.
+  warnings?: string[];
   // Mask length of public_ip. Says whether a tunnel's far end is on this
   // uplink's own segment or out through the next hop — different routes.
   prefix_len: number | null;
@@ -168,6 +171,19 @@ export interface ProbeResult {
   packages: string[];
   suggested_wans: Array<Omit<Wan, "id" | "site_id" | "dial_out_only">>;
   lan_interfaces: Array<{ interface: string; reason: string }>;
+  // Uplinks already on this site whose stored facts the device contradicts.
+  // The controller has always held both numbers; it never compared them.
+  uplink_conflicts: UplinkConflict[];
+}
+
+export interface UplinkConflict {
+  wan_id: string;
+  wan_name: string;
+  interface: string;
+  field: string;
+  stored: string;
+  observed: string;
+  why: string;
 }
 
 export interface CurrentUser {

@@ -88,6 +88,14 @@ def test_a_transport_with_nothing_to_negotiate_says_so(transport) -> None:
     assert validate(transport, {"dh_group": "ecp256"})  # and refuses overrides
 
 
+def test_every_transport_with_options_actually_exists() -> None:
+    """OPTIONS described "ipsec_policy" -- a transport nothing registers and
+    create_fabric refuses. Harmless on its own, but it is how a UI ends up
+    offering settings for something that cannot be built, and how someone
+    concludes a transport is available when it is not."""
+    assert set(OPTIONS) <= set(available()), "options for a transport that does not exist"
+
+
 def test_wireguard_offers_the_port_but_no_ciphers() -> None:
     """WireGuard's ciphers are not selectable by design, so there is nothing to
     negotiate -- but the port is worth exposing, because something in the path

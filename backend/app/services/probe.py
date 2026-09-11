@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from ipaddress import ip_address, ip_interface, ip_network
+from ipaddress import ip_address, ip_interface
+
+from sqlalchemy import inspect
 
 from app.drivers.base import DeviceDriver, DriverError
 from app.drivers.factory import open_driver
 from app.drivers.identity import IdentityMismatch
 from app.models.enums import SiteStatus
-from app.models.site import Site
-from app.schemas.site import InterfaceNote, ProbeResult, WanCreate
+from app.models.site import Site, Wan
+from app.netaddr import is_unroutable
+from app.schemas.site import InterfaceNote, ProbeResult, UplinkConflict, WanCreate
 from app.security import SecretBox
 
 log = logging.getLogger(__name__)
@@ -52,7 +55,92 @@ async def probe_site(site: Site, box: SecretBox | None = None) -> ProbeResult:
         packages=caps.packages,
         suggested_wans=wans,
         lan_interfaces=lan,
+        uplink_conflicts=compare_uplinks(site, wans),
     )
+
+
+def compare_uplinks(site: Site, observed: list[WanCreate]) -> list[UplinkConflict]:
+    """Stored uplink facts the device contradicts.
+
+    Only reachability is checked, because only reachability changes what the
+    controller builds. An uplink wrongly marked reachable pins the far end's
+    IPsec peer to an address it never sees: IKE arrives, matches no peer, and
+    is discarded, so both routers look correctly configured and nothing
+    establishes. That is precisely what happened here -- three uplinks entered
+    by hand claimed public addresses the devices had never had.
+
+    Reported, never corrected. The device's view is evidence, not authority:
+    an uplink can be reachable on an address the router cannot see on itself,
+    which is the whole point of a port forward.
+    """
+    seen = {w.interface: w for w in observed}
+    out: list[UplinkConflict] = []
+
+    for wan in _loaded_wans(site):
+        if not wan.enabled:
+            continue
+        device = seen.get(wan.interface)
+        if device is None:
+            continue
+
+        if wan.public_ip and device.nat_behind and not wan.nat_behind:
+            out.append(
+                UplinkConflict(
+                    wan_id=wan.id,
+                    wan_name=wan.name,
+                    interface=wan.interface,
+                    field="nat_behind",
+                    stored="reachable from outside",
+                    observed=(
+                        f"{device.public_ip} is not routable"
+                        if device.public_ip
+                        else "the address on that interface is not routable"
+                    ),
+                    why=(
+                        "The far end will be told to dial this address. If the "
+                        "traffic is translated on the way, it arrives from a "
+                        "different one, matches no IPsec peer, and is dropped "
+                        "without a log. WireGuard survives it by learning the "
+                        "real address from the handshake; nothing else does."
+                    ),
+                )
+            )
+            continue
+
+        if wan.public_ip and device.public_ip and wan.public_ip != device.public_ip:
+            out.append(
+                UplinkConflict(
+                    wan_id=wan.id,
+                    wan_name=wan.name,
+                    interface=wan.interface,
+                    field="public_ip",
+                    stored=wan.public_ip,
+                    observed=device.public_ip,
+                    why=(
+                        "Tunnels to this site are built to the stored address. "
+                        "If the device no longer holds it, every tunnel to it "
+                        "dials somewhere that will not answer."
+                    ),
+                )
+            )
+
+    return out
+
+
+def _loaded_wans(site: Site) -> list[Wan]:
+    """The site's uplinks, but only if the caller already loaded them.
+
+    ``Site.wans`` is selectin-loaded on the query paths that go through the
+    API, and *not* loaded on the enrollment path, which builds a Site that has
+    never been read back. Touching the relationship there is a lazy load in a
+    thread with no greenlet to run the IO, which fails as MissingGreenlet --
+    a probe crashing on enrollment because it tried to compare uplinks that do
+    not exist yet. Asking first is better than a try/except that would also
+    swallow real database errors.
+    """
+    if "wans" in inspect(site).unloaded:
+        return []
+    return list(site.wans)
 
 
 def apply_probe(site: Site, result: ProbeResult) -> None:
@@ -154,7 +242,7 @@ async def _suggest_wans(
         is_dhcp = any(
             str(c.get("interface", "")) == iface and not c.get("disabled") for c in dhcp
         )
-        private = addr is not None and _is_private(addr)
+        private = addr is not None and is_unroutable(addr)
         suggestions.append(
             WanCreate(
                 name=f"wan{index}",
@@ -290,29 +378,4 @@ def _is_ip(value: str) -> bool:
 
 
 # Ranges from which a router cannot be reached by an inbound tunnel.
-# ``ip_address.is_private`` is deliberately not used: its membership changed
-# across Python versions (3.12 folded the documentation ranges in), and it also
-# covers space that says nothing about NAT. The question here is narrower --
-# is this address unroutable on the public internet?
-_UNROUTABLE = tuple(
-    ip_network(n)
-    for n in (
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "100.64.0.0/10",   # CGNAT
-        "169.254.0.0/16",  # link-local
-        "127.0.0.0/8",
-        "0.0.0.0/8",
-        "fc00::/7",
-        "fe80::/10",
-    )
-)
 
-
-def _is_private(value: str) -> bool:
-    try:
-        addr = ip_address(value)
-    except ValueError:
-        return False
-    return any(addr in net for net in _UNROUTABLE if net.version == addr.version)

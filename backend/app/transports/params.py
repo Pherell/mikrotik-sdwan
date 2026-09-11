@@ -231,7 +231,6 @@ WIREGUARD_OPTIONS: tuple[Option, ...] = (
 # Keyed by transport name, matching TransportDriver.name.
 OPTIONS: dict[str, tuple[Option, ...]] = {
     "ipsec_gre": IPSEC_OPTIONS,
-    "ipsec_policy": IPSEC_OPTIONS,
     "vxlan": L2_OPTIONS,
     "eoip": L2_OPTIONS,
     # GRE and IPIP have nothing to negotiate: no ciphers to agree on, and no
