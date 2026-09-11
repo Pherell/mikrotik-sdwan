@@ -46,6 +46,12 @@ class IpsecGreTransport:
     supported_ros = {6, 7}
     requires_reachable_responder = True
     learns_peer_address = False
+    # Wraps its GRE carrier in a tunnel-mode IPsec SA, so a NAT'd endpoint that
+    # is still reachable inbound at its own address (asymmetric / outbound-only
+    # NAT) works: the GRE crosses the NAT as ESP-in-UDP and is decrypted back
+    # to its original addresses. A bare carrier (gre/ipip/l2) cannot, so it
+    # leaves this False and validate_pair refuses a NAT'd endpoint for it.
+    wraps_carrier = True
     supports_dynamic_mesh = True
     # Nothing here listens on a port of its own choosing.
     listen_port_base = None
@@ -161,7 +167,15 @@ class IpsecGreTransport:
         # The device normalises a bare host address to /32 on read, so send it
         # that way or every re-diff re-sets it. /32 for a known remote, and
         # 0.0.0.0/0 when the initiator dials a remote behind a dynamic NAT.
-        if link.remote.public_ip:
+        #
+        # A passive responder whose initiator is behind NAT must accept the
+        # NAT's address, not the public_ip on the initiator's own uplink --
+        # those differ, and a /32 of the uplink address rejects the arriving
+        # IKE so no SA forms. Widen to 0.0.0.0/0 even though we know the
+        # address. Verified on real hardware over an asymmetric masquerade.
+        if not link.initiator and link.remote.nat_behind:
+            props["address"] = "0.0.0.0/0"
+        elif link.remote.public_ip:
             props["address"] = f"{link.remote.public_ip}/32"
         elif not link.initiator:
             props["address"] = "0.0.0.0/0"
@@ -208,21 +222,30 @@ class IpsecGreTransport:
         tag = f"{link.tag}:policy"
         items: list[ConfigItem] = []
         if link.local.public_ip and link.remote.public_ip:
-            items.append(
-                ConfigItem(
-                    props={
-                        "src-address": f"{link.local.public_ip}/32",
-                        "dst-address": f"{link.remote.public_ip}/32",
-                        "protocol": "gre",
-                        "tunnel": False,          # transport mode
-                        "action": "encrypt",
-                        "level": "unique",
-                        "peer": self._name(link, "peer"),
-                        "proposal": self._name(link, "prop"),
-                    },
-                    tag=tag,
-                )
-            )
+            # Transport mode is lighter and is proven on a clean path, but it
+            # leaves the GRE packet's real IP header on the wire -- so a NAT in
+            # the path rewrites it and the tunnel never comes up. When either
+            # end is NAT'd, wrap the GRE in a tunnel-mode SA instead: the GRE
+            # then crosses the NAT only as ESP-in-UDP/4500 and is decrypted
+            # back to its original addresses, which the GRE interface matches.
+            # Verified on real hardware over an asymmetric masquerade --
+            # transport mode 0/4 across the tunnel, tunnel mode 4/4.
+            natted = bool(link.local.nat_behind or link.remote.nat_behind)
+            props: dict[str, object] = {
+                "src-address": f"{link.local.public_ip}/32",
+                "dst-address": f"{link.remote.public_ip}/32",
+                "protocol": "gre",
+                "tunnel": natted,
+                "action": "encrypt",
+                "level": "unique",
+                "peer": self._name(link, "peer"),
+                "proposal": self._name(link, "prop"),
+            }
+            if natted:
+                # Tunnel mode needs the outer SA endpoints named explicitly.
+                props["sa-src-address"] = link.local.public_ip
+                props["sa-dst-address"] = link.remote.public_ip
+            items.append(ConfigItem(props=props, tag=tag))
         return section(
             "/ip/ipsec/policy",
             "crypto_policy",

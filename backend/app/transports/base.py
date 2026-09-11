@@ -195,14 +195,15 @@ def validate_pair(a: Endpoint, b: Endpoint, transport: TransportDriver) -> None:
 
     # One reachable end is enough only for a transport that can *learn* the
     # other's address. Everything else writes a fixed remote-address into the
-    # tunnel interface, and there is nothing to write for an endpoint with no
-    # reachable address: the far side renders a tunnel with an empty remote and
-    # silently never comes up.
+    # tunnel interface, so each end needs the other's address to write.
     if transport.requires_reachable_responder and not getattr(
         transport, "learns_peer_address", False
     ):
+        wraps = getattr(transport, "wraps_carrier", False)
         for near, far in ((a, b), (b, a)):
-            if near.dial_out_only:
+            # No address at all: nothing to write as the remote, so the far
+            # side renders a tunnel with an empty remote and never comes up.
+            if near.public_ip is None:
                 raise TransportError(
                     f"{near.site_name}/{near.wan_name} has no reachable address, and "
                     f"the {transport.name} transport needs one at both ends: "
@@ -210,6 +211,17 @@ def validate_pair(a: Endpoint, b: Endpoint, transport: TransportDriver) -> None:
                     "remote address and cannot learn it. Give this uplink a reachable "
                     "public address, or use the wireguard transport, which learns a "
                     "roaming peer's address from its handshake."
+                )
+            # Addressed but behind NAT: only a transport that wraps its carrier
+            # in an encrypted tunnel (ipsec_gre) survives the NAT -- the GRE
+            # crosses as ESP-in-UDP and decrypts to its original addresses. A
+            # bare carrier's packets are rewritten by the NAT and dropped.
+            if near.nat_behind and not wraps:
+                raise TransportError(
+                    f"{near.site_name}/{near.wan_name} is behind NAT, and the "
+                    f"{transport.name} transport's carrier cannot traverse it. Use "
+                    "ipsec_gre, which wraps the carrier in an IPsec tunnel, or "
+                    "wireguard, which learns a roaming peer's address."
                 )
 
     for endpoint in (a, b):

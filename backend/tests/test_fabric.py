@@ -253,6 +253,71 @@ def test_a_natted_uplink_cannot_carry_a_gre_tunnel() -> None:
     assert "wireguard" in reason
 
 
+def test_a_natted_but_addressed_uplink_can_carry_ipsec_gre() -> None:
+    """Asymmetric NAT: the uplink is reachable inbound at its own address, but
+    its outbound is masqueraded. ipsec_gre wraps the GRE in a tunnel-mode SA
+    that crosses the NAT, so -- unlike bare GRE -- the link builds. Verified on
+    real hardware (SA established from the NAT address, 4/4 across the GRE)."""
+    f = fabric()
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site("spoke1", SiteRole.spoke, [("wan1", "10.1.11.229", True)])
+
+    result = expand(f, members(f, hub, spoke), existing=[], transport=IPSEC)
+
+    assert len(result.created) == 1
+    assert result.skipped == []
+
+
+def test_bare_gre_still_refuses_a_natted_uplink() -> None:
+    """A carrier not wrapped in IPsec cannot traverse the NAT even when the
+    endpoint is addressed -- its packets are rewritten and dropped."""
+    f = fabric()
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site("spoke1", SiteRole.spoke, [("wan1", "10.1.11.229", True)])
+
+    result = expand(f, members(f, hub, spoke), existing=[],
+                    transport=get_transport("gre"))
+
+    assert result.created == []
+    assert "behind NAT" in result.skipped[0][2]
+
+
+def test_ipsec_gre_policy_is_tunnel_mode_when_a_peer_is_natted() -> None:
+    """Transport mode leaves the GRE's real IP header exposed to the NAT;
+    tunnel mode wraps it. Verified on hardware: transport 0/4, tunnel 4/4."""
+    link = make_link(
+        local=Endpoint("spoke1", "wan1", "ether1", "10.255.0.1",
+                       public_ip="10.1.11.229", nat_behind=True),
+        remote=Endpoint("hub1", "wan1", "ether1", "10.255.0.0",
+                        public_ip="198.51.100.5"),
+        initiator=True,
+    )
+    policy = next(s for s in IPSEC.render(link)
+                  if s.path == "/ip/ipsec/policy").items[0].props
+
+    assert policy["tunnel"] is True
+    assert policy["sa-src-address"] == "10.1.11.229"
+    assert policy["sa-dst-address"] == "198.51.100.5"
+
+
+def test_passive_responder_accepts_a_natted_initiators_apparent_source() -> None:
+    """The initiator is behind NAT, so its IKE arrives from the NAT's address,
+    not the public_ip on its uplink -- the responder must accept 0.0.0.0/0 or
+    no SA forms, even though the controller knows the uplink's address."""
+    link = make_link(
+        local=Endpoint("hub1", "wan1", "ether1", "10.255.0.0",
+                       public_ip="198.51.100.5"),
+        remote=Endpoint("spoke1", "wan1", "ether1", "10.255.0.1",
+                        public_ip="10.1.11.229", nat_behind=True),
+        initiator=False,
+    )
+    peer = next(s for s in IPSEC.render(link)
+                if s.path == "/ip/ipsec/peer").items[0].props
+
+    assert peer["address"] == "0.0.0.0/0"
+    assert peer.get("passive") is True
+
+
 def test_every_wireguard_link_on_a_site_gets_its_own_port() -> None:
     """A WireGuard interface is a UDP listener and the renderer makes one per
     link, so a dual-homed site asks for two. RouterOS accepts the second
