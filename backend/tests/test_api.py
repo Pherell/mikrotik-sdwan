@@ -154,6 +154,113 @@ async def test_operator_cannot_delete_a_site(api) -> None:
 # -- sites ------------------------------------------------------------------
 
 
+async def _site_with_uplink(client, token, name, host, public_ip):
+    return await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={
+            "name": name,
+            "mgmt_host": host,
+            "username": "sdwan",
+            "password": "device-secret",
+            "wans": [{"name": "isp", "interface": "ether1", "public_ip": public_ip}],
+        },
+    )
+
+
+async def test_two_sites_cannot_claim_the_same_public_ip(api) -> None:
+    """A tunnel endpoint is one address on one router. Accepting the same one
+    twice produced a fabric that dialled an address answering as somebody else,
+    and only surfaced much later as "neither end is publicly reachable"."""
+    client, maker = api
+    await _seed(maker, Role.operator, "op@example.com")
+    token = await _token(client, "op@example.com")
+
+    first = await _site_with_uplink(client, token, "router-a", "203.0.113.1", "198.51.100.7")
+    assert first.status_code == 201, first.text
+
+    clash = await _site_with_uplink(client, token, "router-b", "203.0.113.2", "198.51.100.7")
+
+    assert clash.status_code == 409
+    detail = clash.json()["detail"]
+    assert "198.51.100.7" in detail and "router-a/isp" in detail
+
+
+async def test_one_site_cannot_give_two_uplinks_the_same_public_ip(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.operator, "op@example.com")
+    token = await _token(client, "op@example.com")
+
+    resp = await client.post(
+        "/sites",
+        headers=_auth(token),
+        json={
+            "name": "branch",
+            "mgmt_host": "203.0.113.9",
+            "username": "sdwan",
+            "password": "device-secret",
+            "wans": [
+                {"name": "isp-1", "interface": "ether1", "public_ip": "198.51.100.8"},
+                {"name": "isp-2", "interface": "ether2", "public_ip": "198.51.100.8"},
+            ],
+        },
+    )
+
+    assert resp.status_code == 409
+    assert "198.51.100.8" in resp.json()["detail"]
+
+
+async def test_patching_an_uplink_onto_a_taken_public_ip_is_refused(api) -> None:
+    client, maker = api
+    await _seed(maker, Role.operator, "op@example.com")
+    token = await _token(client, "op@example.com")
+
+    taken = await _site_with_uplink(client, token, "router-a", "203.0.113.1", "198.51.100.7")
+    mine = await _site_with_uplink(client, token, "router-b", "203.0.113.2", "198.51.100.9")
+    assert taken.status_code == 201 and mine.status_code == 201
+
+    site_id = mine.json()["id"]
+    wan_id = mine.json()["wans"][0]["id"]
+    resp = await client.patch(
+        f"/sites/{site_id}/wans/{wan_id}",
+        headers=_auth(token),
+        json={"public_ip": "198.51.100.7"},
+    )
+    assert resp.status_code == 409
+
+
+async def test_an_uplink_can_keep_its_own_public_ip_on_update(api) -> None:
+    """The check must not trip over the row it is updating."""
+    client, maker = api
+    await _seed(maker, Role.operator, "op@example.com")
+    token = await _token(client, "op@example.com")
+
+    made = await _site_with_uplink(client, token, "router-a", "203.0.113.1", "198.51.100.7")
+    site_id = made.json()["id"]
+    wan_id = made.json()["wans"][0]["id"]
+
+    resp = await client.patch(
+        f"/sites/{site_id}/wans/{wan_id}",
+        headers=_auth(token),
+        json={"public_ip": "198.51.100.7", "cost": 5},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["cost"] == 5
+
+
+async def test_uplinks_behind_nat_may_share_an_empty_public_ip(api) -> None:
+    """Two routers behind one NAT is a real shape: both dial out, neither can
+    be dialled. That is expressed as no public IP, and must stay allowed."""
+    client, maker = api
+    await _seed(maker, Role.operator, "op@example.com")
+    token = await _token(client, "op@example.com")
+
+    a = await _site_with_uplink(client, token, "router-a", "203.0.113.1", None)
+    b = await _site_with_uplink(client, token, "router-b", "203.0.113.2", None)
+
+    assert a.status_code == 201 and b.status_code == 201
+
+
 async def test_create_site_with_wans(api) -> None:
     client, maker = api
     await _seed(maker, Role.operator, "op@example.com")

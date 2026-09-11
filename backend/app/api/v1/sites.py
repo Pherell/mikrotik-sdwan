@@ -86,6 +86,17 @@ async def create_site(
         password_enc=box.encrypt(body.password) if body.password else None,
         ssh_key_enc=box.encrypt(body.ssh_key) if body.ssh_key else None,
     )
+    seen_public: dict[str, str] = {}
+    for w in body.wans:
+        if w.public_ip:
+            if w.public_ip in seen_public:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"{w.public_ip} is given to both {seen_public[w.public_ip]!r} and "
+                    f"{w.name!r} on this site. Each uplink needs its own address.",
+                )
+            seen_public[w.public_ip] = w.name
+        await _reject_duplicate_public_ip(session, user.tenant_id, w.public_ip)
     site.wans = [Wan(**w.model_dump()) for w in body.wans]
     session.add(site)
     try:
@@ -185,6 +196,46 @@ async def probe(
     return result
 
 
+async def _reject_duplicate_public_ip(
+    session,
+    tenant_id: str,
+    public_ip: str | None,
+    *,
+    exclude_wan_id: str | None = None,
+) -> None:
+    """A tunnel endpoint has to be one address on one router.
+
+    Two uplinks claiming the same public_ip cannot both be dialled: the fabric
+    builds a link to an address that answers as somebody else, IKE negotiates
+    with the wrong box or nothing at all, and the tunnel simply never comes up.
+    Accepting it silently is how a site ends up with an endpoint copied from a
+    different router, which reads as "neither end is publicly reachable" long
+    after the mistake was made.
+    """
+    if not public_ip:
+        return
+    rows = await session.execute(
+        select(Wan, Site.name)
+        .join(Site, Wan.site_id == Site.id)
+        .where(
+            Site.tenant_id == tenant_id,
+            Wan.public_ip == public_ip,
+            Wan.enabled.is_(True),
+        )
+    )
+    for wan, site_name in rows.all():
+        if exclude_wan_id is not None and wan.id == exclude_wan_id:
+            continue
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{public_ip} is already the public address of {site_name}/{wan.name}. "
+            "A tunnel endpoint has to be one address on one router. If these are "
+            "genuinely two routers behind one NAT, leave the public IP empty and "
+            "mark them behind NAT instead -- they can dial out, but neither can "
+            "be dialled.",
+        )
+
+
 # -- WAN uplinks ------------------------------------------------------------
 
 
@@ -197,6 +248,7 @@ async def add_wan(
     request: Request,
 ) -> WanRead:
     site = await _get_or_404(session, site_id, user.tenant_id)
+    await _reject_duplicate_public_ip(session, user.tenant_id, body.public_ip)
     wan = Wan(site_id=site.id, **body.model_dump())
     session.add(wan)
     try:
@@ -235,6 +287,10 @@ async def update_wan(
     if wan is None or wan.site_id != site.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such WAN on this site")
     data = body.model_dump(exclude_unset=True)
+    if "public_ip" in data:
+        await _reject_duplicate_public_ip(
+            session, user.tenant_id, data["public_ip"], exclude_wan_id=wan.id
+        )
     for field, value in data.items():
         setattr(wan, field, value)
     await write_audit(
