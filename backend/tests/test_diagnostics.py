@@ -262,6 +262,155 @@ def _fabric_and_link(transport: Transport = Transport.ipsec_gre) -> tuple:
     return near_site, link
 
 
+async def test_a_tunnel_never_pushed_says_so() -> None:
+    """Absent is not down. Building a tunnel network only works the tunnel out;
+    until the device is applied there is nothing on it to be down."""
+    near_site, link = _fabric_and_link()
+    fake = FakeRouterOS(password="secret", menus={"interface": []})
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert "has not been written to the device yet" in (row.diagnosis or "")
+    assert "Apply" in (row.diagnosis or "")
+
+
+async def test_a_tunnel_sourced_off_its_own_path_is_named_as_such() -> None:
+    """The one that cost an afternoon: the peer is sourced from ether1, but the
+    route to the far end leaves by ether2. IKE then carries the wrong source
+    and is dropped upstream as spoofed -- nothing arrives, nothing is logged,
+    and every layer just reports "down"."""
+    near_site, link = _fabric_and_link()
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [{"name": "gre-branch-hq", "type": "gre", "running": False}],
+            "ip/ipsec/active-peers": [],
+            "ip/ipsec/peer": [
+                {"name": "peer-branch-hq", "address": "198.51.100.20/32",
+                 "local-address": "192.168.203.175"}
+            ],
+            "ip/address": [
+                {"address": "192.168.203.175/24", "interface": "ether1"},
+                {"address": "10.10.10.70/24", "interface": "ether2"},
+            ],
+            "ip/route": [
+                {"dst-address": "0.0.0.0/0", "gateway": "10.10.10.254",
+                 "immediate-gw": "10.10.10.254%ether2", "active": True},
+                {"dst-address": "192.168.203.0/24", "gateway": "ether1",
+                 "immediate-gw": "ether1", "active": True},
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    d = row.diagnosis or ""
+    assert "192.168.203.175" in d and "ether1" in d
+    assert "ether2" in d
+    assert "spoofed" in d
+
+
+async def test_two_links_to_one_far_address_are_diagnosed_separately() -> None:
+    """A dual-homed site pointing at a single-homed one has two links to the
+    *same* far address. Identifying the peer by that address reports one
+    tunnel's source for both -- and sends the operator after the wrong uplink.
+    """
+    near_site, link = _fabric_and_link()
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [{"name": "gre-branch-hq", "type": "gre", "running": False}],
+            "ip/ipsec/active-peers": [],
+            "ip/ipsec/peer": [
+                # A different link's peer, to the same far end, listed first.
+                {"name": "peer-other-link", "address": "198.51.100.20/32",
+                 "local-address": "192.168.203.175"},
+                {"name": "peer-branch-hq", "address": "198.51.100.20/32",
+                 "local-address": "10.10.10.70"},
+            ],
+            "ip/address": [
+                {"address": "192.168.203.175/24", "interface": "ether1"},
+                {"address": "10.10.10.70/24", "interface": "ether2"},
+            ],
+            "ip/route": [
+                {"dst-address": "0.0.0.0/0", "gateway": "10.10.10.254",
+                 "immediate-gw": "10.10.10.254%ether2", "active": True},
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    # This link is sourced from ether2, which *is* the egress -- so the answer
+    # is "no IKE", not a sourcing complaint about the other link's uplink.
+    d = row.diagnosis or ""
+    assert "spoofed" not in d
+    assert "500" in d
+
+
+async def test_no_ike_at_all_points_at_the_ports_that_carry_it() -> None:
+    """Sourcing is fine, so the next thing worth checking is whether IKE can
+    reach the far end at all. Ping proves nothing about UDP 500."""
+    near_site, link = _fabric_and_link()
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [{"name": "gre-branch-hq", "type": "gre", "running": False}],
+            "ip/ipsec/active-peers": [],
+            "ip/ipsec/peer": [
+                {"name": "peer-branch-hq", "address": "198.51.100.20/32",
+                 "local-address": "10.10.10.70"}
+            ],
+            "ip/address": [{"address": "10.10.10.70/24", "interface": "ether2"}],
+            "ip/route": [
+                {"dst-address": "0.0.0.0/0", "gateway": "10.10.10.254",
+                 "immediate-gw": "10.10.10.254%ether2", "active": True},
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    d = row.diagnosis or ""
+    assert "500" in d and "4500" in d
+    assert "ping" in d.lower()
+
+
+async def test_a_healthy_tunnel_is_not_diagnosed_at_all() -> None:
+    near_site, link = _fabric_and_link()
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [{"name": "gre-branch-hq", "type": "gre", "running": True}],
+            "ip/ipsec/active-peers": [
+                {"remote-address": "198.51.100.20", "state": "established"}
+            ],
+            "routing/bgp/session": [
+                {"remote.address": "10.255.0.1", "established": True}
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert row.diagnosis is None
+
+
 async def test_a_healthy_tunnel_reports_every_layer_up() -> None:
     near_site, link = _fabric_and_link()
     fake = FakeRouterOS(

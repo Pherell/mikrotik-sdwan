@@ -557,6 +557,9 @@ export interface TunnelHealth {
   netwatch_loss_percent: number | null;
   netwatch_latency_ms: number | null;
   error: string | null;
+  // Why it is not up, when the device's own state says which cause it is.
+  // "no security association" is the symptom; this is the reason.
+  diagnosis: string | null;
 }
 
 export interface DeviceHealth {

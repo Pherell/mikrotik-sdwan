@@ -142,3 +142,6 @@ class TunnelHealth(BaseModel):
     # Populated when the device could not be read at all, so the UI can say
     # "unknown" rather than draw every tunnel as down.
     error: str | None = None
+    # Why it is not up, when that can be worked out from the device's own
+    # state. "no security association" is a symptom; this is the cause.
+    diagnosis: str | None = None

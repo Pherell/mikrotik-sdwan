@@ -179,6 +179,7 @@ function TunnelPanel({ siteId }: { siteId: string }) {
 
 function TunnelRow({ tunnel }: { tunnel: TunnelHealth }) {
   return (
+    <>
     <tr>
       <td data-label="To">
         <strong>{tunnel.peer_site_name ?? "unknown device"}</strong>
@@ -244,6 +245,16 @@ function TunnelRow({ tunnel }: { tunnel: TunnelHealth }) {
         )}
       </td>
     </tr>
+    {tunnel.diagnosis && (
+      <tr>
+        <td colSpan={6} style={{ paddingTop: 0 }}>
+          <div className="warn" style={{ margin: 0 }}>
+            <strong>Why it is not up:</strong> {tunnel.diagnosis}
+          </div>
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 
