@@ -22,6 +22,7 @@ class _PointToPoint:
     prefix: str
     supported_ros = {6, 7}
     requires_reachable_responder = True
+    learns_peer_address = False
     supports_dynamic_mesh = False
     encrypted = False
 

@@ -45,6 +45,7 @@ class IpsecGreTransport:
     name = "ipsec_gre"
     supported_ros = {6, 7}
     requires_reachable_responder = True
+    learns_peer_address = False
     supports_dynamic_mesh = True
     owned_paths = (
         "/ip/ipsec/profile",

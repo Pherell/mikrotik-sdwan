@@ -88,6 +88,7 @@ class WireGuardTransport:
     # clear message rather than letting the apply fail halfway.
     supported_ros = {7}
     requires_reachable_responder = True
+    learns_peer_address = True
     supports_dynamic_mesh = True
     owned_paths = ("/interface/wireguard", "/interface/wireguard/peers", "/ip/address")
 

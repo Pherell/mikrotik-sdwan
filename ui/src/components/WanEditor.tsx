@@ -304,11 +304,23 @@ function WanForm({
       )}
 
       {dialOutOnly && (
-        <p className="warn">
-          With no public address, or behind NAT, this uplink can only dial out. It
-          will never accept a tunnel, and two such uplinks can never link to each
-          other — they must go through a hub.
-        </p>
+        <div className="warn">
+          <strong>This uplink can only dial out.</strong>
+          <p style={{ margin: "4px 0 0" }}>
+            With no public address, or behind NAT, it will never accept a tunnel,
+            so two such uplinks can never link to each other — they must go
+            through a hub.
+          </p>
+          <p style={{ margin: "6px 0 0" }}>
+            With <strong>ipsec_gre, gre, ipip, eoip or vxlan</strong> it cannot
+            link to <em>anything</em>: the far end's tunnel interface is
+            configured with a fixed remote address and has nowhere to learn one,
+            so it would be built with an empty remote and never come up. Give
+            this uplink a reachable public address, or use the{" "}
+            <strong>wireguard</strong> transport, which learns a roaming peer's
+            address from its handshake.
+          </p>
+        </div>
       )}
 
       <div className="row" style={{ justifyContent: "flex-start" }}>

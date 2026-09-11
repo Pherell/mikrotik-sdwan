@@ -96,6 +96,12 @@ class TransportDriver(Protocol):
     # Whether at least one side must be publicly reachable for the tunnel to
     # come up at all.
     requires_reachable_responder: bool
+    # Whether the far side can discover a peer's address instead of being told
+    # it. WireGuard learns it from the handshake, so a roaming or NAT'd peer
+    # works. A GRE/IPIP/EoIP/VXLAN interface is configured with a fixed
+    # remote-address and has nowhere to learn one, so *both* ends need a
+    # reachable address -- see validate_pair.
+    learns_peer_address: bool
     supports_dynamic_mesh: bool
     # Every RouterOS menu this transport can write to. The reconciler renders an
     # empty section for each one even when a site has no links, so rows left
@@ -152,6 +158,25 @@ def validate_pair(a: Endpoint, b: Endpoint, transport: TransportDriver) -> None:
             "publicly reachable, so neither can accept the tunnel. Link these sites "
             "through a hub instead."
         )
+
+    # One reachable end is enough only for a transport that can *learn* the
+    # other's address. Everything else writes a fixed remote-address into the
+    # tunnel interface, and there is nothing to write for an endpoint with no
+    # reachable address: the far side renders a tunnel with an empty remote and
+    # silently never comes up.
+    if transport.requires_reachable_responder and not getattr(
+        transport, "learns_peer_address", False
+    ):
+        for near, far in ((a, b), (b, a)):
+            if near.dial_out_only:
+                raise TransportError(
+                    f"{near.site_name}/{near.wan_name} has no reachable address, and "
+                    f"the {transport.name} transport needs one at both ends: "
+                    f"{far.site_name}'s tunnel interface is configured with a fixed "
+                    "remote address and cannot learn it. Give this uplink a reachable "
+                    "public address, or use the wireguard transport, which learns a "
+                    "roaming peer's address from its handshake."
+                )
 
     for endpoint in (a, b):
         if endpoint.ros_major not in transport.supported_ros:

@@ -214,13 +214,47 @@ def test_dual_homed_spoke_gets_a_tunnel_per_uplink() -> None:
     spoke = site(
         "spoke1",
         SiteRole.spoke,
-        [("wan1", "203.0.113.1", False), ("wan2", None, True)],
+        [("wan1", "203.0.113.1", False), ("wan2", "203.0.113.9", False)],
     )
 
     result = expand(f, members(f, hub, spoke), existing=[], transport=IPSEC)
 
     assert len(result.created) == 2
     assert {link.subnet for link in result.created} == {"10.255.0.0/31", "10.255.0.2/31"}
+
+
+def test_a_natted_uplink_cannot_carry_a_gre_tunnel() -> None:
+    """GRE is configured with a fixed remote-address and has nowhere to learn
+    one, so the *far* side of a NAT'd endpoint renders a tunnel with an empty
+    remote and silently never comes up. One reachable end is not enough here --
+    that is only true for a transport that can learn the other's address.
+    """
+    f = fabric()
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site("spoke1", SiteRole.spoke, [("wan1", None, True)])
+
+    result = expand(f, members(f, hub, spoke), existing=[], transport=IPSEC)
+
+    assert result.created == []
+    assert len(result.skipped) == 1
+    reason = result.skipped[0][2]
+    assert "both ends" in reason
+    assert "wireguard" in reason
+
+
+def test_wireguard_accepts_a_natted_peer_it_can_learn() -> None:
+    """The same pair is fine over WireGuard: the responder takes the peer's
+    address from its handshake rather than being told it up front."""
+    f = fabric()
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site("spoke1", SiteRole.spoke, [("wan1", None, True)])
+
+    result = expand(
+        f, members(f, hub, spoke), existing=[], transport=get_transport("wireguard")
+    )
+
+    assert len(result.created) == 1
+    assert result.skipped == []
 
 
 # -- expansion --------------------------------------------------------------
@@ -259,18 +293,18 @@ def test_removing_a_member_removes_its_links() -> None:
 def test_an_impossible_pair_is_skipped_not_fatal() -> None:
     """One unlinkable pair must not stop the rest of the fabric being built."""
     f = fabric(topology=Topology.full_mesh)
-    natted_hub = site("hub1", SiteRole.hub, [("wan1", None, True)])
-    natted_spoke = site("spoke1", SiteRole.spoke, [("wan1", None, True)])
-    public_spoke = site("spoke2", SiteRole.spoke, [("wan1", "203.0.113.2", False)])
+    natted = site("hub1", SiteRole.hub, [("wan1", None, True)])
+    public_a = site("spoke1", SiteRole.spoke, [("wan1", "203.0.113.1", False)])
+    public_b = site("spoke2", SiteRole.spoke, [("wan1", "203.0.113.2", False)])
 
     result = expand(
-        f, members(f, natted_hub, natted_spoke, public_spoke), existing=[], transport=IPSEC
+        f, members(f, natted, public_a, public_b), existing=[], transport=IPSEC
     )
 
-    assert len(result.skipped) == 1
-    assert "through a hub" in result.skipped[0][2]
-    # The two links involving the reachable spoke were still created.
-    assert len(result.created) == 2
+    # Both pairs touching the NAT'd site are impossible over GRE...
+    assert len(result.skipped) == 2
+    # ...and the one between the two reachable sites was still built.
+    assert len(result.created) == 1
 
 
 def test_new_links_reuse_free_addresses_after_a_removal() -> None:

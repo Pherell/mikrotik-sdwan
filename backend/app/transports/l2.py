@@ -32,6 +32,7 @@ class _L2Stretch:
     prefix: str
     supported_ros: set[int]
     requires_reachable_responder = True
+    learns_peer_address = False
     supports_dynamic_mesh = False
     encrypted = False
     # Runs on top of this transport rather than directly on the underlay.

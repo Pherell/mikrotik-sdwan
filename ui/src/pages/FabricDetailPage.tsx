@@ -211,6 +211,21 @@ export function FabricDetailPage() {
             member device to push the tunnels.
           </p>
         ) : (
+          <>
+            {(links.data ?? []).filter((l) => l.state === "pending").length > 0 && (
+              <div className="warn">
+                <strong>
+                  {(links.data ?? []).filter((l) => l.state === "pending").length} of
+                  these tunnels are not on the devices yet.
+                </strong>
+                <p style={{ margin: "4px 0 0" }}>
+                  Building them here only works them out — nothing has been written
+                  to a router. Open each member device and <strong>Apply</strong> to
+                  push them. Until then the routers have no IPsec peer and no tunnel
+                  address, and the tunnel cannot come up.
+                </p>
+              </div>
+            )}
           <table className="stack">
             <thead>
               <tr>
@@ -226,6 +241,7 @@ export function FabricDetailPage() {
               ))}
             </tbody>
           </table>
+          </>
         )}
       </div>
     </>
