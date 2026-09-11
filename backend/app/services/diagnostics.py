@@ -424,12 +424,18 @@ def _diagnose(
             "push it."
         )
 
-    # The endpoint is reached through a tunnel. Check this before anything
-    # protocol-specific: it explains a tunnel that cannot re-establish no
-    # matter which transport carries it, and every lower branch would report a
-    # symptom of it instead. Only when the link is actually in trouble -- a
-    # session that is up is working, whatever the route looks like.
-    if far.public_ip and health.bgp_established is not True:
+    # The endpoint is reached through a tunnel. Checked before anything
+    # protocol-specific, because it explains a tunnel that cannot re-establish
+    # whatever transport carries it, and every lower branch would report a
+    # symptom of it instead.
+    #
+    # Deliberately *not* gated on the link looking unhealthy, which is what it
+    # was at first. A live loop proved that wrong: a peer encrypting to an
+    # address reachable only through its own tunnel ran at 80 MB of tx against
+    # 700 KB of rx while the handshake stayed current and BGP stayed
+    # established. Every layer reported healthy. A tunnel whose underlay runs
+    # through an overlay is broken whether or not it has noticed yet.
+    if far.public_ip:
         egress, _hop = _egress(routes, addresses, far.public_ip)
         carrier = _text(interfaces.get(egress or "", {}).get("type"))
         if egress and carrier in _TUNNEL_TYPES:

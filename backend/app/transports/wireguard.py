@@ -185,8 +185,20 @@ class WireGuardTransport:
             "allowed-address": "0.0.0.0/0",
             "preshared-key": link.secrets.get("preshared", ""),
         }
+        # Always stated, never merely omitted. The diff only compares the
+        # properties a render actually names, so dropping this one leaves
+        # whatever the device was last told -- and "this peer has no address to
+        # dial" then does not take effect.
+        #
+        # That cost a live routing loop. An uplink was correctly re-marked as
+        # behind NAT, so the far end stopped pinning a host route to it, but
+        # the far end's peer kept the endpoint it already had. Its only
+        # remaining route to that address was the tunnel itself, so it
+        # encrypted to an address reached through the tunnel: 80 MB of tx
+        # against 700 KB of rx, with the handshake current and BGP established
+        # the whole time. Verified on 7.24.2 that an empty string clears it.
+        peer_props["endpoint-address"] = link.remote.public_ip or ""
         if link.remote.public_ip:
-            peer_props["endpoint-address"] = link.remote.public_ip
             peer_props["endpoint-port"] = port
         if link.local.nat_behind or link.remote.nat_behind:
             peer_props["persistent-keepalive"] = params["persistent_keepalive"]

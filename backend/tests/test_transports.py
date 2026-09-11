@@ -249,6 +249,27 @@ def test_wireguard_installs_no_routes_of_its_own() -> None:
     assert paths == {"/interface/wireguard", "/interface/wireguard/peers", "/ip/address"}
 
 
+def test_a_peer_with_nowhere_to_dial_has_its_endpoint_cleared() -> None:
+    """Omitting a property is not the same as clearing it: the diff compares
+    only what a render names, so a dropped endpoint-address leaves whatever
+    the device was last told.
+
+    That cost a live routing loop. An uplink was correctly re-marked as behind
+    NAT, so the far end stopped pinning a host route to it -- but the far
+    end's peer kept the endpoint it already had, whose only remaining route
+    was the tunnel itself. 80 MB of tx against 700 KB of rx, handshake current
+    and BGP established throughout.
+    """
+    driver = get_transport("wireguard")
+    natted = Endpoint("hub1", "wan1", "ether1", "10.255.0.0",
+                      public_ip=None, nat_behind=True)
+    view = link(secrets=driver.allocate(), remote=natted, listen_port=13231)
+
+    peer = next(s for s in driver.render(view) if s.path == "/interface/wireguard/peers")
+
+    assert peer.items[0].props["endpoint-address"] == ""
+
+
 def test_wireguard_keeps_a_natted_peer_alive() -> None:
     driver = get_transport("wireguard")
     natted = Endpoint("spoke9", "wan1", "ether1", "10.255.0.1", public_ip=None, nat_behind=True)

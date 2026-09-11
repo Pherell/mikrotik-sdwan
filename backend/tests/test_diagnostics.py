@@ -564,9 +564,13 @@ async def test_an_endpoint_reached_through_a_tunnel_is_named_as_the_cause() -> N
     assert "itself a tunnel" in (row.diagnosis or "")
 
 
-async def test_a_working_session_is_not_second_guessed_about_its_routes() -> None:
-    """A tunnel carrying an established session is working. Reporting a route
-    shape at it would put a red diagnosis on a green tunnel."""
+async def test_a_recursive_underlay_is_reported_even_while_bgp_is_up() -> None:
+    """This check was first gated on the link looking unhealthy, reasoning
+    that an established session means the tunnel works. A live loop disproved
+    it: a peer encrypting to an address reachable only through its own tunnel
+    ran at 80 MB of tx against 700 KB of rx, with the handshake current and
+    BGP established throughout. Every layer reported healthy. A tunnel whose
+    underlay runs through an overlay is broken whether or not it knows."""
     near_site, link = _fabric_and_link(Transport.wireguard)
     link.listen_port = 13231
     fake = FakeRouterOS(
@@ -601,7 +605,7 @@ async def test_a_working_session_is_not_second_guessed_about_its_routes() -> Non
         await driver.close()
 
     assert row.bgp_established is True
-    assert row.diagnosis is None
+    assert "itself a tunnel" in (row.diagnosis or "")
 
 
 # -- wireguard ---------------------------------------------------------------
