@@ -21,6 +21,7 @@ from typing import Any
 from app.drivers.base import DeviceDriver, DriverError
 from app.models.fabric import Link
 from app.models.site import Site, Wan
+from app.render.firewall import required_ports, transit_rules
 from app.schemas.diagnostics import (
     PingProbe,
     PingRequest,
@@ -282,12 +283,26 @@ async def tunnel_health(
             health.ipsec_established, health.ipsec_detail = _ipsec_for(peers, far)
         health.bgp_established, health.bgp_detail = _bgp_for(sessions, far_tunnel_ip)
         _apply_netwatch(health, netwatch, far_tunnel_ip)
+        transport = str(link.fabric.transport)
+        listen_port = str((link.fabric.transport_params or {}).get("listen_port") or "")
         health.diagnosis = _diagnose(
-            health, far, routes, addresses, configured_peers, interfaces
+            health, far, routes, addresses, configured_peers, interfaces,
+            transport, listen_port or None,
         )
+        if health.diagnosis and "permitted all the way" in health.diagnosis:
+            near_ip = _near_public_ip(link, site) or ""
+            if near_ip and far.public_ip:
+                health.transit_rules = transit_rules(
+                    transport, near_ip, far.public_ip, listen_port or None
+                )
         out.append(health)
 
     return out
+
+
+def _near_public_ip(link: Link, site: Site) -> str | None:
+    near = link.a_wan if link.a_wan.site_id == site.id else link.b_wan
+    return near.public_ip
 
 
 def _address_owner(addresses: list[dict[str, Any]], wanted: str) -> str | None:
@@ -318,9 +333,9 @@ def _subnet_owner(addresses: list[dict[str, Any]], wanted: str) -> str | None:
     return None
 
 
-def _egress_interface(
+def _egress(
     routes: list[dict[str, Any]], addresses: list[dict[str, Any]], target: str
-) -> str | None:
+) -> tuple[str | None, str | None]:
     """The interface an active route would send ``target`` out of.
 
     Most specific match wins, the same way the device picks one. RouterOS
@@ -331,9 +346,9 @@ def _egress_interface(
     try:
         ip = ip_address(target)
     except ValueError:
-        return None
+        return None, None
 
-    best: tuple[int, str] | None = None
+    best: tuple[int, str, str] | None = None
     for row in routes:
         if row.get("disabled") or not _truthy(row.get("active")):
             continue
@@ -351,9 +366,11 @@ def _egress_interface(
             iface = _subnet_owner(addresses, gateway) or ("" if _is_ipish(gateway) else gateway)
         if not iface:
             continue
+        gateway = _text(row.get("gateway"))
+        hop_ip = hop.partition("%")[0] if "%" in hop else (gateway if _is_ipish(gateway) else "")
         if best is None or net.prefixlen > best[0]:
-            best = (net.prefixlen, iface)
-    return best[1] if best else None
+            best = (net.prefixlen, iface, hop_ip)
+    return (best[1], best[2] or None) if best else (None, None)
 
 
 def _is_ipish(value: str) -> bool:
@@ -371,6 +388,8 @@ def _diagnose(
     addresses: list[dict[str, Any]],
     configured_peers: list[dict[str, Any]],
     interfaces: dict[str, dict[str, Any]],
+    transport: str = "",
+    listen_port: str | None = None,
 ) -> str | None:
     """Why this tunnel is not up, in the order worth checking.
 
@@ -413,7 +432,7 @@ def _diagnose(
         local = _text(peer.get("local-address")) if peer else ""
         if local:
             sourced_from = _address_owner(addresses, local)
-            egress = _egress_interface(routes, addresses, far.public_ip)
+            egress, _hop = _egress(routes, addresses, far.public_ip)
             if sourced_from and egress and sourced_from != egress:
                 return (
                     f"Sourced from {local} on {sourced_from}, but traffic to "
@@ -422,11 +441,19 @@ def _diagnose(
                     f"spoofed. Give {sourced_from} its own route to the far end, "
                     "or build this tunnel on the uplink that carries the route."
                 )
+        egress, hop = _egress(routes, addresses, far.public_ip)
+        needs = " and ".join(required_ports(transport, listen_port))
+        where = (
+            f" It leaves via {egress} toward {hop}, so that is the first device "
+            "in the path that has to permit them."
+            if egress and hop
+            else ""
+        )
         return (
-            f"No IKE exchange has happened with {far.public_ip}. Check that UDP "
-            "500 and 4500, and IP protocols 50 (ESP) and 47 (GRE), are permitted "
-            "between these two addresses -- ping succeeding proves nothing about "
-            "any of them."
+            f"No IKE exchange has happened with {far.public_ip}. Nothing has "
+            f"arrived, so check that {needs} are permitted all the way between "
+            f"these two addresses.{where} A successful ping proves nothing about "
+            "any of them -- ICMP is not what is being blocked."
         )
 
     if health.ipsec_established and health.interface_running is False:

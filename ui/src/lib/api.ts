@@ -566,6 +566,10 @@ export interface TunnelHealth {
   // Why it is not up, when the device's own state says which cause it is.
   // "no security association" is the symptom; this is the reason.
   diagnosis: string | null;
+  // Commands for a router between the two endpoints, when nothing is arriving.
+  // That device is not one the controller manages, so the rules are the most
+  // it can offer.
+  transit_rules: string[];
 }
 
 export interface DeviceHealth {

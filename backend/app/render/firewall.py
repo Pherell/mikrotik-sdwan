@@ -63,6 +63,38 @@ _PROTOCOL_LABEL = {
 }
 
 
+def transport_protocols(
+    transport: str, listen_port: str | None = None
+) -> tuple[tuple[str, str | None], ...]:
+    """The raw (protocol, dst-port) pairs this transport needs permitted."""
+    if transport == "wireguard":
+        return (("udp", listen_port or _WIREGUARD_DEFAULT_PORT),)
+    return _TRANSPORT_PROTOCOLS.get(transport, ())
+
+
+def transit_rules(
+    transport: str, near: str, far: str, listen_port: str | None = None
+) -> list[str]:
+    """RouterOS commands for a router *between* two tunnel endpoints.
+
+    The controller writes the input-chain accepts on the two devices it owns.
+    A router in the path is somebody else's -- often literally, an upstream
+    ISP box -- so the most the controller can do is hand over the exact rules
+    rather than a description of them. Both directions, because a firewall in
+    the middle sees both.
+    """
+    out = ["/ip/firewall/filter"]
+    for protocol, ports in transport_protocols(transport, listen_port):
+        port = f" dst-port={ports}" if ports else ""
+        for src, dst in ((near, far), (far, near)):
+            out.append(
+                f"add chain=forward action=accept protocol={protocol}{port} "
+                f"src-address={src} dst-address={dst} "
+                f'comment="sdwan tunnel {near} <-> {far}"'
+            )
+    return out
+
+
 def required_ports(transport: str, listen_port: str | None = None) -> list[str]:
     """What has to be permitted end to end for this transport to establish.
 

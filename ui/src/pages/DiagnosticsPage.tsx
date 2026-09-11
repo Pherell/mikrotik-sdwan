@@ -250,6 +250,19 @@ function TunnelRow({ tunnel }: { tunnel: TunnelHealth }) {
         <td colSpan={6} style={{ paddingTop: 0 }}>
           <div className="warn" style={{ margin: 0 }}>
             <strong>Why it is not up:</strong> {tunnel.diagnosis}
+            {tunnel.transit_rules.length > 0 && (
+              <details style={{ marginTop: 8 }}>
+                <summary style={{ cursor: "pointer" }}>
+                  Rules for the device in the path
+                </summary>
+                <p className="muted" style={{ margin: "6px 0" }}>
+                  That router is not one this controller manages, so run these on
+                  it yourself. Both directions, because a firewall in the middle
+                  sees both.
+                </p>
+                <pre className="diff">{tunnel.transit_rules.join("\n")}</pre>
+              </details>
+            )}
           </div>
         </td>
       </tr>

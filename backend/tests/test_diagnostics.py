@@ -386,6 +386,21 @@ async def test_no_ike_at_all_points_at_the_ports_that_carry_it() -> None:
     d = row.diagnosis or ""
     assert "500" in d and "4500" in d
     assert "ping" in d.lower()
+    # Name the first device in the path, because "somewhere between them" is
+    # not something an operator can act on.
+    assert "ether2" in d and "10.10.10.254" in d
+
+    # And hand over the rules for it. That router is not one the controller
+    # manages, so the exact commands are the most it can do.
+    assert row.transit_rules, "expected rules for the device in the path"
+    joined = "\n".join(row.transit_rules)
+    assert "chain=forward" in joined
+    assert "protocol=udp dst-port=500,4500" in joined
+    assert "protocol=ipsec-esp" in joined and "protocol=gre" in joined
+    # Both directions: a firewall in the middle sees both.
+    # The uplink's configured endpoint, which is what the packets carry.
+    assert "src-address=203.0.113.10 dst-address=198.51.100.20" in joined
+    assert "src-address=198.51.100.20 dst-address=203.0.113.10" in joined
 
 
 async def test_a_healthy_tunnel_is_not_diagnosed_at_all() -> None:

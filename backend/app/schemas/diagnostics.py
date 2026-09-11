@@ -145,3 +145,7 @@ class TunnelHealth(BaseModel):
     # Why it is not up, when that can be worked out from the device's own
     # state. "no security association" is a symptom; this is the cause.
     diagnosis: str | None = None
+    # Commands for a router *between* the two endpoints, when the diagnosis is
+    # that nothing is arriving. That device is not one the controller manages,
+    # so handing over the exact rules is the most it can do.
+    transit_rules: list[str] = Field(default_factory=list)
