@@ -47,6 +47,8 @@ class IpsecGreTransport:
     requires_reachable_responder = True
     learns_peer_address = False
     supports_dynamic_mesh = True
+    # Nothing here listens on a port of its own choosing.
+    listen_port_base = None
     owned_paths = (
         "/ip/ipsec/profile",
         "/ip/ipsec/proposal",

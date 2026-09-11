@@ -250,6 +250,10 @@ export interface FabricLink {
   b_tunnel_ip: string;
   subnet: string;
   initiator: string;
+  // The UDP port both ends of this tunnel listen on, where the transport
+  // listens at all. Per link, not per fabric: one WireGuard interface is one
+  // listener, and a site with two uplinks has two of them.
+  listen_port: number | null;
   dynamic: boolean;
   enabled: boolean;
   state: string;

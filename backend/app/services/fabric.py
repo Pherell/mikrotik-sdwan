@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -92,7 +92,13 @@ async def expand_fabric(session: AsyncSession, fabric: Fabric) -> ExpansionResul
 
     _assign_loopbacks(fabric)
 
-    result = expand(fabric, list(fabric.members), list(fabric.links), transport)
+    result = expand(
+        fabric,
+        list(fabric.members),
+        list(fabric.links),
+        transport,
+        reserved_ports=await _ports_held_elsewhere(session, fabric),
+    )
 
     for link in result.created:
         # Keys are generated once, at link creation, and never regenerated --
@@ -105,6 +111,35 @@ async def expand_fabric(session: AsyncSession, fabric: Fabric) -> ExpansionResul
 
     await session.flush()
     return result
+
+
+async def _ports_held_elsewhere(session: AsyncSession, fabric: Fabric) -> set[int]:
+    """Listen ports that links in *other* fabrics already hold on these sites.
+
+    A port only has to be unique on the device that binds it, but that device
+    can be in more than one fabric -- and two fabrics both allocating from
+    13231 upwards would hand the same port to the same router twice. RouterOS
+    accepts the second interface and never runs it, so the clash has to be
+    avoided rather than detected.
+    """
+    site_ids = [m.site_id for m in fabric.members]
+    if not site_ids:
+        return set()
+
+    wan_ids = list(
+        await session.scalars(select(Wan.id).where(Wan.site_id.in_(site_ids)))
+    )
+    if not wan_ids:
+        return set()
+
+    ports = await session.scalars(
+        select(Link.listen_port).where(
+            Link.fabric_id != fabric.id,
+            Link.listen_port.is_not(None),
+            or_(Link.a_wan_id.in_(wan_ids), Link.b_wan_id.in_(wan_ids)),
+        )
+    )
+    return {int(p) for p in ports if p is not None}
 
 
 def _assign_loopbacks(fabric: Fabric) -> None:
@@ -189,9 +224,12 @@ async def render_device(session: AsyncSession, site: Site) -> list[ConfigSection
             peers.update(
                 link.remote.public_ip for link in view.links if link.remote.public_ip
             )
-            port = (fabric.transport_params or {}).get("listen_port")
-            if port:
-                firewall.wireguard_ports.add(str(port))
+            # Every link listens on its own port, so the input rule has to
+            # name all of them -- one fabric-wide port would leave every
+            # tunnel but the first knocking on a closed door.
+            firewall.wireguard_ports.update(
+                str(link.listen_port) for link in view.links if link.listen_port
+            )
 
     sections.extend(render_firewall(firewall))
     sections.extend(render_policies(await policy_view(session, site)))
@@ -309,6 +347,7 @@ async def _site_fabric_view(
                 # it to "is this side the dialler".
                 initiator=(link.initiator == "a") == local_is_a,
                 secrets=link_secrets(link, box),
+                listen_port=link.listen_port,
             )
         )
 

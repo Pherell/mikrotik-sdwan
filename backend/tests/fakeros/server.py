@@ -290,6 +290,19 @@ class FakeRouterOS:
                 body["address"] = addr + "/32"
             if str(body.get("passive", "")).lower() in ("false", ""):
                 body.pop("passive", None)
+        # A WireGuard interface is one UDP listener. RouterOS does *not* refuse
+        # a second interface asking for a port that is taken -- it accepts the
+        # row and leaves it running=false, in silence. That is the worst
+        # possible shape for a bug, so model it exactly: accept, but mark it
+        # not running, and let the test assert on that rather than on an error
+        # the device never raises.
+        if path == "interface/wireguard":
+            port = str(body.get("listen-port", ""))
+            taken = {
+                str(r.get("listen-port", ""))
+                for r in self.menus.get("interface/wireguard", [])
+            }
+            body["running"] = not (port and port in taken)
         # ROS stores a routing table's fib flag but reads it back as an empty
         # string, so a render that keeps sending fib=true diffs dirty forever
         # unless it ignores the field. Model that here.

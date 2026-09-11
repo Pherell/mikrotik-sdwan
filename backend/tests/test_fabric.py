@@ -7,6 +7,7 @@ import pytest
 from app.fabric.allocate import (
     PoolExhausted,
     allocate_link_subnet,
+    allocate_listen_port,
     allocate_loopback,
     capacity,
     endpoints_of,
@@ -64,13 +65,13 @@ def fabric(**kw) -> Fabric:
     return Fabric(
         id="fab-1",
         name="core",
-        transport=Transport.ipsec_gre,
+        transport=kw.pop("transport", Transport.ipsec_gre),
         topology=kw.pop("topology", Topology.hub_spoke),
         ip_pool=kw.pop("ip_pool", "10.255.0.0/24"),
         loopback_pool="10.254.0.0/24",
         asn=65000,
         mtu=1400,
-        transport_params={},
+        transport_params=kw.pop("transport_params", {}),
         tenant_id="default",
         **kw,
     )
@@ -115,6 +116,16 @@ def test_exhausted_pool_says_what_to_do() -> None:
 def test_loopbacks_use_every_address_in_the_pool() -> None:
     assert allocate_loopback("10.254.0.0/24", taken=[]) == "10.254.0.1"
     assert allocate_loopback("10.254.0.0/24", taken=["10.254.0.1"]) == "10.254.0.2"
+
+
+def test_listen_ports_start_at_the_base_and_skip_what_is_taken() -> None:
+    assert allocate_listen_port(13231, taken=[]) == 13231
+    assert allocate_listen_port(13231, taken=[13231, 13232, 13234]) == 13233
+
+
+def test_exhausted_port_range_says_so() -> None:
+    with pytest.raises(PoolExhausted, match="listen port"):
+        allocate_listen_port(65534, taken=[65534, 65535])
 
 
 # -- initiator selection ----------------------------------------------------
@@ -240,6 +251,99 @@ def test_a_natted_uplink_cannot_carry_a_gre_tunnel() -> None:
     reason = result.skipped[0][2]
     assert "both ends" in reason
     assert "wireguard" in reason
+
+
+def test_every_wireguard_link_on_a_site_gets_its_own_port() -> None:
+    """A WireGuard interface is a UDP listener and the renderer makes one per
+    link, so a dual-homed site asks for two. RouterOS accepts the second
+    interface on a taken port and leaves it running=false in silence -- no
+    error at apply time, nothing in the log, just a tunnel that never comes
+    up. Verified on RouterOS 7.24.2."""
+    f = fabric(transport=Transport.wireguard)
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site(
+        "spoke1",
+        SiteRole.spoke,
+        [("wan1", "203.0.113.1", False), ("wan2", "203.0.113.9", False)],
+    )
+
+    result = expand(
+        f, members(f, hub, spoke), existing=[], transport=get_transport("wireguard")
+    )
+
+    ports = [link.listen_port for link in result.created]
+    assert len(ports) == 2
+    assert len(set(ports)) == 2, "both links on spoke1 were given the same port"
+    assert set(ports) == {13231, 13232}
+
+
+def test_a_transport_that_does_not_listen_is_given_no_port() -> None:
+    """IPsec's ports are fixed by the protocol, and GRE has none at all.
+    Allocating one anyway would put a number in the UI that means nothing."""
+    f = fabric()
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site("spoke1", SiteRole.spoke, [("wan1", "203.0.113.1", False)])
+
+    result = expand(f, members(f, hub, spoke), existing=[], transport=IPSEC)
+
+    assert [link.listen_port for link in result.created] == [None]
+
+
+def test_a_link_from_before_ports_were_allocated_is_backfilled() -> None:
+    """Switching a live fabric to WireGuard leaves every existing link with no
+    port. Only expansion can fill them in: the renderer sees one link at a
+    time and cannot know what its siblings hold."""
+    f = fabric(transport=Transport.wireguard)
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site(
+        "spoke1",
+        SiteRole.spoke,
+        [("wan1", "203.0.113.1", False), ("wan2", "203.0.113.9", False)],
+    )
+    m = members(f, hub, spoke)
+    wg = get_transport("wireguard")
+
+    first = expand(f, m, existing=[], transport=IPSEC)  # no ports under ipsec
+    assert all(link.listen_port is None for link in first.created)
+
+    second = expand(f, m, existing=first.created, transport=wg)
+
+    assert second.created == []
+    ports = sorted(link.listen_port for link in second.kept)
+    assert ports == [13231, 13232]
+
+
+def test_ports_already_held_on_the_same_sites_are_not_reused() -> None:
+    """A device can be in two fabrics. Both allocating from 13231 upwards
+    would hand it the same port twice, and the second interface would sit
+    there not running."""
+    f = fabric(transport=Transport.wireguard)
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site("spoke1", SiteRole.spoke, [("wan1", "203.0.113.1", False)])
+
+    result = expand(
+        f,
+        members(f, hub, spoke),
+        existing=[],
+        transport=get_transport("wireguard"),
+        reserved_ports=[13231, 13232],
+    )
+
+    assert [link.listen_port for link in result.created] == [13233]
+
+
+def test_a_fabric_can_move_its_ports_off_the_default() -> None:
+    """The one reason a WireGuard fabric fails to establish is something in
+    the path dropping the port, so moving the base has to work."""
+    f = fabric(transport=Transport.wireguard, transport_params={"listen_port": 51820})
+    hub = site("hub1", SiteRole.hub, [("wan1", "198.51.100.5", False)])
+    spoke = site("spoke1", SiteRole.spoke, [("wan1", "203.0.113.1", False)])
+
+    result = expand(
+        f, members(f, hub, spoke), existing=[], transport=get_transport("wireguard")
+    )
+
+    assert [link.listen_port for link in result.created] == [51820]
 
 
 def test_wireguard_accepts_a_natted_peer_it_can_learn() -> None:

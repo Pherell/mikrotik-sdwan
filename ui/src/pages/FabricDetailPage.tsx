@@ -140,16 +140,34 @@ export function FabricDetailPage() {
         {(() => {
           const spec = (transports.data ?? []).find((t) => t.name === f.transport);
           if (!spec || spec.required_ports.length === 0) return null;
+          // Where the transport listens on a port it chose, the ports the
+          // links actually hold are the answer -- not the transport's default.
+          // Each tunnel listens on its own, so quoting one number would send
+          // someone to open a port most of the fabric never uses.
+          const ports = [
+            ...new Set(
+              (links.data ?? [])
+                .map((l) => l.listen_port)
+                .filter((p): p is number => p != null),
+            ),
+          ].sort((a, b) => a - b);
+          const needs =
+            ports.length > 0 ? [`UDP ${ports.join(", ")}`] : spec.required_ports;
           return (
             <div className="warn" style={{ marginTop: 12 }}>
-              <strong>Must be reachable end to end:</strong>{" "}
-              {spec.required_ports.join(" · ")}
+              <strong>Must be reachable end to end:</strong> {needs.join(" · ")}
               <p className="muted" style={{ margin: "6px 0 0" }}>
                 These are opened automatically on the devices this controller
                 manages — but not on anything between them. A firewall or NAT in
                 the path drops them silently: every layer reports down, and ping
                 still works, because ICMP was never what was blocked.
               </p>
+              {ports.length > 1 && (
+                <p className="muted" style={{ margin: "6px 0 0" }}>
+                  One port per tunnel: a WireGuard interface is a single UDP
+                  listener, so two tunnels on one device cannot share one.
+                </p>
+              )}
             </div>
           );
         })()}
@@ -345,7 +363,10 @@ function TunnelRow({ link, sites }: { link: FabricLink; sites: Site[] }) {
           return (
             <>
               <span className="muted">{dialer?.site.name ?? "?"} dials </span>
-              <code>{responder.wan.public_ip}</code>
+              <code>
+                {responder.wan.public_ip}
+                {link.listen_port != null && `:${link.listen_port}`}
+              </code>
               <div className="muted">
                 on {responder.site.name}/{responder.wan.name}
               </div>

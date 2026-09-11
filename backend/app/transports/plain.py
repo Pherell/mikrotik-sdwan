@@ -24,6 +24,8 @@ class _PointToPoint:
     requires_reachable_responder = True
     learns_peer_address = False
     supports_dynamic_mesh = False
+    # Nothing here listens on a port of its own choosing.
+    listen_port_base = None
     encrypted = False
 
     @property

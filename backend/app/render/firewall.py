@@ -195,7 +195,10 @@ def _filter(view: FirewallView) -> ConfigSection:
     for transport in sorted(view.peers_by_transport):
         needs = list(_TRANSPORT_PROTOCOLS.get(transport, ()))
         if transport == "wireguard":
-            ports = ",".join(sorted(view.wireguard_ports)) or _WIREGUARD_DEFAULT_PORT
+            ports = (
+                ",".join(sorted(view.wireguard_ports, key=int))
+                or _WIREGUARD_DEFAULT_PORT
+            )
             needs = [("udp", ports)]
         for address in sorted(view.peers_by_transport[transport]):
             for protocol, port in needs:

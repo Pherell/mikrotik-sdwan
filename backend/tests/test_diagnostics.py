@@ -524,6 +524,143 @@ async def test_a_transport_without_ipsec_reports_unknown_rather_than_down() -> N
     assert row.ipsec_detail is None
 
 
+# -- wireguard ---------------------------------------------------------------
+
+
+async def test_a_wireguard_listener_beaten_to_its_port_says_which_one_took_it() -> None:
+    """The worst failure shape there is. RouterOS accepts a second WireGuard
+    interface on a port that is taken, leaves it running=false, and says
+    nothing -- no error at apply, nothing in the log. Verified on 7.24.2."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13231
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": False},
+                {"name": "wg-other", "type": "wireguard", "running": True},
+            ],
+            "interface/wireguard": [
+                {"name": "wg-other", "listen-port": "13231", "running": True},
+                {"name": "wg-branch-hq", "listen-port": "13231", "running": False},
+            ],
+            "interface/wireguard/peers": [],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert "wg-other" in (row.diagnosis or "")
+    assert "13231" in (row.diagnosis or "")
+    assert row.listen_port == 13231
+
+
+async def test_a_wireguard_tunnel_with_no_handshake_names_its_own_port() -> None:
+    """Quoting the fabric's base port would send the operator to open a port
+    this tunnel does not use -- every link listens on a different one."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13233
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": True}
+            ],
+            "interface/wireguard": [
+                {"name": "wg-branch-hq", "listen-port": "13233", "running": True}
+            ],
+            "interface/wireguard/peers": [
+                {"interface": "wg-branch-hq", "public-key": "k", "rx": "0", "tx": "0"}
+            ],
+            "ip/address": [{"address": "203.0.113.10/24", "interface": "ether1"}],
+            "ip/route": [
+                {"dst-address": "0.0.0.0/0", "gateway": "203.0.113.1",
+                 "active": "true", "disabled": "false"}
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert "No WireGuard handshake" in (row.diagnosis or "")
+    assert "UDP 13233" in (row.diagnosis or "")
+    # The same phrase that offers paste-able transit rules for ipsec.
+    assert "permitted all the way" in (row.diagnosis or "")
+    assert row.transit_rules and any("13233" in r for r in row.transit_rules)
+
+
+async def test_bytes_received_are_not_mistaken_for_a_handshake() -> None:
+    """Taken verbatim from a live RouterOS 7.24.2 peer that had never
+    completed a handshake: rx was 148 and current-endpoint-address was
+    populated, because bytes arriving and a handshake finishing are different
+    things. Reading either as success reports a dead tunnel as healthy and
+    sends the operator off to check BGP."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13231
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": True}
+            ],
+            "interface/wireguard": [
+                {"name": "wg-branch-hq", "listen-port": "13231", "running": True}
+            ],
+            "interface/wireguard/peers": [
+                {"interface": "wg-branch-hq", "public-key": "k", "rx": "148",
+                 "tx": "2608", "current-endpoint-address": "103.210.35.189"}
+            ],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert "No WireGuard handshake" in (row.diagnosis or "")
+    assert "BGP" not in (row.diagnosis or "")
+    # And the mismatch itself is worth reporting: the far end is answering
+    # from an address nobody dialled.
+    assert "103.210.35.189" in (row.diagnosis or "")
+
+
+async def test_a_handshaking_wireguard_tunnel_is_not_blamed_for_the_path() -> None:
+    """Once a handshake has happened the wire demonstrably works, so the
+    diagnosis has to move on to what is actually wrong above it."""
+    near_site, link = _fabric_and_link(Transport.wireguard)
+    link.listen_port = 13231
+    fake = FakeRouterOS(
+        password="secret",
+        menus={
+            "interface": [
+                {"name": "wg-branch-hq", "type": "wireguard", "running": True}
+            ],
+            "interface/wireguard": [
+                {"name": "wg-branch-hq", "listen-port": "13231", "running": True}
+            ],
+            "interface/wireguard/peers": [
+                {"interface": "wg-branch-hq", "public-key": "k",
+                 "last-handshake": "1m20s", "rx": "4096"}
+            ],
+            "routing/bgp/session": [],
+        },
+    )
+    driver = await _driver(fake)
+    try:
+        (row,) = await tunnel_health(driver, near_site, [link])
+    finally:
+        await driver.close()
+
+    assert "BGP has not established" in (row.diagnosis or "")
+
+
 async def test_the_interface_name_matches_what_the_transport_renders() -> None:
     """The whole join depends on this. If the name a transport *renders* and the
     name it *reports* ever diverge, every tunnel reads as never-applied."""

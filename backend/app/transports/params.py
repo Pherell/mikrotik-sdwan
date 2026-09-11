@@ -202,19 +202,48 @@ L2_OPTIONS: tuple[Option, ...] = (
     ),
 )
 
+WIREGUARD_OPTIONS: tuple[Option, ...] = (
+    Option(
+        key="listen_port",
+        label="First listen port",
+        why=(
+            "Where this fabric's ports start. Each tunnel takes its own port "
+            "from here upwards, because one WireGuard interface is one UDP "
+            "listener and a site with two uplinks has two. Move it only if "
+            "something in the path blocks the default."
+        ),
+        kind="int",
+        minimum=1,
+        maximum=65535,
+    ),
+    Option(
+        key="persistent_keepalive",
+        label="Keepalive",
+        why=(
+            "How often a peer behind NAT pokes the far end to keep its mapping "
+            "alive. Without it an inbound tunnel to a NAT'd site dies the "
+            "moment the mapping expires."
+        ),
+        kind="duration",
+    ),
+)
+
 # Keyed by transport name, matching TransportDriver.name.
 OPTIONS: dict[str, tuple[Option, ...]] = {
     "ipsec_gre": IPSEC_OPTIONS,
     "ipsec_policy": IPSEC_OPTIONS,
     "vxlan": L2_OPTIONS,
     "eoip": L2_OPTIONS,
-    # GRE, IPIP and WireGuard have nothing to negotiate: no ciphers to agree
-    # on, and WireGuard's are not selectable by design. An empty tuple is the
-    # honest answer, and the UI draws "nothing to configure" rather than an
-    # empty Advanced section that looks broken.
+    # GRE and IPIP have nothing to negotiate: no ciphers to agree on, and no
+    # port. An empty tuple is the honest answer, and the UI draws "nothing to
+    # configure" rather than an empty Advanced section that looks broken.
     "gre": (),
     "ipip": (),
-    "wireguard": (),
+    # WireGuard's ciphers are not selectable by design, so the port is the only
+    # thing left -- and it is worth exposing, because the one reason a
+    # WireGuard fabric fails to come up is something in the path dropping that
+    # port.
+    "wireguard": WIREGUARD_OPTIONS,
 }
 
 

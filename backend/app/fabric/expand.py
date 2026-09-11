@@ -12,10 +12,15 @@ their keys, so re-expanding a fabric does not renumber a live overlay.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import combinations
 
-from app.fabric.allocate import allocate_link_subnet, endpoints_of
+from app.fabric.allocate import (
+    allocate_link_subnet,
+    allocate_listen_port,
+    endpoints_of,
+)
 from app.models.enums import SiteRole, Topology
 from app.models.fabric import Fabric, FabricMember, Link
 from app.models.site import Wan
@@ -127,12 +132,18 @@ def expand(
     members: list[FabricMember],
     existing: list[Link],
     transport,
+    reserved_ports: Iterable[int] = (),
 ) -> ExpansionResult:
     """Reconcile the link set against the topology.
 
     ``existing`` links are matched by the pair of WAN ids they join, in either
     order, so a link survives even if expansion visits its endpoints the other
     way round.
+
+    ``reserved_ports`` are listen ports already held by links on *other*
+    fabrics that touch these same sites. Two fabrics both starting at 13231
+    would otherwise hand the same port to a site in both, and the second
+    interface would sit there not running.
     """
     result = ExpansionResult()
     wans = members_to_wans(members)
@@ -142,7 +153,30 @@ def expand(
         frozenset({link.a_wan_id, link.b_wan_id}): link for link in existing
     }
     taken_subnets = [link.subnet for link in existing]
+    port_base = getattr(transport, "listen_port_base", None)
+    if port_base is not None:
+        # The fabric may have moved the base, e.g. because something upstream
+        # blocks the default port.
+        override = (fabric.transport_params or {}).get("listen_port")
+        port_base = int(override) if override else int(port_base)
+    taken_ports = {
+        int(link.listen_port) for link in existing if link.listen_port is not None
+    } | {int(p) for p in reserved_ports}
     wanted: set[frozenset[str]] = set()
+
+    def next_port() -> int | None:
+        if port_base is None:
+            return None
+        port = allocate_listen_port(port_base, taken_ports)
+        taken_ports.add(port)
+        return port
+
+    # A link created before its transport listened on a port -- or before ports
+    # were per link at all -- has none. Fill it in here rather than at render
+    # time: the renderer sees one link and cannot know what its siblings hold.
+    for link in existing:
+        if link.listen_port is None and port_base is not None:
+            link.listen_port = next_port()
 
     for a, b in wanted_pairs(wans, fabric.topology):
         pair = frozenset({a.wan.id, b.wan.id})
@@ -177,6 +211,7 @@ def expand(
                 a_tunnel_ip=a_ip,
                 b_tunnel_ip=b_ip,
                 initiator=initiator,
+                listen_port=next_port(),
                 dynamic=False,
                 enabled=True,
                 state="pending",

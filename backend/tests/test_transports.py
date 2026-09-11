@@ -32,6 +32,7 @@ def link(**kw) -> LinkView:
         remote=remote,
         initiator=kw.pop("initiator", True),
         secrets=kw.pop("secrets", {}),
+        listen_port=kw.pop("listen_port", None),
     )
 
 
@@ -160,6 +161,35 @@ def test_wireguard_gives_each_side_its_own_private_key() -> None:
     # Each side's peer entry carries the *other* side's public key.
     assert hub_peer.items[0].props["public-key"] == _public_of(spoke_private, secrets)
     assert spoke_peer.items[0].props["public-key"] == _public_of(hub_private, secrets)
+
+
+def test_wireguard_listens_on_the_port_the_link_was_given() -> None:
+    """One WireGuard interface is one UDP listener, and the renderer emits one
+    interface per link -- so a site with two uplinks would ask for two
+    listeners on one port. RouterOS accepts that and leaves the second
+    interface running=false without a word, so the port has to be per link."""
+    driver = get_transport("wireguard")
+    view = link(secrets=driver.allocate(), listen_port=13244)
+
+    iface = next(s for s in driver.render(view) if s.path == "/interface/wireguard")
+    peer = next(s for s in driver.render(view) if s.path == "/interface/wireguard/peers")
+
+    assert iface.items[0].props["listen-port"] == 13244
+    # Both ends of a link share the number: one side's listener is the other
+    # side's endpoint, and neither has to look the other up.
+    assert peer.items[0].props["endpoint-port"] == 13244
+
+
+def test_wireguard_falls_back_to_the_fabric_port_when_a_link_has_none() -> None:
+    """Links created before ports were per link carry None until the next
+    expansion backfills them. Rendering nothing at all would be worse than
+    rendering the old shared port."""
+    driver = get_transport("wireguard")
+    view = link(secrets=driver.allocate(), params={"listen_port": 51820})
+
+    iface = next(s for s in driver.render(view) if s.path == "/interface/wireguard")
+
+    assert iface.items[0].props["listen-port"] == 51820
 
 
 def _public_of(private: str, secrets: dict[str, str]) -> str:

@@ -79,13 +79,24 @@ def test_a_bridge_name_cannot_be_empty() -> None:
 # -- transports with nothing to negotiate -----------------------------------
 
 
-@pytest.mark.parametrize("transport", ["gre", "ipip", "wireguard"])
+@pytest.mark.parametrize("transport", ["gre", "ipip"])
 def test_a_transport_with_nothing_to_negotiate_says_so(transport) -> None:
-    """GRE and IPIP have no ciphers to agree on and WireGuard's are not
-    selectable by design. An empty list is the honest answer; the UI draws
-    "nothing to configure" rather than an empty section that looks broken."""
+    """GRE and IPIP have no ciphers to agree on and no port. An empty list is
+    the honest answer; the UI draws "nothing to configure" rather than an empty
+    section that looks broken."""
     assert options_for(transport) == ()
     assert validate(transport, {"dh_group": "ecp256"})  # and refuses overrides
+
+
+def test_wireguard_offers_the_port_but_no_ciphers() -> None:
+    """WireGuard's ciphers are not selectable by design, so there is nothing to
+    negotiate -- but the port is worth exposing, because something in the path
+    dropping it is the one way a WireGuard fabric fails to come up."""
+    keys = {option.key for option in options_for("wireguard")}
+    assert "listen_port" in keys
+    assert not keys & {"dh_group", "enc_algorithm", "auth_algorithm"}
+    assert validate("wireguard", {"dh_group": "ecp256"})  # still refuses ciphers
+    assert validate("wireguard", {"listen_port": 51820}) == []
 
 
 # -- the schema -------------------------------------------------------------

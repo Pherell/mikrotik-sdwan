@@ -66,6 +66,10 @@ class LinkView:
     # other listens. A NAT'd endpoint is always the initiator.
     initiator: bool
     secrets: dict[str, str] = field(default_factory=dict)
+    # The UDP port both ends of this link listen on, for transports that
+    # listen. Allocated per link because one interface is rendered per link and
+    # two interfaces cannot share a port. None until expansion has run.
+    listen_port: int | None = None
 
     @property
     def tag(self) -> str:
@@ -103,6 +107,10 @@ class TransportDriver(Protocol):
     # reachable address -- see validate_pair.
     learns_peer_address: bool
     supports_dynamic_mesh: bool
+    # The first UDP port this transport's listeners may use, or None if it does
+    # not listen on one it gets to choose. Expansion hands every link its own
+    # port from here upwards; a transport that says None never gets one.
+    listen_port_base: int | None
     # Every RouterOS menu this transport can write to. The reconciler renders an
     # empty section for each one even when a site has no links, so rows left
     # behind by a deleted link are still seen and removed.

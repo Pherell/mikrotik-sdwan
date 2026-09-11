@@ -3,6 +3,10 @@
 Every link gets a /31 out of the fabric's tunnel pool; every member site gets a
 /32 loopback out of the loopback pool. Allocation is *stable*: an existing
 assignment is never moved, because renumbering a live tunnel drops it.
+
+Links also get a UDP listen port, for the transports that listen on one. That
+is allocation rather than a constant because the port is per *interface* and a
+multi-homed site has one interface per link -- see ``allocate_listen_port``.
 """
 
 from __future__ import annotations
@@ -66,6 +70,33 @@ def allocate_loopback(cidr: str, taken: Iterable[str]) -> str:
     raise PoolExhausted(
         f"Loopback pool {cidr} is full ({len(used)} allocated). "
         "Widen fabric.loopback_pool."
+    )
+
+
+# A listener has to live somewhere above the well-known range and below the
+# ephemeral one, or it collides with whatever the device opens for itself.
+_MAX_PORT = 65535
+
+
+def allocate_listen_port(base: int, taken: Iterable[int]) -> int:
+    """The lowest free UDP port at or above ``base``.
+
+    WireGuard binds one UDP listener per interface, and the renderer emits one
+    interface per *link* -- so a site with two uplinks asks for two listeners.
+    RouterOS does not refuse the second one: it accepts the row and leaves it
+    ``running=false``, silently, which is far worse than an error. Every link
+    therefore gets its own port.
+
+    Both ends of a link share the port number: they are different devices, so
+    there is no collision, and it means one side's ``listen-port`` is the
+    other's ``endpoint-port`` without either having to look the other up.
+    """
+    used = set(taken)
+    for port in range(base, _MAX_PORT + 1):
+        if port not in used:
+            return port
+    raise PoolExhausted(
+        f"No free UDP listen port at or above {base} ({len(used)} allocated)."
     )
 
 

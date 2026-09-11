@@ -129,6 +129,10 @@ class TunnelHealth(BaseModel):
     enabled: bool
     state: str
     last_error: str | None = None
+    # The UDP port this tunnel listens on, where its transport listens at all.
+    # Shown so the operator can see which port to open without opening the
+    # link record.
+    listen_port: int | None = None
     # What the device reports.
     interface: str | None = None
     interface_running: bool | None = None

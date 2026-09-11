@@ -34,6 +34,8 @@ class _L2Stretch:
     requires_reachable_responder = True
     learns_peer_address = False
     supports_dynamic_mesh = False
+    # Nothing here listens on a port of its own choosing.
+    listen_port_base = None
     encrypted = False
     # Runs on top of this transport rather than directly on the underlay.
     parent_transport = "ipsec_gre"

@@ -254,6 +254,10 @@ async def tunnel_health(
     routes = await _read(driver, "/ip/route")
     addresses = await _read(driver, "/ip/address")
     configured_peers = await _read(driver, "/ip/ipsec/peer")
+    # WireGuard reports a handshake on the peer, not the interface: an
+    # interface with no peer traffic at all still says running=true.
+    wg_interfaces = await _read(driver, "/interface/wireguard")
+    wg_peers = await _read(driver, "/interface/wireguard/peers")
 
     out: list[TunnelHealth] = []
     for link in links:
@@ -284,10 +288,16 @@ async def tunnel_health(
         health.bgp_established, health.bgp_detail = _bgp_for(sessions, far_tunnel_ip)
         _apply_netwatch(health, netwatch, far_tunnel_ip)
         transport = str(link.fabric.transport)
-        listen_port = str((link.fabric.transport_params or {}).get("listen_port") or "")
+        # The link's own port, not the fabric's base: every link listens on a
+        # different one, and quoting the base would send the operator to open
+        # a port this tunnel never uses.
+        listen_port = str(
+            link.listen_port or (link.fabric.transport_params or {}).get("listen_port") or ""
+        )
+        health.listen_port = link.listen_port
         health.diagnosis = _diagnose(
             health, far, routes, addresses, configured_peers, interfaces,
-            transport, listen_port or None,
+            transport, listen_port or None, wg_interfaces, wg_peers,
         )
         if health.diagnosis and "permitted all the way" in health.diagnosis:
             near_ip = _near_public_ip(link, site) or ""
@@ -390,6 +400,8 @@ def _diagnose(
     interfaces: dict[str, dict[str, Any]],
     transport: str = "",
     listen_port: str | None = None,
+    wg_interfaces: list[dict[str, Any]] | None = None,
+    wg_peers: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Why this tunnel is not up, in the order worth checking.
 
@@ -407,6 +419,14 @@ def _diagnose(
             "tunnel network only works it out -- open this device and Apply to "
             "push it."
         )
+
+    if transport == "wireguard":
+        wireguard = _diagnose_wireguard(
+            health, far, routes, addresses, interfaces,
+            wg_interfaces or [], wg_peers or [], listen_port,
+        )
+        if wireguard is not None:
+            return wireguard
 
     # Sourced from an address that is not on the path to the far end. IKE then
     # leaves one interface carrying another's source address, and is dropped
@@ -470,6 +490,112 @@ def _diagnose(
         )
 
     return None
+
+
+def _diagnose_wireguard(
+    health: TunnelHealth,
+    far: Wan,
+    routes: list[dict[str, Any]],
+    addresses: list[dict[str, Any]],
+    interfaces: dict[str, dict[str, Any]],
+    wg_interfaces: list[dict[str, Any]],
+    wg_peers: list[dict[str, Any]],
+    listen_port: str | None,
+) -> str | None:
+    """WireGuard's own failure modes, which are not IPsec's.
+
+    There is no security association to look at and no separate carrier
+    interface, so the ipsec ladder above says nothing useful here. What
+    WireGuard does expose is a handshake, on the peer rather than the
+    interface -- an interface with no traffic whatsoever still reports
+    running=true, so "running" is not evidence the tunnel works.
+    """
+    ours = next(
+        (r for r in wg_interfaces if _text(r.get("name")) == health.interface), None
+    )
+    if ours is None:
+        return None  # the generic "not applied" branch already covered this
+
+    # A port is one listener. RouterOS accepts a second interface asking for a
+    # port that is taken and simply never runs it -- no error at apply time,
+    # nothing in the log. It is invisible unless something says it out loud.
+    port = _text(ours.get("listen-port"))
+    if not _truthy(ours.get("running")) and port:
+        clashing = sorted(
+            _text(r.get("name"))
+            for r in wg_interfaces
+            if _text(r.get("listen-port")) == port
+            and _text(r.get("name")) != health.interface
+        )
+        if clashing:
+            return (
+                f"{health.interface} is not running because {', '.join(clashing)} "
+                f"already holds UDP {port}. One WireGuard interface is one "
+                "listener, so each tunnel needs its own port. Re-expand the "
+                "tunnel network to hand this link a free one."
+            )
+        return (
+            f"{health.interface} is configured but not running. Check the "
+            "interface is enabled and that its private key was written."
+        )
+
+    peer = next(
+        (p for p in wg_peers if _text(p.get("interface")) == health.interface), None
+    )
+    if peer is None:
+        return (
+            f"{health.interface} exists but has no peer. Apply this device "
+            "again -- the interface landed and the peer did not."
+        )
+
+    if _handshaked(peer):
+        return None  # the wire works; let the BGP branch below speak
+
+    if not far.public_ip:
+        return (
+            "No handshake yet, and the far end has no address to dial. One of "
+            "the two ends has to be reachable for the first packet; give the "
+            "far uplink a public address, or wait for it to dial in."
+        )
+
+    egress, hop = _egress(routes, addresses, far.public_ip)
+    where = (
+        f" It leaves via {egress} toward {hop}, so that is the first device in "
+        "the path that has to permit it."
+        if egress and hop
+        else ""
+    )
+    # WireGuard records where the last packet claimed to come from, handshake
+    # or not. When that is not the address being dialled, something in the
+    # path is rewriting the source -- which is worth saying, because the
+    # reply is then arriving from somewhere the far end does not know it is.
+    seen = _text(peer.get("current-endpoint-address"))
+    roamed = (
+        f" Replies are arriving from {seen} rather than {far.public_ip}, so "
+        "something in the path is rewriting the address."
+        if seen and seen != far.public_ip
+        else ""
+    )
+    return (
+        f"No WireGuard handshake with {far.public_ip}. Check that UDP "
+        f"{listen_port or port} is permitted all the way between these two "
+        f"addresses.{where}{roamed} A successful ping proves nothing about it "
+        "-- ICMP is not what is being blocked."
+    )
+
+
+def _handshaked(peer: dict[str, Any]) -> bool:
+    """Has this peer ever completed a handshake?
+
+    ``last-handshake`` and nothing else. The tempting shortcuts are both
+    wrong, and were both observed wrong on a live 7.24.2 peer that had never
+    completed one: ``rx`` was 148, because bytes arriving is not the same as a
+    handshake finishing, and ``current-endpoint-address`` was populated,
+    because WireGuard records where the last packet came from whether or not
+    it authenticated. Trusting either reports a dead tunnel as healthy and
+    sends the operator off to check BGP.
+    """
+    return bool(_text(peer.get("last-handshake")))
 
 
 def _interface_for(link: Link) -> str | None:

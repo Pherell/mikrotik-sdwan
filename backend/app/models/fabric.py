@@ -95,6 +95,12 @@ class Link(Base, UUIDPk, Timestamps):
     # Which side dials. Set by the transport driver from NAT/public-IP facts.
     initiator: Mapped[str] = mapped_column(String(1), nullable=False, default="a")
 
+    # UDP port both ends listen on, for transports that listen (WireGuard).
+    # Per link, not per fabric: one interface is rendered per link, and two
+    # interfaces cannot share a port. Null on links created before ports were
+    # allocated and on fabrics whose transport does not listen.
+    listen_port: Mapped[int | None] = mapped_column(Integer)
+
     # Populated on demand for dynamic mesh links; permanent links are pinned.
     dynamic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

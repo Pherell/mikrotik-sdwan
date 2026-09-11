@@ -1,9 +1,18 @@
 """WireGuard transport. RouterOS 7 only.
 
-Simpler and cheaper than IPsec: one interface per site rather than per link, one
-keypair per site, and peers hung off it. That shape is why this driver differs
-from the others -- ``render`` still runs per link, but the interface it emits is
-shared, so every link on a site must agree on it.
+Simpler and cheaper than IPsec: one interface and one keypair per link, with a
+single peer hung off the interface, instead of IPsec's profile + proposal +
+peer + identity + policy and a GRE interface on top. It is also far easier to
+get through somebody else's router, because everything rides one UDP port --
+IPsec needs UDP 500 and 4500 *plus* bare IP protocols 50 and 47, and a
+middlebox that happily forwards UDP will often drop a protocol it has no ports
+for.
+
+The port is per link, not per fabric, and that is not a detail: WireGuard binds
+one UDP listener per interface, so two links on a multi-homed site would ask
+for two listeners on one port. RouterOS does not refuse that -- it accepts the
+second interface and leaves it ``running=false`` in silence. Expansion hands
+every link its own port; see ``app.fabric.allocate.allocate_listen_port``.
 
 Keys are generated controller-side. Only the public half is ever rendered to the
 far end, and the private half is written once and never diffed: RouterOS returns
@@ -20,12 +29,16 @@ from app.drivers.base import ConfigItem, ConfigSection
 from app.render.engine import section
 from app.transports.base import LinkView, iface_name, register
 
+DEFAULT_LISTEN_PORT = 13231
+
 DEFAULT_PARAMS: dict[str, object] = {
     # A NAT'd peer must keep its mapping alive or the far side can never reach
     # it. 25s is the WireGuard convention: under the shortest common NAT
     # timeout, cheap enough to run forever.
     "persistent_keepalive": "25s",
-    "listen_port": 13231,
+    # Where a fabric's ports *start*. Each link then takes the next free one,
+    # so this is a base rather than the port any single tunnel uses.
+    "listen_port": DEFAULT_LISTEN_PORT,
 }
 
 
@@ -90,6 +103,7 @@ class WireGuardTransport:
     requires_reachable_responder = True
     learns_peer_address = True
     supports_dynamic_mesh = True
+    listen_port_base = DEFAULT_LISTEN_PORT
     owned_paths = ("/interface/wireguard", "/interface/wireguard/peers", "/ip/address")
 
     def allocate(self) -> dict[str, str]:
@@ -115,6 +129,10 @@ class WireGuardTransport:
         # exactly when it initiates and the link's initiator is "a" -- which is
         # what LinkView.initiator already encodes relative to `local`.
         local_private, remote_public = self._key_pair_for(link)
+        # Both ends of a link listen on the same number -- different devices,
+        # so nothing collides, and it saves each side having to look up the
+        # other's port to fill in endpoint-port.
+        port = link.listen_port or int(params["listen_port"])  # type: ignore[call-overload]
 
         iface = self.interface_name(link.slug)
         iface_tag = f"{link.tag}:wg"
@@ -134,7 +152,7 @@ class WireGuardTransport:
                     props={
                         "name": iface,
                         "private-key": local_private,
-                        "listen-port": params["listen_port"],
+                        "listen-port": port,
                         "mtu": link.fabric.mtu,
                     },
                     tag=iface_tag,
@@ -152,7 +170,7 @@ class WireGuardTransport:
         }
         if link.remote.public_ip:
             peer_props["endpoint-address"] = link.remote.public_ip
-            peer_props["endpoint-port"] = params["listen_port"]
+            peer_props["endpoint-port"] = port
         if link.local.nat_behind or link.remote.nat_behind:
             peer_props["persistent-keepalive"] = params["persistent_keepalive"]
 

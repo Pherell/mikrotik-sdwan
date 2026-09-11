@@ -104,6 +104,9 @@ class LinkRead(BaseModel):
     b_tunnel_ip: str
     subnet: str
     initiator: str
+    # The UDP port both ends of this tunnel listen on, where the transport
+    # listens at all. Worth showing: it is what has to be open in the path.
+    listen_port: int | None = None
     dynamic: bool
     enabled: bool
     state: str
