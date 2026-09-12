@@ -286,7 +286,7 @@ def _sni_mangle_rules(policy: Policy, mark: str, patterns: list[str]) -> list[Co
     tcp/443 regardless of anything an app group's own protocol/ports say:
     SNI is a TLS-handshake property, not a policy-configurable one.
     """
-    conn_mark = f"{mark}-sni"[:31]
+    conn_mark = _suffixed(mark, "-sni")
     items: list[ConfigItem] = []
     for index, pattern in enumerate(patterns):
         props = _match_props(policy)
@@ -573,11 +573,27 @@ def _pcc_rules(
 
 
 def _conn_mark(mark: str, index: int) -> str:
-    return f"{mark}-c{index}"[:31]
+    return _suffixed(mark, f"-c{index}")
 
 
 def _bucket_mark(mark: str, index: int) -> str:
-    return f"{mark}-{index}"[:31]
+    return _suffixed(mark, f"-{index}")
+
+
+# RouterOS caps a routing or connection mark at 31 characters.
+MARK_MAX = 31
+
+
+def _suffixed(base: str, suffix: str) -> str:
+    """Trim the base to make room for the suffix, never the other way round.
+
+    Truncating after appending silently collapses everything the suffix was
+    distinguishing. A policy name long enough to push _mark to the cap left
+    every bucket with the same mark, so the classifier spread connections
+    across buckets that all named one connection mark and one table -- a
+    load_balance group that renders, applies, and behaves like a single link.
+    """
+    return f"{base[: MARK_MAX - len(suffix)]}{suffix}"
 
 
 def _balanced_tables(mark: str, paths: list[PathOption], site_name: str) -> list[ConfigItem]:

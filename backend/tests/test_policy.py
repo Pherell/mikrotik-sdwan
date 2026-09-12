@@ -73,6 +73,43 @@ def sections_of(v: SitePolicyView) -> dict:
     return {s.path: s for s in render_policies(v)}
 
 
+def test_buckets_stay_distinct_when_the_policy_name_fills_the_mark() -> None:
+    """RouterOS caps a routing mark at 31 characters. Truncating the bucket
+    mark *after* appending the index collapsed every bucket onto one mark, so
+    a load_balance group rendered, applied, and behaved like a single link."""
+    long_name = "guest-wifi-breakout-policy-for-branch-offices"
+    g = balanced(["fibre", "lte"], [3, 1])
+    p = policy(name=long_name, sdwan_group=g)
+
+    result = sections_of(
+        view(
+            [p],
+            fibre=[path("fibre", ["10.255.0.1"])],
+            lte=[path("lte", ["10.255.1.1"])],
+        )
+    )
+
+    conn_marks = {
+        i.props["new-connection-mark"]
+        for i in result["/ip/firewall/mangle"].items
+        if i.props["action"] == "mark-connection"
+    }
+    assert len(conn_marks) == 2, conn_marks
+
+    route_marks = {
+        i.props["new-routing-mark"]
+        for i in result["/ip/firewall/mangle"].items
+        if i.props["action"] == "mark-routing"
+    }
+    assert len(route_marks) == 2, route_marks
+
+    # Every mark still has to fit what RouterOS accepts.
+    assert all(len(m) <= 31 for m in conn_marks | route_marks)
+
+    tables = [t.props["name"] for t in result["/routing/table"].items]
+    assert len(tables) == len(set(tables)) == 2, tables
+
+
 # -- the underlay guard -----------------------------------------------------
 #
 # What these name: marking in the output chain put the router's own packets
