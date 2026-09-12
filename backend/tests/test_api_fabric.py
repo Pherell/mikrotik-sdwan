@@ -848,10 +848,12 @@ async def test_policy_steers_onto_the_preferred_uplink(api) -> None:
     # this same menu now (render.fabric._mss_clamp) -- filter to the rows
     # this policy actually authored, which is what this test is about.
     mangle = [r for r in spoke.rows("ip/firewall/mangle") if r["action"] == "mark-routing"]
-    assert len(mangle) == 1
-    assert mangle[0]["new-routing-mark"] == "sdwan-voice"
-    assert mangle[0]["protocol"] == "udp"
-    assert mangle[0]["dst-port"] == "5060"
+    # One in prerouting for traffic passing through, one in output for the
+    # router's own -- prerouting never sees a packet the device originates.
+    assert [r["chain"] for r in mangle] == ["prerouting", "output"]
+    assert {r["new-routing-mark"] for r in mangle} == {"sdwan-voice"}
+    assert {r["protocol"] for r in mangle} == {"udp"}
+    assert {r["dst-port"] for r in mangle} == {"5060"}
 
     assert [t["name"] for t in spoke.rows("routing/table")] == ["sdwan-voice"]
 
@@ -919,7 +921,7 @@ async def test_deleting_a_policy_sweeps_its_rules_off_the_device(api) -> None:
     def mark_routing() -> list[dict]:
         return [r for r in spoke.rows("ip/firewall/mangle") if r["action"] == "mark-routing"]
 
-    assert len(mark_routing()) == 1
+    assert [r["chain"] for r in mark_routing()] == ["prerouting", "output"]
 
     await client.delete(f"/policies/{created.json()['id']}", headers=headers)
     job = await client.post(

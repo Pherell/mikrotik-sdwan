@@ -58,8 +58,81 @@ def view(policies: list[Policy], **paths: list[PathOption]) -> SitePolicyView:
     return SitePolicyView(site_name="branch-1", policies=policies, paths_by_tag=paths)
 
 
+def view_with_underlay(
+    policies: list[Policy], underlay: list[str], **paths: list[PathOption]
+) -> SitePolicyView:
+    return SitePolicyView(
+        site_name="branch-1",
+        policies=policies,
+        paths_by_tag=paths,
+        underlay_addresses=underlay,
+    )
+
+
 def sections_of(v: SitePolicyView) -> dict:
     return {s.path: s for s in render_policies(v)}
+
+
+# -- the underlay guard -----------------------------------------------------
+#
+# What these name: marking in the output chain put the router's own packets
+# under the policy. A policy matching a supernet -- 10.0.0.0/8 is the one an
+# operator reaches for -- covers the peer WAN addresses the tunnels are built
+# on, so the encapsulated traffic was marked into a table whose only route is
+# that same tunnel. The tunnel then cannot recover on its own: its session
+# drops, check-gateway removes the route, and a strict table drops everything
+# left over -- including the handshake that would have rebuilt it.
+
+
+def test_the_peer_underlay_is_accepted_before_anything_marks_it() -> None:
+    p = policy(dst_prefixes=["10.0.0.0/8"])
+    s = sections_of(
+        view_with_underlay([p], ["203.0.113.7"], mpls=[path("wan1", ["10.255.0.0"])])
+    )
+
+    mangle = s["/ip/firewall/mangle"].items
+    guard = mangle[0].props
+    assert guard["chain"] == "output"
+    assert guard["action"] == "accept"
+    assert guard["dst-address-list"] == "sdwan-branch-1-infra"
+    # Positional: a guard below the rule it guards protects nothing.
+    assert all(i.props["action"] == "mark-routing" for i in mangle[1:])
+
+    addresses = {
+        i.props["address"]
+        for i in s["/ip/firewall/address-list"].items
+        if i.props["list"] == "sdwan-branch-1-infra"
+    }
+    assert addresses == {"203.0.113.7"}
+
+
+def test_a_site_with_no_tunnels_yet_renders_no_guard() -> None:
+    """Nothing to protect, and an empty address-list match would accept
+    everything the policy was meant to steer."""
+    s = sections_of(view([policy()], mpls=[path("wan1", ["10.255.0.0"])]))
+
+    mangle = s["/ip/firewall/mangle"].items
+    assert all(i.props["action"] == "mark-routing" for i in mangle)
+    assert not [
+        i for i in s["/ip/firewall/address-list"].items if i.props["list"].endswith("-infra")
+    ]
+
+
+def test_the_overlay_next_hop_needs_no_guard() -> None:
+    """It is the gateway the policy route already points at, and it resolves
+    through the connected route on the tunnel interface -- so a marked packet
+    addressed to it leaves by the interface it was leaving by anyway. Listing
+    it would only add a rule that never changes an outcome."""
+    s = sections_of(
+        view_with_underlay([policy()], ["203.0.113.7"], mpls=[path("wan1", ["10.255.0.0"])])
+    )
+
+    addresses = {
+        i.props["address"]
+        for i in s["/ip/firewall/address-list"].items
+        if i.props["list"].endswith("-infra")
+    }
+    assert "10.255.0.0" not in addresses
 
 
 # -- the pipeline -----------------------------------------------------------
@@ -192,8 +265,13 @@ def test_mangle_is_position_sensitive_and_ordered_by_priority() -> None:
     s = sections_of(view([low, high], mpls=[path("wan1", ["10.255.0.0"])]))
 
     assert s["/ip/firewall/mangle"].ordered is True
-    marks = [i.props["new-routing-mark"] for i in s["/ip/firewall/mangle"].items]
+    items = s["/ip/firewall/mangle"].items
+    marks = [i.props["new-routing-mark"] for i in items if i.props["chain"] == "prerouting"]
     assert marks == ["sdwan-critical", "sdwan-bulk"]
+    # The output copies are ordered by the same priority, for the same reason:
+    # first match wins there too.
+    out = [i.props["new-routing-mark"] for i in items if i.props["chain"] == "output"]
+    assert out == ["sdwan-critical", "sdwan-bulk"]
 
 
 def test_a_port_match_always_carries_a_protocol() -> None:
@@ -525,18 +603,28 @@ def test_the_sla_script_demotes_per_table_not_globally() -> None:
     assert f"distance={2 + SLA_PENALTY}}}" in down
 
 
-def test_failover_rendering_is_untouched() -> None:
-    """The strategy that already worked must render exactly as before -- a
-    diff here is a config change pushed to every device on upgrade."""
+def test_failover_marks_traffic_passing_through_and_the_routers_own() -> None:
+    """One match, rendered into both chains.
+
+    prerouting is blind to anything the router originates, so a ping run from
+    the device -- the first thing anybody does to check that steering works --
+    used to ignore the policy entirely and go out the main table.
+    """
     p = policy(prefer=["mpls", "lte"])
     result = sections_of(
         view([p], mpls=[path("mpls", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
     )
 
     mangle = result["/ip/firewall/mangle"].items
-    assert len(mangle) == 1
-    assert mangle[0].props["action"] == "mark-routing"
-    assert "per-connection-classifier" not in mangle[0].props
+    assert [i.props["chain"] for i in mangle] == ["prerouting", "output"]
+    assert {i.props["action"] for i in mangle} == {"mark-routing"}
+    assert all("per-connection-classifier" not in i.props for i in mangle)
+    # Same match in both, or the two chains would steer different traffic.
+    assert mangle[0].props["new-routing-mark"] == mangle[1].props["new-routing-mark"]
+    # The prerouting rule keeps the tag it has always had: an upgrade must not
+    # rewrite a row that has not changed.
+    assert mangle[0].tag == "sdwan:policy:voice"
+    assert mangle[1].tag == "sdwan:policy:voice:output"
     assert len(result["/routing/table"].items) == 1
 
     probes = result["/tool/netwatch"].items
@@ -553,8 +641,9 @@ def test_a_single_member_group_never_balances() -> None:
     result = sections_of(view([p], fibre=[path("fibre", ["10.255.0.1"])]))
 
     mangle = result["/ip/firewall/mangle"].items
-    assert len(mangle) == 1
-    assert mangle[0].props["action"] == "mark-routing"
+    assert [i.props["chain"] for i in mangle] == ["prerouting", "output"]
+    assert {i.props["action"] for i in mangle} == {"mark-routing"}
+    assert all("per-connection-classifier" not in i.props for i in mangle)
 
 
 
@@ -643,15 +732,15 @@ def test_sni_narrows_by_destination_prefix_when_both_are_set() -> None:
     assert "dst-address-list" in conn.props
 
 
-def test_a_policy_with_no_sni_patterns_renders_the_plain_single_rule() -> None:
-    """No behaviour change for every policy that existed before this."""
+def test_a_policy_with_no_sni_patterns_renders_the_plain_rules() -> None:
+    """An app group without patterns adds no tls-host pass."""
     p = policy(app_group=sni_group([], name="plain-group", prefixes=["10.9.0.0/24"]))
     mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
         "/ip/firewall/mangle"
     ].items
-    assert len(mangle) == 1
-    assert mangle[0].props["action"] == "mark-routing"
-    assert "tls-host" not in mangle[0].props
+    assert [i.props["chain"] for i in mangle] == ["prerouting", "output"]
+    assert {i.props["action"] for i in mangle} == {"mark-routing"}
+    assert all("tls-host" not in i.props for i in mangle)
 
 
 def test_sni_combined_with_load_balance_is_refused_by_the_renderer() -> None:

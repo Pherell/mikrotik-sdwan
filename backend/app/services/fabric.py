@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -232,7 +233,13 @@ async def render_device(session: AsyncSession, site: Site) -> list[ConfigSection
             )
 
     sections.extend(render_firewall(firewall))
-    sections.extend(render_policies(await policy_view(session, site)))
+    # The same peer addresses the NAT bypass exempts are the ones policy
+    # steering must leave in the main table -- both are "this is how the tunnel
+    # itself gets out", stated to two renderers that each need it.
+    underlay = sorted({p for peers in firewall.peers_by_transport.values() for p in peers})
+    sections.extend(
+        render_policies(await policy_view(session, site, underlay=underlay))
+    )
 
     return merge_sections(sections)
 
@@ -416,7 +423,9 @@ async def reallocate_secrets(
 # -- policies ---------------------------------------------------------------
 
 
-async def policy_view(session: AsyncSession, site: Site) -> SitePolicyView:
+async def policy_view(
+    session: AsyncSession, site: Site, *, underlay: Iterable[str] = ()
+) -> SitePolicyView:
     """Which policies apply here, and which uplinks they can steer onto.
 
     Next hops are the far ends of this site's tunnels, not WAN gateways: policy
@@ -458,5 +467,8 @@ async def policy_view(session: AsyncSession, site: Site) -> SitePolicyView:
             paths_by_tag.setdefault(tag, []).append(option)
 
     return SitePolicyView(
-        site_name=site.name, policies=policies, paths_by_tag=paths_by_tag
+        site_name=site.name,
+        policies=policies,
+        paths_by_tag=paths_by_tag,
+        underlay_addresses=sorted(set(underlay)),
     )

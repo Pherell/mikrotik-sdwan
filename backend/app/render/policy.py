@@ -30,7 +30,7 @@ section is marked ``ordered`` so the reconciler preserves it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.drivers.base import ConfigItem, ConfigSection
 from app.models.policy import Policy, SlaProfile
@@ -75,6 +75,9 @@ class SitePolicyView:
     policies: list[Policy]
     # wan tag -> the uplinks at this site carrying it.
     paths_by_tag: dict[str, list[PathOption]]
+    # Addresses this router must always reach natively, never through a policy
+    # table: the far end of every tunnel it builds. See _infra_rule.
+    underlay_addresses: list[str] = field(default_factory=list)
 
 
 def render_policies(view: SitePolicyView) -> list[ConfigSection]:
@@ -89,6 +92,21 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     routes: list[ConfigItem] = []
     probes: list[ConfigItem] = []
     rules: list[ConfigItem] = []
+
+    # Guard first, because mangle is positional. Everything below marks in the
+    # ``output`` chain as well as ``prerouting``, and output is where the
+    # router's *own* packets appear -- including the encapsulated tunnel
+    # traffic whose destination is a peer's underlay address. A policy matching
+    # a supernet like 10.0.0.0/8 covers those addresses, so without this the
+    # tunnel's own packets get marked into a table whose only route is that
+    # same tunnel. That is a loop the tunnel cannot recover from: the session
+    # drops, check-gateway takes the route out, the table is left with nothing
+    # live, and a strict table drops what it cannot route -- including the
+    # handshake that would have brought the tunnel back.
+    infra = _infra_addresses(view)
+    if infra:
+        lists.extend(_infra_list(view, infra))
+        mangle.append(_infra_rule(view))
 
     seen_marks: set[str] = set()
     for policy in sorted(view.policies, key=lambda p: (p.priority, p.name)):
@@ -136,7 +154,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             buckets = _buckets(policy, paths)
             mangle.extend(_pcc_rules(policy, mark, paths, buckets))
         else:
-            mangle.append(_mangle_rule(policy, mark, view.site_name))
+            mangle.extend(_mangle_rules(policy, mark, view.site_name))
 
         if mark not in seen_marks:
             seen_marks.add(mark)
@@ -308,22 +326,100 @@ def _sni_mangle_rules(policy: Policy, mark: str, patterns: list[str]) -> list[Co
     return items
 
 
-def _mangle_rule(policy: Policy, mark: str, site_name: str) -> ConfigItem:
-    props = _match_props(policy)
-    props.update(
-        {
-            "chain": "prerouting",
-            "action": "mark-routing",
-            "new-routing-mark": mark,
-            # Marking every packet of a flow costs more than marking the first
-            # and letting the connection tracker carry the rest, but it is
-            # correct when a path changes mid-flow, which is the whole point of
-            # SLA steering.
-            "passthrough": False,
-            "comment": owner_tag("policy", policy.name),
-        }
+def _mangle_rules(policy: Policy, mark: str, site_name: str) -> list[ConfigItem]:
+    """Mark in ``prerouting`` for traffic passing through, ``output`` for the
+    router's own.
+
+    prerouting never sees a packet the router originates, so a policy that only
+    marked there steered its clients' traffic while the router's own -- a ping
+    or a probe run from the device, the thing an operator reaches for first when
+    checking whether steering works -- quietly kept using the main table.
+
+    Both rules share one match, so both are equally capable of matching
+    infrastructure traffic. _infra_rule, rendered above every rule here, is what
+    keeps the output copy from swallowing the tunnels this policy rides on.
+    """
+    items: list[ConfigItem] = []
+    base_props = _match_props(policy)
+    for chain in ("prerouting", "output"):
+        props = dict(base_props)
+        # Marking every packet of a flow costs more than marking the first and
+        # letting the connection tracker carry the rest, but it is correct when
+        # a path changes mid-flow, which is the whole point of SLA steering.
+        props.update(
+            {
+                "chain": chain,
+                "action": "mark-routing",
+                "new-routing-mark": mark,
+                "passthrough": False,
+                "comment": owner_tag("policy", policy.name, _chain_suffix(chain)),
+            }
+        )
+        items.append(
+            ConfigItem(
+                props=props,
+                tag=owner_tag("policy", policy.name, _chain_suffix(chain)),
+            )
+        )
+    return items
+
+
+def _chain_suffix(chain: str) -> str:
+    """The prerouting rule keeps its original tag, so an upgrade rewrites no row."""
+    return "" if chain == "prerouting" else chain
+
+
+# -- keeping the underlay out of the policy tables ---------------------------
+
+
+def _infra_list_name(view: SitePolicyView) -> str:
+    return f"sdwan-{_slug(view.site_name)}-infra"[:63]
+
+
+def _infra_addresses(view: SitePolicyView) -> list[str]:
+    """The peer WAN addresses that must resolve in ``main``, never in a table.
+
+    Only the underlay. A tunnel's *overlay* next hop needs no guard: it is the
+    gateway the policy route already points at, and RouterOS resolves that
+    through the connected route on the tunnel interface, so a marked packet
+    addressed to it leaves by the interface it was going to leave by anyway.
+    An underlay address is the opposite case -- the only route to it is the
+    /32 the fabric pins to a physical gateway, and that pin lives in main. A
+    policy table holds a default route through the tunnel and nothing else, so
+    a marked packet bound for the peer's WAN address is handed to the very
+    tunnel it is carrying.
+    """
+    return sorted(a for a in set(view.underlay_addresses) if a)
+
+
+def _infra_list(view: SitePolicyView, addresses: list[str]) -> list[ConfigItem]:
+    name = _infra_list_name(view)
+    tag = owner_tag("policy", view.site_name, "infra")
+    return [
+        ConfigItem(
+            props={"list": name, "address": address},
+            tag=f"{tag}:{address}",
+        )
+        for address in addresses
+    ]
+
+
+def _infra_rule(view: SitePolicyView) -> ConfigItem:
+    """``accept`` in mangle stops chain traversal, it does not drop the packet.
+
+    So this leaves infrastructure traffic entirely unmarked and the main table
+    routes it, which is the only table holding the host routes that reach it.
+    """
+    tag = owner_tag("policy", view.site_name, "infra", "rule")
+    return ConfigItem(
+        props={
+            "chain": "output",
+            "action": "accept",
+            "dst-address-list": _infra_list_name(view),
+            "comment": tag,
+        },
+        tag=tag,
     )
-    return ConfigItem(props=props, tag=owner_tag("policy", policy.name))
 
 
 def _routing_table(mark: str, site_name: str) -> ConfigItem:

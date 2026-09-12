@@ -332,6 +332,14 @@ function NewPolicyForm({
               value={form.dst_prefixes}
               onChange={(e) => setForm({ ...form, dst_prefixes: e.target.value })}
             />
+            <span className="muted" style={{ fontSize: "0.85em", marginTop: 4, display: "block" }}>
+              Target CIDRs (e.g. 10.50.0.0/16, 172.16.0.0/12). Avoid broad supernets like 10.0.0.0/8 or 0.0.0.0/0 which overlap local physical WAN subnets (10.10.10.0/24).
+            </span>
+            {(form.dst_prefixes.includes("10.0.0.0/8") || form.dst_prefixes.includes("0.0.0.0/0")) && (
+              <span className="error" style={{ fontSize: "0.85em", marginTop: 4, display: "block" }}>
+                ⚠️ Warning: Broad supernet detected ({form.dst_prefixes.includes("0.0.0.0/0") ? "0.0.0.0/0" : "10.0.0.0/8"}). This will force local physical WAN subnets (10.10.10.x) into overlay routing. Use specific subnets (e.g. 10.50.0.0/16) instead.
+              </span>
+            )}
           </label>
           <label>
             Protocol
