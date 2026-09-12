@@ -176,6 +176,13 @@ def _nat(view: FirewallView) -> ConfigSection:
             )
         )
 
+    # A hub needs no NAT rules of its own beyond the loop above. Transit that
+    # arrives over a tunnel and leaves through an uplink is srcnat'd by that
+    # uplink's masquerade rule like any other forwarded traffic -- the bypass
+    # accepts only exempt traffic addressed *to* a peer endpoint. A second,
+    # role-conditional masquerade per uplink duplicated that rule and, worse,
+    # ignored ``masquerade=False``, forcing NAT onto private transit an
+    # operator had deliberately marked no-NAT.
     return ConfigSection(
         path="/ip/firewall/nat",
         items=items,

@@ -63,6 +63,27 @@ def test_an_uplink_marked_no_masquerade_gets_none() -> None:
     assert {i.props["out-interface"] for i in masq} == {"ether1"}
 
 
+def test_no_uplink_is_masqueraded_twice() -> None:
+    """A second masquerade rule for an interface that already has one is dead
+    config -- the first always matches. It arrived as a hub-only rule meant to
+    NAT spoke traffic breaking out here, which the loop above already covers:
+    transit that leaves through an uplink is srcnat'd like any other forwarded
+    packet, and the bypass exempts only traffic addressed to a peer."""
+    nat = sections(
+        view(
+            uplinks=[
+                UplinkNat(interface="ether1", masquerade=True),
+                UplinkNat(interface="ether2", masquerade=True),
+            ]
+        )
+    )["/ip/firewall/nat"]
+
+    masq = [i for i in nat.items if i.props["action"] == "masquerade"]
+    interfaces = [i.props["out-interface"] for i in masq]
+    assert sorted(interfaces) == ["ether1", "ether2"]
+    assert len(interfaces) == len(set(interfaces))
+
+
 # -- tunnel traffic used to be masqueraded ---------------------------------
 
 
