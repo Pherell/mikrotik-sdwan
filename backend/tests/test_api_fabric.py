@@ -436,6 +436,13 @@ async def test_hub_is_a_route_reflector_and_spokes_are_clients(api) -> None:
 
 
 async def test_local_prefixes_are_advertised(api) -> None:
+    """Through an address list named by the template's output.network.
+
+    Not /routing/bgp/network: RouterOS 7 removed that menu and answers "bad
+    command name network", which the reconciler cannot read -- and a menu it
+    cannot read is one it refuses to touch, so the whole apply was rejected.
+    Any site with a local_prefix was unappliable.
+    """
     client, _, routers = api
     headers = await _auth(client)
     fabric_id, sites = await _three_site_fabric(client, headers)
@@ -444,8 +451,18 @@ async def test_local_prefixes_are_advertised(api) -> None:
         f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
     )
 
-    networks = routers["203.0.113.1"].rows("routing/bgp/network")
-    assert [n["network"] for n in networks] == ["10.2.0.0/24"]
+    router = routers["203.0.113.1"]
+    assert router.rows("routing/bgp/network") == []
+
+    advertised = [
+        r for r in router.rows("ip/firewall/address-list")
+        if str(r.get("comment", "")).endswith("bgp-network")
+    ]
+    assert [r["address"] for r in advertised] == ["10.2.0.0/24"]
+
+    # The template must point at exactly the list that was filled in.
+    template = router.rows("routing/bgp/template")[0]
+    assert template["output.network"] == advertised[0]["list"]
 
 
 async def test_a_fabric_alone_installs_no_probes(api) -> None:

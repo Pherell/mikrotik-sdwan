@@ -230,26 +230,29 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
     )
 
     template_tag = f"{scope}:bgp-template"
+    template_props: dict[str, object] = {
+        "name": template_name,
+        "as": view.fabric.asn,
+        # ROS 7.24 names the address-family property "afi", not
+        # "address-families"; the latter is rejected as unknown.
+        "afi": "ip",
+        "output.redistribute": "connected",
+        "hold-time": "30s",
+        "keepalive-time": "10s",
+    }
+    # Only name the list when there is something in it. Pointing at an empty
+    # list advertises nothing but leaves a dangling reference on the device,
+    # and the device reads the unset property back as "" -- which would diff
+    # dirty on every run.
+    if view.local_prefixes:
+        template_props["output.network"] = _advertise_list(view)
+
     template = section(
         "/routing/bgp/template",
         "bgp_template",
         owner=template_tag,
         key=("name",),
-        items=[
-            ConfigItem(
-                props={
-                    "name": template_name,
-                    "as": view.fabric.asn,
-                    # ROS 7.24 names the address-family property "afi", not
-                    # "address-families"; the latter is rejected as unknown.
-                    "afi": "ip",
-                    "output.redistribute": "connected",
-                    "hold-time": "30s",
-                    "keepalive-time": "10s",
-                },
-                tag=template_tag,
-            )
-        ],
+        items=[ConfigItem(props=template_props, tag=template_tag)],
     )
 
     conn_tag = f"{scope}:bgp"
@@ -279,14 +282,27 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
         ],
     )
 
+    # RouterOS 7 has no /routing/bgp/network. The menu was removed, and asking
+    # for it does not degrade quietly -- the reconciler cannot read it, so it
+    # refuses the whole apply rather than risk reading "empty" as "delete
+    # everything here". A site with any local_prefixes could therefore never
+    # be applied at all; it only ever worked because the field was empty.
+    #
+    # What replaced it is output.network on the template, naming an address
+    # list that holds the prefixes. Verified on 7.24: with redistribute
+    # switched off and only output.network set, the far side still learned the
+    # prefix. BGP still advertises a network only when it already has a route
+    # for it, exactly as the old menu did -- same semantics, different name.
     networks = section(
-        "/routing/bgp/network",
-        "routing",
+        "/ip/firewall/address-list",
+        "address_list",
         owner=f"{scope}:bgp-network",
-        key=("network",),
+        # Must match every other renderer writing this menu (policy writes it
+        # too) or merge_sections refuses to combine them.
+        key=("list", "address"),
         items=[
             ConfigItem(
-                props={"network": prefix, "synchronize": False},
+                props={"list": _advertise_list(view), "address": prefix},
                 tag=f"{scope}:bgp-network",
             )
             for prefix in sorted(set(view.local_prefixes))
@@ -294,6 +310,16 @@ def _bgp(view: SiteFabricView) -> list[ConfigSection]:
     )
 
     return [instance, template, connections, networks]
+
+
+def _advertise_list(view: SiteFabricView) -> str:
+    """Name of the address list this fabric advertises out of.
+
+    Per fabric rather than per site: every member advertises its own prefixes
+    out of a list of the same name, so the template can name it without
+    knowing which site it is rendering for.
+    """
+    return f"sdwan-{view.fabric.name}-adv"[:63]
 
 
 def link_view(

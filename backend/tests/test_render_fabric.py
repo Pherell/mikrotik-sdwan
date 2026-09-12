@@ -100,3 +100,48 @@ def test_the_clamp_rule_is_tagged_for_this_site_and_fabric() -> None:
     assert tag.startswith("sdwan:")
     assert "core" in tag
     assert "oslo" in tag
+
+
+# -- advertising local prefixes ---------------------------------------------
+
+
+def test_local_prefixes_do_not_use_the_menu_routeros_7_removed() -> None:
+    """/routing/bgp/network does not exist on ROS7 -- the device answers "bad
+    command name network". That is not a soft failure: the reconciler cannot
+    read the menu, and a menu it cannot read is one it refuses to touch, so
+    the entire apply was rejected. Any site with a local_prefix was
+    unappliable; it only ever worked because the field was empty.
+    """
+    sections = {s.path: s for s in render_fabric(
+        view(loopback_ip="10.254.0.1", local_prefixes=["192.168.1.0/24"]), IPSEC)}
+
+    assert "/routing/bgp/network" not in sections
+
+
+def test_local_prefixes_are_advertised_through_an_address_list() -> None:
+    """The ROS7 replacement: the template names an address list via
+    output.network. Verified on 7.24 -- with redistribute switched off and
+    only output.network set, the far side still learned the prefix."""
+    v = view(loopback_ip="10.254.0.1",
+             local_prefixes=["192.168.1.0/24", "10.20.0.0/24"])
+    sections = {s.path: s for s in render_fabric(v, IPSEC)}
+
+    listed = {i.props["address"] for i in sections["/ip/firewall/address-list"].items}
+    assert listed == {"192.168.1.0/24", "10.20.0.0/24"}
+
+    names = {i.props["list"] for i in sections["/ip/firewall/address-list"].items}
+    assert len(names) == 1
+    template = sections["/routing/bgp/template"].items[0].props
+    # The template must point at exactly the list that was filled in.
+    assert template["output.network"] == names.pop()
+
+
+def test_a_site_advertising_nothing_names_no_list() -> None:
+    """Pointing at an empty list leaves a dangling reference, and the device
+    reads the unset property back as "" -- which diffs dirty on every run."""
+    sections = {s.path: s for s in render_fabric(
+        view(loopback_ip="10.254.0.1", local_prefixes=[]), IPSEC)}
+
+    template = sections["/routing/bgp/template"].items[0].props
+    assert "output.network" not in template
+    assert sections["/ip/firewall/address-list"].items == []

@@ -293,7 +293,12 @@ _EXTRA_OWNED: dict[str, tuple[str, ...]] = {
     "/routing/bgp/instance": ("name",),
     "/routing/bgp/template": ("name",),
     "/routing/bgp/connection": ("name",),
-    "/routing/bgp/network": ("network",),
+    # NOT /routing/bgp/network: RouterOS 7 removed that menu, and listing it
+    # here made the reconciler try to read it on every apply -- which fails,
+    # and a menu it cannot read is one it refuses to touch, so the whole apply
+    # was rejected. The prefixes a fabric advertises now live in an address
+    # list named by the template's output.network. See render.fabric._bgp.
+    "/ip/firewall/address-list": ("list", "address"),
     "/tool/netwatch": ("host",),
 }
 
