@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     # back from every provisioned site. RouterOS is already measuring this for
     # SLA-based failover; this just keeps what it already said. 30s matches
     # the plan's own "one poller pass per site, every 30 seconds by default".
+    #
+    # Raise this for low-powered devices. Each pass opens a fresh HTTPS session,
+    # and the TLS handshake is the expensive part -- on a router with no crypto
+    # accelerator it costs far more than the data it fetches. Measured on an
+    # RB2011 (600MHz single-core MIPS, RouterOS 7.24): at 30s the ssld process
+    # sat at ~90% CPU and the box stayed pinned at 100%, which starved the
+    # control plane badly enough to expire BGP hold timers and drop pings --
+    # looking for all the world like a failing link. At 300s the same router
+    # idles at ~24% with only brief spikes while a pass runs.
     telemetry_poll_seconds: int = 30
 
     # M8 provisioning: the address a factory-default router calls back to.
