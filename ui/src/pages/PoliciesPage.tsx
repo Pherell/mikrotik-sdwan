@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { endpoints, type Policy, type SlaProfile,
   type SdwanGroup,
 } from "../lib/api";
+import { type Infra, swallowed } from "../lib/cidr";
 import { Skeleton } from "../components/Skeleton";
 import { PageHeader } from "../components/PageHeader";
 
@@ -19,6 +20,27 @@ export function PoliciesPage() {
     queryFn: endpoints.sdwanGroups,
   });
   const sites = useQuery({ queryKey: ["sites"], queryFn: endpoints.sites });
+  const fabrics = useQuery({ queryKey: ["fabrics"], queryFn: endpoints.fabrics });
+
+  // The addresses a steering rule must never cover: the uplinks the tunnels
+  // are built on, and the pool the tunnels themselves live in. Steer either
+  // and the fabric carries its own traffic in a circle.
+  const infra: Infra[] = [];
+  for (const site of sites.data ?? []) {
+    for (const wan of site.wans) {
+      if (wan.public_ip && wan.prefix_len) {
+        infra.push({
+          cidr: `${wan.public_ip}/${wan.prefix_len}`,
+          what: `${site.name} · ${wan.name} uplink`,
+        });
+      }
+    }
+  }
+  for (const fabric of fabrics.data ?? []) {
+    if (fabric.ip_pool) {
+      infra.push({ cidr: fabric.ip_pool, what: `${fabric.name} · tunnel overlay` });
+    }
+  }
 
   // Every tag any uplink carries, plus every WAN name — the set a policy can
   // actually prefer. Offering free text here is how you get a policy that
@@ -67,6 +89,7 @@ export function PoliciesPage() {
       {adding && (
         <NewPolicyForm
           groups={sdwanGroups.data ?? []}
+          infra={infra}
           onDone={() => {
             setAdding(false);
             queryClient.invalidateQueries({ queryKey: ["policies"] });
@@ -238,10 +261,12 @@ function SlaProfiles({ profiles }: { profiles: SlaProfile[] }) {
 
 function NewPolicyForm({
   groups,
+  infra,
   onDone,
   onCancel,
 }: {
   groups: SdwanGroup[];
+  infra: Infra[];
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -254,6 +279,13 @@ function NewPolicyForm({
     sdwan_group_id: "",
     fallback: "any",
   });
+
+  // Checked as the operator types, against this fabric's real uplinks rather
+  // than a list of prefixes that look broad. 192.168.0.0/16 is as dangerous as
+  // 10.0.0.0/8 here and looks nothing like it.
+  const conflicts = splitList(form.dst_prefixes)
+    .map((prefix) => ({ prefix, hits: swallowed(prefix, infra) }))
+    .filter(({ hits }) => hits.length > 0);
 
   const create = useMutation({
     mutationFn: () =>
@@ -328,18 +360,28 @@ function NewPolicyForm({
           <label>
             Destination prefixes
             <input
-              placeholder="10.1.0.0/24, 10.9.0.0/16"
+              placeholder="192.168.2.0/24"
               value={form.dst_prefixes}
               onChange={(e) => setForm({ ...form, dst_prefixes: e.target.value })}
             />
             <span className="muted" style={{ fontSize: "0.85em", marginTop: 4, display: "block" }}>
-              Target CIDRs (e.g. 10.50.0.0/16, 172.16.0.0/12). Avoid broad supernets like 10.0.0.0/8 or 0.0.0.0/0 which overlap local physical WAN subnets (10.10.10.0/24).
+              The remote networks this rule should reach over the fabric — normally
+              another site's LAN. Keep them narrow: a prefix that also covers an
+              uplink or the tunnel pool steers the fabric's own traffic into the
+              fabric.
             </span>
-            {(form.dst_prefixes.includes("10.0.0.0/8") || form.dst_prefixes.includes("0.0.0.0/0")) && (
-              <span className="error" style={{ fontSize: "0.85em", marginTop: 4, display: "block" }}>
-                ⚠️ Warning: Broad supernet detected ({form.dst_prefixes.includes("0.0.0.0/0") ? "0.0.0.0/0" : "10.0.0.0/8"}). This will force local physical WAN subnets (10.10.10.x) into overlay routing. Use specific subnets (e.g. 10.50.0.0/16) instead.
+            {conflicts.map(({ prefix, hits }) => (
+              <span
+                key={prefix}
+                className="error"
+                style={{ fontSize: "0.85em", marginTop: 4, display: "block" }}
+              >
+                {prefix} also covers {hits.map((h) => `${h.cidr} (${h.what})`).join(", ")}.
+                Steering that sends the tunnel's own traffic back through the tunnel:
+                expect a routing loop and heavy loss to the far site. Narrow it to the
+                remote LAN you actually mean.
               </span>
-            )}
+            ))}
           </label>
           <label>
             Protocol
