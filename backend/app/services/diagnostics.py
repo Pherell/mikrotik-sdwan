@@ -621,11 +621,29 @@ def _diagnose_wireguard(
         if seen and seen != far.public_ip
         else ""
     )
+    # Two causes produce an identical silence, and this used to name only one
+    # of them. Blocked UDP and a key mismatch both leave tx climbing and rx at
+    # zero, because a packet that fails authentication is never attributed to
+    # a peer -- so the peer's own counters cannot tell them apart. Measured on
+    # hardware: 6,843 packets were counted arriving by the input rule while
+    # every peer still read rx=0, and the advice here sent the operator to
+    # open a port that had been open the whole time.
+    ours_key = _text(ours.get("public-key"))
     return (
-        f"No WireGuard handshake with {far.public_ip}. Check that UDP "
-        f"{listen_port or port} is permitted all the way between these two "
-        f"addresses.{where}{roamed} A successful ping proves nothing about it "
-        "-- ICMP is not what is being blocked."
+        f"No WireGuard handshake with {far.public_ip}. Two things do this, and "
+        "they look identical from here.\n\n"
+        f"1. UDP {listen_port or port} is not permitted all the way between "
+        f"these two addresses.{where}{roamed} A successful ping proves nothing "
+        "about it -- ICMP is not what is being blocked.\n\n"
+        "2. The far end is dialling a key this interface does not have. Check "
+        "it before touching any firewall, because it costs one command: this "
+        f"interface's public key is {ours_key or '(unreadable)'}, and the peer "
+        f"for it on the far device must show exactly that. If it does not, the "
+        "keys have diverged -- delete this WireGuard interface and Apply, and "
+        "the controller will recreate it with the key it issued.\n\n"
+        "Tell them apart by whether packets are arriving at all: check the "
+        "packet counter on this device's input rule for that UDP port. "
+        "Counting up means the path is fine and it is the key."
     )
 
 
