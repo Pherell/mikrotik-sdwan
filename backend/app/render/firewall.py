@@ -162,9 +162,16 @@ def _nat(view: FirewallView) -> ConfigSection:
             )
         )
 
+    # One masquerade rule per out-interface, not per uplink. Two uplinks can
+    # share an interface -- two public IPs on one WAN port, or two DHCP/PPPoE
+    # sessions -- and the rule srcnats by out-interface, so a second copy would
+    # be identical. Emitting it twice collides on the owner tag (which is keyed
+    # by interface) and fails the whole apply with a duplicate-claim error.
+    seen_interfaces: set[str] = set()
     for uplink in view.uplinks:
-        if not uplink.masquerade:
+        if not uplink.masquerade or uplink.interface in seen_interfaces:
             continue
+        seen_interfaces.add(uplink.interface)
         items.append(
             ConfigItem(
                 props={

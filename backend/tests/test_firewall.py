@@ -84,6 +84,28 @@ def test_no_uplink_is_masqueraded_twice() -> None:
     assert len(interfaces) == len(set(interfaces))
 
 
+def test_two_uplinks_on_one_interface_share_a_single_masquerade_rule() -> None:
+    """Two uplinks can share a NIC -- two public IPs on one WAN port, or two
+    PPPoE/DHCP sessions. The masquerade srcnats by out-interface, so one rule
+    covers both; a second copy is identical and, because the owner tag is keyed
+    by interface, collides and fails the whole apply with a duplicate claim.
+    Found on a hub given a second uplink on ether2 in the EVE lab."""
+    nat = sections(
+        view(
+            uplinks=[
+                UplinkNat(interface="ether2", masquerade=True),
+                UplinkNat(interface="ether2", masquerade=True),
+            ]
+        )
+    )["/ip/firewall/nat"]
+
+    masq = [i for i in nat.items if i.props["action"] == "masquerade"]
+    assert len(masq) == 1
+    assert masq[0].props["out-interface"] == "ether2"
+    # One tag, so merge_sections cannot see a duplicate claim.
+    assert len({i.tag for i in masq}) == 1
+
+
 # -- tunnel traffic used to be masqueraded ---------------------------------
 
 
