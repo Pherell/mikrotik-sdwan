@@ -55,6 +55,10 @@ ORDER: Final[dict[str, int]] = {
     "crypto_policy": 34,   # names a peer and a proposal -- both must exist first
     "tunnel": 40,         # gre / ipip / wireguard interfaces
     "address": 50,        # ip addresses on those interfaces
+    # An L2 bridge port names a tunnel interface, so it must apply after the
+    # tunnel (40) exists -- at "interface" (20) RouterOS rejected it with
+    # "invalid value for argument interface". Only real hardware caught it.
+    "l2_port": 55,        # /interface/bridge/port for EoIP / VXLAN stretch
     "routing": 60,        # bgp connections, static routes
     # Host routes pinning each tunnel's far endpoint to the underlay. Shares
     # /ip/route with the policy routes, which point at tunnel interfaces, so it

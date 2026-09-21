@@ -15,7 +15,7 @@ one diff covers everything the controller owns in that menu.
 
 from __future__ import annotations
 
-from app.drivers.base import OWNER_PREFIX, ConfigSection
+from app.drivers.base import OWNER_PREFIX, ConfigItem, ConfigSection
 
 
 def common_scope(tags: list[str]) -> str:
@@ -76,8 +76,29 @@ def merge_sections(sections: list[ConfigSection]) -> list[ConfigSection]:
         # is satisfied by being early, never by being late.
         existing.order = min(existing.order, section.order)
 
+    for section in merged.values():
+        section.items = _dedup_identical(section.items)
     _check_unique_identities(merged.values())
     return sorted(merged.values(), key=lambda s: (s.order, s.path))
+
+
+def _dedup_identical(items: list[ConfigItem]) -> list[ConfigItem]:
+    """Collapse rows byte-identical to one already kept.
+
+    A resource several renderers share -- the single L2 bridge that every
+    stretched tunnel on a device lands on -- is emitted once per link with the
+    same props and the same owner tag. That is one intent, not the
+    conflicting-claims bug _check_unique_identities guards against, which is two
+    *different* rows fighting over one identity. Left alone the duplicate would
+    trip that check and fail the apply."""
+    out: list[ConfigItem] = []
+    for item in items:
+        if not any(
+            o.props == item.props and o.tag == item.tag and o.enforce == item.enforce
+            for o in out
+        ):
+            out.append(item)
+    return out
 
 
 def _check_unique_identities(sections: object) -> None:

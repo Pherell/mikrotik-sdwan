@@ -102,6 +102,34 @@ def test_two_renderers_claiming_the_same_row_is_an_error() -> None:
         )
 
 
+def test_a_shared_resource_emitted_identically_is_collapsed_not_rejected() -> None:
+    """Two links landing on the same L2 bridge each render it -- same props,
+    same owner tag. That is one intent, so it merges to a single row instead of
+    tripping the conflicting-claims guard."""
+    (merged,) = merge_sections(
+        [
+            sec("/interface/bridge", "sdwan:l2", [item("sdwan-l2", "sdwan:l2")]),
+            sec("/interface/bridge", "sdwan:l2", [item("sdwan-l2", "sdwan:l2")]),
+        ]
+    )
+
+    assert len(merged.items) == 1
+    assert merged.items[0].props["name"] == "sdwan-l2"
+
+
+def test_same_identity_but_different_props_is_still_an_error() -> None:
+    """Dedup collapses only byte-identical rows. Same name, different intent is
+    the real conflict and must still fail."""
+    with pytest.raises(ValueError, match="both claim"):
+        merge_sections(
+            [
+                sec("/interface/bridge", "sdwan:l2", [item("sdwan-l2", "sdwan:l2")]),
+                sec("/interface/bridge", "sdwan:l2",
+                    [item("sdwan-l2", "sdwan:l2", **{"protocol-mode": "none"})]),
+            ]
+        )
+
+
 # -- the bug this exists to prevent -----------------------------------------
 
 

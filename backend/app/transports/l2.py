@@ -13,17 +13,31 @@ clear.
 
 from __future__ import annotations
 
+from ipaddress import ip_network
+
 from app.drivers.base import ConfigItem, ConfigSection
-from app.render.engine import section
+from app.render.engine import owner_tag, section
 from app.transports.base import LinkView, iface_name, register
 
 DEFAULT_PARAMS: dict[str, object] = {
     # The bridge each stretched segment lands on. The operator is expected to
     # put local ports into it; the controller only manages the tunnel.
     "bridge": "sdwan-l2",
-    "vni": 1000,
     "vxlan_port": 8472,
 }
+
+
+def _segment_id(link: LinkView, modulus: int) -> int:
+    """A per-link identifier both ends agree on, derived from the tunnel /31.
+
+    A device with more than one L2 tunnel needs a distinct id on each -- EoIP
+    rejects a duplicate tunnel-id outright, and two VXLANs sharing a VNI on one
+    bridge merge segments that should stay apart. The old code gave every link
+    the same 1000. The /31 network is identical at both ends of a link and
+    unique between links, so it seeds an id that matches across the tunnel
+    without being allocated."""
+    net = int(ip_network(link.subnet_cidr, strict=False).network_address)
+    return net % modulus + 1
 
 
 class _L2Stretch:
@@ -48,7 +62,12 @@ class _L2Stretch:
         return {}
 
     def _bridge(self, link: LinkView, params: dict) -> ConfigSection:
-        tag = f"{link.tag}:l2-bridge"
+        # One bridge per device, not per link. Every L2 tunnel on this site
+        # lands on the same sdwan-l2 bridge, so the row is identical from each
+        # link -- it must carry an identical owner tag too, or two links claim
+        # one row under different owners and merge_sections fails the apply.
+        # Scope it to the fabric and site rather than the link.
+        tag = owner_tag("fabric", link.fabric.name, link.local.site_name, "l2-bridge")
         name = str(params["bridge"])
         return section(
             "/interface/bridge",
@@ -67,7 +86,11 @@ class _L2Stretch:
         tag = f"{link.tag}:l2-port"
         return section(
             "/interface/bridge/port",
-            "interface",
+            # After the tunnel, not with the other interfaces: a port names the
+            # tunnel interface, which does not exist until ORDER["tunnel"]. At
+            # "interface" (20) the port applied first and RouterOS rejected it
+            # with "invalid value for argument interface".
+            "l2_port",
             owner=tag,
             key=("bridge", "interface"),
             items=[
@@ -115,7 +138,9 @@ class VxlanTransport(_L2Stretch):
                 ConfigItem(
                     props={
                         "name": iface,
-                        "vni": params["vni"],
+                        # 24-bit VNI, unique per link so two on one bridge do
+                        # not merge into one segment.
+                        "vni": _segment_id(link, 0xFFFFFE),
                         "port": params["vxlan_port"],
                         # Bind to the overlay address so the payload rides the
                         # parent IPsec SA instead of the bare internet.
@@ -181,8 +206,10 @@ class EoipTransport(_L2Stretch):
                         "name": iface,
                         "local-address": link.local.tunnel_ip,
                         "remote-address": link.remote.tunnel_ip,
-                        # Both ends must agree, and it must be unique per pair.
-                        "tunnel-id": params["vni"],
+                        # 16-bit, unique per link: EoIP rejects a device's
+                        # second interface with a duplicate tunnel-id. Both ends
+                        # derive the same value from the shared /31.
+                        "tunnel-id": _segment_id(link, 0xFFFE),
                         "mtu": int(link.fabric.mtu) - 42,
                         "keepalive": "10s,3",
                     },
