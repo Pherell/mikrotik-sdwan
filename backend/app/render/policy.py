@@ -93,20 +93,15 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     probes: list[ConfigItem] = []
     rules: list[ConfigItem] = []
 
-    # Guard first, because mangle is positional. Everything below marks in the
-    # ``output`` chain as well as ``prerouting``, and output is where the
-    # router's *own* packets appear -- including the encapsulated tunnel
-    # traffic whose destination is a peer's underlay address. A policy matching
-    # a supernet like 10.0.0.0/8 covers those addresses, so without this the
-    # tunnel's own packets get marked into a table whose only route is that
-    # same tunnel. That is a loop the tunnel cannot recover from: the session
-    # drops, check-gateway takes the route out, the table is left with nothing
-    # live, and a strict table drops what it cannot route -- including the
-    # handshake that would have brought the tunnel back.
+    # Guard addresses are computed now but emitted after the loop (see below),
+    # because they belong only where steering was actually rendered. The peer
+    # underlay must stay out of every policy table: ``output`` is where the
+    # router's own encapsulated tunnel packets appear, and a policy matching a
+    # supernet like 10.0.0.0/8 covers the peer WAN address the tunnel is built
+    # on. Marked into a table whose only route is that same tunnel, it loops --
+    # the session drops, check-gateway takes the route out, and a strict table
+    # drops the handshake that would have rebuilt it.
     infra = _infra_addresses(view)
-    if infra:
-        lists.extend(_infra_list(view, infra))
-        mangle.append(_infra_rule(view))
 
     seen_marks: set[str] = set()
     for policy in sorted(view.policies, key=lambda p: (p.priority, p.name)):
@@ -161,7 +156,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             if balanced:
                 tables.extend(_balanced_tables(mark, paths, view.site_name))
                 routes.extend(_balanced_routes(policy, mark, paths, view.site_name))
-                probes.extend(_probes(policy, paths, view.site_name, mark=mark))
+                probes.extend(_probes(policy, paths, view.site_name, mark=mark, buckets=buckets))
                 rules.extend(
                     _fallback_rules(
                         policy, [_bucket_mark(mark, i) for i in range(len(paths))]
@@ -172,6 +167,20 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
                 routes.extend(_routes(policy, mark, paths, view.site_name))
                 probes.extend(_probes(policy, paths, view.site_name))
                 rules.extend(_fallback_rules(policy, [mark]))
+
+    # Guards go first, and only when steering was actually rendered. mangle is
+    # positional, so an accept below the rule it guards protects nothing; and a
+    # guard emitted with no steering would leave a stray rule where the "renders
+    # nothing" sweep expects an empty section, so a deleted policy would never
+    # be swept off the device. _local_bypass_rule keeps traffic destined to one
+    # of this router's own addresses on the main table; _infra_rule does the
+    # same for the peer underlay addresses.
+    if mangle:
+        guards: list[ConfigItem] = [_local_bypass_rule(view)]
+        if infra:
+            lists.extend(_infra_list(view, infra))
+            guards.append(_infra_rule(view))
+        mangle = guards + mangle
 
     return _sections(view, lists, mangle, tables, routes, probes, rules)
 
@@ -416,6 +425,26 @@ def _infra_rule(view: SitePolicyView) -> ConfigItem:
             "chain": "output",
             "action": "accept",
             "dst-address-list": _infra_list_name(view),
+            "comment": tag,
+        },
+        tag=tag,
+    )
+
+
+def _local_bypass_rule(view: SitePolicyView) -> ConfigItem:
+    """Accept, in prerouting, anything destined to one of this router's own
+    addresses -- its LAN gateway, a local service.
+
+    ``accept`` in mangle stops chain traversal without dropping, so the packet
+    is left unmarked and resolves in the main table. Without it a broad policy
+    prefix would mark the router's own management traffic into a policy table.
+    """
+    tag = owner_tag("policy", view.site_name, "local_dst", "rule")
+    return ConfigItem(
+        props={
+            "chain": "prerouting",
+            "action": "accept",
+            "dst-address-type": "local",
             "comment": tag,
         },
         tag=tag,
@@ -676,6 +705,7 @@ def _probes(
     site_name: str,
     *,
     mark: str | None = None,
+    buckets: list[int] | None = None,
 ) -> list[ConfigItem]:
     """Netwatch entries carrying the group's SLA thresholds.
 
@@ -683,6 +713,12 @@ def _probes(
     at a different distance in every table -- preferred in its own, a fallback
     in the others -- so a script that set one distance everywhere would flatten
     the balance into "everything via whichever path recovered last".
+
+    ``buckets`` is the PCC bucket assignment list from _buckets; when provided
+    (always alongside ``mark``), the down-script also disables the PCC
+    mark-connection rules for this path's bucket positions so that new
+    connections stop being hashed to a degraded link during the detection
+    window. The up-script re-enables them after route distances are restored.
     """
     sla = _sla(policy)
     tag = owner_tag("policy", policy.name, "sla")
@@ -699,6 +735,14 @@ def _probes(
             ]
         demoted = [(table, distance + SLA_PENALTY) for table, distance in healthy]
 
+        # PCC bucket positions owned by this path. Only set in load_balance
+        # mode; empty list in failover so _health_script skips mangle commands.
+        pcc_positions = (
+            [pos for pos, idx in enumerate(buckets) if idx == index]
+            if buckets is not None
+            else []
+        )
+
         for hop in path.next_hops:
             props: dict[str, object] = {
                 "host": hop,
@@ -713,8 +757,14 @@ def _probes(
                 "disabled": False,
                 # Demote rather than delete: the route stays in the table so the
                 # path can be re-preferred the moment it recovers.
-                "down-script": _distance_script(hop, demoted),
-                "up-script": _distance_script(hop, healthy),
+                # down: stop new connections first, then demote routes.
+                # up: restore routes first, then re-open to new connections.
+                "down-script": _health_script(
+                    hop, demoted, policy.name, pcc_positions, enable=False
+                ),
+                "up-script": _health_script(
+                    hop, healthy, policy.name, pcc_positions, enable=True
+                ),
                 "comment": f"{tag}:{path.wan_name}",
             }
             if sla.jitter_ms:
@@ -723,30 +773,61 @@ def _probes(
     return items
 
 
-def _distance_script(gateway: str, targets: list[tuple[str | None, int]]) -> str:
-    """A RouterOS script setting this gateway's routes to given distances.
+def _health_script(
+    gateway: str,
+    targets: list[tuple[str | None, int]],
+    policy_name: str,
+    pcc_positions: list[int],
+    *,
+    enable: bool,
+) -> str:
+    """RouterOS script combining route distance changes with PCC mangle control.
 
     ``targets`` is (routing table, distance) pairs; a table of None means every
     table, which is the failover case where there is only one.
 
-    Absolute, not relative. An earlier version added a penalty to the current
-    distance, which compounds: two down events in a row demote the path twice
-    and it never returns to its original preference. Both the healthy and the
-    demoted values are known at render time, so just write them.
+    ``pcc_positions`` is the list of PCC bucket positions owned by this path.
+    When non-empty (load_balance mode), the script also enables or disables the
+    corresponding mark-connection mangle rules so new connections are not hashed
+    to a degraded link during the detection window.
+
+    Ordering is deliberate:
+      down (enable=False): disable PCC rules first, then demote routes.
+        New connections stop arriving before existing ones are rerouted.
+      up (enable=True): restore route distances first, then re-enable PCC.
+        The path is healthy before new connections are directed to it.
+
+    Distances are absolute, not relative. An earlier version added a penalty to
+    the current distance, which compounds: two down events in a row demote the
+    path twice and it never returns to its original preference. Both the healthy
+    and the demoted values are known at render time, so just write them.
 
     Kept to one line: RouterOS stores scripts verbatim, and a multi-line value
     round-trips with whitespace changes that would diff dirty forever.
     """
-    clauses = []
+    route_clauses = []
     for table, distance in targets:
         where = f'gateway="{gateway}"'
         if table is not None:
             where += f' routing-table="{table}"'
-        clauses.append(
+        route_clauses.append(
             f":foreach r in=[/ip/route/find {where}] "
             f"do={{/ip/route/set $r distance={distance}}}"
         )
-    return "; ".join(clauses)
+
+    mangle_clauses = []
+    disabled_val = "no" if enable else "yes"
+    for pos in pcc_positions:
+        comment = owner_tag("policy", policy_name, f"pcc-{pos}")
+        mangle_clauses.append(
+            f":foreach m in=[/ip/firewall/mangle/find comment=\"{comment}\"] "
+            f"do={{/ip/firewall/mangle/set $m disabled={disabled_val}}}"
+        )
+
+    # down: PCC off first, then route demotion.
+    # up: route promotion first, then PCC on.
+    parts = mangle_clauses + route_clauses if not enable else route_clauses + mangle_clauses
+    return "; ".join(parts)
 
 
 def _sections(
@@ -797,13 +878,17 @@ def _sections(
             owner=scope,
             key=("comment",),
             ordered=True,  # first match wins; position is the semantics
+            # disabled is managed at runtime by netwatch scripts (health-aware
+            # LB disables PCC rules for degraded links). Do not re-assert on
+            # every reconcile -- same contract as ignore=(distance,) on routes.
+            ignore=("disabled",),
             items=mangle,
         ),
         section(
             "/tool/netwatch",
             "monitoring",
             owner=scope,
-            key=("host",),
+            key=("host", "comment"),
             ignore=("status", "since", "sent-count", "loss-count", "rtt-avg", "rtt-jitter"),
             items=probes,
         ),

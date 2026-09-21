@@ -140,8 +140,17 @@ class SdwanGroupBase(BaseModel):
             raise ValueError(f"strategy must be one of: {', '.join(sorted(STRATEGIES))}")
         return v
 
+    # NOTE: business-rule cross-field checks (weights vs strategy, member
+    # count vs strategy) live on SdwanGroupCreate / SdwanGroupUpdate, NOT
+    # here. SdwanGroupRead inherits this base, and a validator that rejects
+    # stored data turns a plain GET into a 500 -- the same reasoning that
+    # moved PolicyCreate.sdwan_group_id out of PolicyBase. Keep this base
+    # to structural checks only (uniqueness, length bounds).
+
+
+class SdwanGroupCreate(SdwanGroupBase):
     @model_validator(mode="after")
-    def _weights_do_nothing_under_failover(self) -> SdwanGroupBase:
+    def _strategy_constraints(self) -> SdwanGroupCreate:
         if self.strategy == "failover" and any(m.weight != 1 for m in self.members):
             raise ValueError(
                 "weights only apply to load_balance. Under failover the order "
@@ -154,10 +163,6 @@ class SdwanGroupBase(BaseModel):
                 "With one, use failover."
             )
         return self
-
-
-class SdwanGroupCreate(SdwanGroupBase):
-    pass
 
 
 class SdwanGroupUpdate(BaseModel):
@@ -178,6 +183,30 @@ class SdwanGroupUpdate(BaseModel):
     @classmethod
     def _strategy(cls, v: str | None) -> str | None:
         return v if v is None else SdwanGroupBase._strategy(v)
+
+    @model_validator(mode="after")
+    def _strategy_constraints(self) -> SdwanGroupUpdate:
+        """Cross-field check only when both fields are present in this request."""
+        strategy = self.strategy
+        members = self.members
+        if strategy is None or members is None:
+            # Partial update: can't validate the combo without the stored value.
+            # The constraint will have been enforced on the original create, so
+            # single-field updates (change strategy alone, or members alone) are
+            # safe to pass through here.
+            return self
+        if strategy == "failover" and any(m.weight != 1 for m in members):
+            raise ValueError(
+                "weights only apply to load_balance. Under failover the order "
+                "of the uplinks is the preference; a weight here would be a "
+                "number that does nothing."
+            )
+        if strategy == "load_balance" and len(members) < 2:
+            raise ValueError(
+                "load_balance needs at least two uplinks to spread across. "
+                "With one, use failover."
+            )
+        return self
 
 
 class SdwanGroupRead(SdwanGroupBase):

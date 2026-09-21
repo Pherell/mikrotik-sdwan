@@ -73,6 +73,15 @@ def sections_of(v: SitePolicyView) -> dict:
     return {s.path: s for s in render_policies(v)}
 
 
+def steering(section) -> list:
+    """The mangle mark rules, without the accept guards that precede them.
+
+    Steering renders a local-destination bypass (and, when the site has peer
+    underlay addresses, a peer-underlay guard) above the mark rules. Both are
+    ``action=accept``; everything a policy actually marks with is not."""
+    return [i for i in section.items if i.props["action"] != "accept"]
+
+
 def test_buckets_stay_distinct_when_the_policy_name_fills_the_mark() -> None:
     """RouterOS caps a routing mark at 31 characters. Truncating the bucket
     mark *after* appending the index collapsed every bucket onto one mark, so
@@ -128,12 +137,19 @@ def test_the_peer_underlay_is_accepted_before_anything_marks_it() -> None:
     )
 
     mangle = s["/ip/firewall/mangle"].items
-    guard = mangle[0].props
+    # The peer-underlay guard: an output-chain accept keyed to the infra list.
+    guard = next(
+        i.props for i in mangle
+        if i.props.get("dst-address-list") == "sdwan-branch-1-infra"
+    )
     assert guard["chain"] == "output"
     assert guard["action"] == "accept"
-    assert guard["dst-address-list"] == "sdwan-branch-1-infra"
-    # Positional: a guard below the rule it guards protects nothing.
-    assert all(i.props["action"] == "mark-routing" for i in mangle[1:])
+    # Positional: every accept guard sits above every mark rule it protects.
+    actions = [i.props["action"] for i in mangle]
+    assert actions.index("mark-routing") > max(
+        i for i, a in enumerate(actions) if a == "accept"
+    )
+    assert all(i.props["action"] == "mark-routing" for i in steering(s["/ip/firewall/mangle"]))
 
     addresses = {
         i.props["address"]
@@ -143,13 +159,15 @@ def test_the_peer_underlay_is_accepted_before_anything_marks_it() -> None:
     assert addresses == {"203.0.113.7"}
 
 
-def test_a_site_with_no_tunnels_yet_renders_no_guard() -> None:
-    """Nothing to protect, and an empty address-list match would accept
-    everything the policy was meant to steer."""
+def test_a_site_with_no_tunnels_yet_renders_no_peer_underlay_guard() -> None:
+    """No underlay addresses means no peer-underlay guard -- and no -infra list
+    whose empty match would accept everything the policy meant to steer. (The
+    local-destination bypass is always present alongside steering.)"""
     s = sections_of(view([policy()], mpls=[path("wan1", ["10.255.0.0"])]))
 
     mangle = s["/ip/firewall/mangle"].items
-    assert all(i.props["action"] == "mark-routing" for i in mangle)
+    assert not any(i.props.get("dst-address-list", "").endswith("-infra") for i in mangle)
+    assert all(i.props["action"] == "mark-routing" for i in steering(s["/ip/firewall/mangle"]))
     assert not [
         i for i in s["/ip/firewall/address-list"].items if i.props["list"].endswith("-infra")
     ]
@@ -172,6 +190,24 @@ def test_the_overlay_next_hop_needs_no_guard() -> None:
     assert "10.255.0.0" not in addresses
 
 
+def test_traffic_to_a_local_router_address_bypasses_policy_routing() -> None:
+    """A packet destined to one of the router's own addresses -- its LAN
+    gateway, a local service -- must resolve in main, never be marked into a
+    policy table, or a broad rule captures the router's own management traffic.
+    The bypass is an accept high in prerouting, above every mark rule."""
+    s = sections_of(
+        view([policy(dst_prefixes=["10.0.0.0/8"])], mpls=[path("wan1", ["10.255.0.0"])])
+    )
+    actions = [i.props["action"] for i in s["/ip/firewall/mangle"].items]
+    bypass = s["/ip/firewall/mangle"].items[0].props
+
+    assert bypass["chain"] == "prerouting"
+    assert bypass["action"] == "accept"
+    assert bypass["dst-address-type"] == "local"
+    # Above every rule that marks: an accept below the rule it guards is inert.
+    assert actions.index("accept") < actions.index("mark-routing")
+
+
 # -- the pipeline -----------------------------------------------------------
 
 
@@ -190,7 +226,7 @@ def test_a_policy_renders_the_whole_chain() -> None:
         # fallback -- ROS 7 has no gateway=main route.
         "/routing/rule",
     }
-    assert s["/ip/firewall/mangle"].items[0].props["new-routing-mark"] == "sdwan-voice"
+    assert steering(s["/ip/firewall/mangle"])[0].props["new-routing-mark"] == "sdwan-voice"
     assert s["/routing/table"].items[0].props["name"] == "sdwan-voice"
 
 
@@ -302,7 +338,7 @@ def test_mangle_is_position_sensitive_and_ordered_by_priority() -> None:
     s = sections_of(view([low, high], mpls=[path("wan1", ["10.255.0.0"])]))
 
     assert s["/ip/firewall/mangle"].ordered is True
-    items = s["/ip/firewall/mangle"].items
+    items = steering(s["/ip/firewall/mangle"])
     marks = [i.props["new-routing-mark"] for i in items if i.props["chain"] == "prerouting"]
     assert marks == ["sdwan-critical", "sdwan-bulk"]
     # The output copies are ordered by the same priority, for the same reason:
@@ -314,7 +350,7 @@ def test_mangle_is_position_sensitive_and_ordered_by_priority() -> None:
 def test_a_port_match_always_carries_a_protocol() -> None:
     """RouterOS rejects dst-port without protocol."""
     s = sections_of(view([policy(dst_ports="443")], mpls=[path("wan1", ["10.255.0.0"])]))
-    props = s["/ip/firewall/mangle"].items[0].props
+    props = steering(s["/ip/firewall/mangle"])[0].props
 
     assert props["dst-port"] == "443"
     assert props["protocol"] == "tcp"
@@ -324,7 +360,7 @@ def test_explicit_protocol_is_not_overridden() -> None:
     s = sections_of(
         view([policy(dst_ports="5060", protocol="udp")], mpls=[path("wan1", ["10.255.0.0"])])
     )
-    assert s["/ip/firewall/mangle"].items[0].props["protocol"] == "udp"
+    assert steering(s["/ip/firewall/mangle"])[0].props["protocol"] == "udp"
 
 
 # -- SLA --------------------------------------------------------------------
@@ -414,7 +450,7 @@ def test_an_app_group_contributes_prefixes_ports_and_dscp() -> None:
     )
 
     s = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))
-    mangle = s["/ip/firewall/mangle"].items[0].props
+    mangle = steering(s["/ip/firewall/mangle"])[0].props
     lists = {i.props["address"] for i in s["/ip/firewall/address-list"].items}
 
     assert "52.112.0.0/14" in lists
@@ -427,9 +463,9 @@ def test_an_explicit_match_overrides_the_app_group() -> None:
     p = policy(app_group_id="ag-1", dscp=26, dst_ports="8443")
     p.app_group = AppGroup(name="teams", prefixes=[], ports=[3478], dscp=46)
 
-    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
-        "/ip/firewall/mangle"
-    ].items[0].props
+    mangle = steering(
+        sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))["/ip/firewall/mangle"]
+    )[0].props
 
     assert mangle["dscp"] == 26
     assert mangle["dst-port"] == "8443"
@@ -443,7 +479,7 @@ def test_an_explicit_match_overrides_the_app_group() -> None:
 )
 def test_routing_marks_fit_routeros(name: str) -> None:
     s = sections_of(view([policy(name=name)], mpls=[path("wan1", ["10.255.0.0"])]))
-    mark = s["/ip/firewall/mangle"].items[0].props["new-routing-mark"]
+    mark = steering(s["/ip/firewall/mangle"])[0].props["new-routing-mark"]
 
     assert len(mark) <= 31
     assert " " not in mark
@@ -640,6 +676,29 @@ def test_the_sla_script_demotes_per_table_not_globally() -> None:
     assert f"distance={2 + SLA_PENALTY}}}" in down
 
 
+def test_load_balance_health_scripts_gate_new_connections_on_the_pcc_rules() -> None:
+    """A degraded member should stop receiving *new* connections during the
+    detection window, not merely have its routes demoted -- otherwise PCC keeps
+    hashing fresh flows onto a link that is already failing. The down-script
+    disables that member's mark-connection rules; the up-script re-enables them,
+    and only after the routes are restored."""
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [3, 1]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+    fibre = next(i for i in result["/tool/netwatch"].items if i.props["host"] == "10.255.0.1")
+
+    down = str(fibre.props["down-script"])
+    up = str(fibre.props["up-script"])
+    assert "/ip/firewall/mangle/find" in down
+    assert "disabled=yes" in down
+    assert "disabled=no" in up
+    # down: stop new connections before demoting routes. up: restore routes
+    # before re-opening to new connections.
+    assert down.index("mangle") < down.index("/ip/route")
+    assert up.index("/ip/route") < up.index("mangle")
+
+
 def test_failover_marks_traffic_passing_through_and_the_routers_own() -> None:
     """One match, rendered into both chains.
 
@@ -652,7 +711,7 @@ def test_failover_marks_traffic_passing_through_and_the_routers_own() -> None:
         view([p], mpls=[path("mpls", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
     )
 
-    mangle = result["/ip/firewall/mangle"].items
+    mangle = steering(result["/ip/firewall/mangle"])
     assert [i.props["chain"] for i in mangle] == ["prerouting", "output"]
     assert {i.props["action"] for i in mangle} == {"mark-routing"}
     assert all("per-connection-classifier" not in i.props for i in mangle)
@@ -677,7 +736,7 @@ def test_a_single_member_group_never_balances() -> None:
     # Only one of the two uplinks exists at this site.
     result = sections_of(view([p], fibre=[path("fibre", ["10.255.0.1"])]))
 
-    mangle = result["/ip/firewall/mangle"].items
+    mangle = steering(result["/ip/firewall/mangle"])
     assert [i.props["chain"] for i in mangle] == ["prerouting", "output"]
     assert {i.props["action"] for i in mangle} == {"mark-routing"}
     assert all("per-connection-classifier" not in i.props for i in mangle)
@@ -705,9 +764,9 @@ def sni_group(patterns: list[str], **kw) -> AppGroup:
 
 def test_an_sni_policy_renders_a_connection_mark_then_a_routing_mark() -> None:
     p = policy(app_group=sni_group(["*.teams.microsoft.com"]))
-    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
-        "/ip/firewall/mangle"
-    ].items
+    mangle = steering(
+        sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))["/ip/firewall/mangle"]
+    )
 
     assert len(mangle) == 2
     conn, routing = mangle
@@ -744,13 +803,13 @@ def test_every_sni_pattern_gets_its_own_connection_mark_rule_but_one_routing_rul
 def test_the_sni_routing_rule_carries_the_same_tag_a_plain_rule_would() -> None:
     """Per-policy telemetry (M7) matches mangle rows by comment; that lookup
     must not need to know which match mechanism a policy took."""
-    plain = sections_of(
+    plain = steering(sections_of(
         view([policy()], mpls=[path("wan1", ["10.255.0.0"])])
-    )["/ip/firewall/mangle"].items[0]
-    sni = sections_of(
+    )["/ip/firewall/mangle"])[0]
+    sni = steering(sections_of(
         view([policy(app_group=sni_group(["*.teams.microsoft.com"]))],
              mpls=[path("wan1", ["10.255.0.0"])])
-    )["/ip/firewall/mangle"].items[-1]
+    )["/ip/firewall/mangle"])[-1]
 
     assert plain.props["comment"] == sni.props["comment"]
     assert plain.tag == sni.tag
@@ -761,9 +820,9 @@ def test_sni_narrows_by_destination_prefix_when_both_are_set() -> None:
         app_group=sni_group(["*.teams.microsoft.com"]),
         dst_prefixes=["10.9.0.0/24"],
     )
-    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
-        "/ip/firewall/mangle"
-    ].items
+    mangle = steering(
+        sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))["/ip/firewall/mangle"]
+    )
     conn = mangle[0]
     assert conn.props["tls-host"] == "*.teams.microsoft.com"
     assert "dst-address-list" in conn.props
@@ -772,9 +831,9 @@ def test_sni_narrows_by_destination_prefix_when_both_are_set() -> None:
 def test_a_policy_with_no_sni_patterns_renders_the_plain_rules() -> None:
     """An app group without patterns adds no tls-host pass."""
     p = policy(app_group=sni_group([], name="plain-group", prefixes=["10.9.0.0/24"]))
-    mangle = sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))[
-        "/ip/firewall/mangle"
-    ].items
+    mangle = steering(
+        sections_of(view([p], mpls=[path("wan1", ["10.255.0.0"])]))["/ip/firewall/mangle"]
+    )
     assert [i.props["chain"] for i in mangle] == ["prerouting", "output"]
     assert {i.props["action"] for i in mangle} == {"mark-routing"}
     assert all("tls-host" not in i.props for i in mangle)

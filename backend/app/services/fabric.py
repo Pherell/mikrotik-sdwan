@@ -306,7 +306,7 @@ _EXTRA_OWNED: dict[str, tuple[str, ...]] = {
     # was rejected. The prefixes a fabric advertises now live in an address
     # list named by the template's output.network. See render.fabric._bgp.
     "/ip/firewall/address-list": ("list", "address"),
-    "/tool/netwatch": ("host",),
+    "/tool/netwatch": ("host", "comment"),
 }
 
 
