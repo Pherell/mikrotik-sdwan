@@ -51,8 +51,63 @@ def render_fabric(view: SiteFabricView, transport: TransportDriver) -> list[Conf
         sections.extend(transport.render(link))
     sections.extend(_bgp(view))
     sections.append(_underlay_routes(view))
+    sections.append(_overlay_relay_routes(view))
     sections.append(_mss_clamp(view, transport))
     return sections
+
+
+def _overlay_relay_routes(view: SiteFabricView) -> ConfigSection:
+    """Reach another spoke's overlay address through the hub.
+
+    A spoke learns a remote spoke's LAN over BGP with the remote spoke's own
+    overlay address as the next hop -- an address it has no tunnel to. Nothing
+    routes it, so it falls through to the WAN default route and is dropped:
+    spoke-to-spoke traffic never leaves the source. Measured on three CHR
+    nodes -- hub to either spoke 0% loss, spoke to spoke 100%.
+
+    The hub is directly connected to every spoke's /31, so it can forward
+    between them. Pointing the whole overlay pool at the hub makes every
+    spoke's address resolve through that relay. Each spoke's own tunnel /31 --
+    longer-prefix and connected -- still wins for its own addresses, and in
+    full_mesh a direct tunnel's connected /31 wins for the spoke it reaches
+    directly, so this is the fallback path, not the only one. On a dual-homed
+    hub the spoke pins the pool through each hub tunnel, laddered by uplink
+    cost, so the relay itself fails over.
+
+    Emitted only on a spoke, and only when the pool is known; the hub, already
+    connected to every spoke, needs no such route.
+    """
+    scope = owner_tag("fabric", view.fabric.name, view.site_name)
+    pool = view.fabric.ip_pool
+    items: list[ConfigItem] = []
+    if view.role != SiteRole.hub and pool:
+        hub_links = sorted(
+            (k for k in view.links if k.remote.is_hub),
+            key=lambda k: (k.local.cost, k.local.wan_name),
+        )
+        for distance, link in enumerate(hub_links, start=1):
+            items.append(
+                ConfigItem(
+                    props={
+                        "dst-address": pool,
+                        "gateway": link.remote.tunnel_ip,
+                        "routing-table": "main",
+                        "distance": distance,
+                    },
+                    # Ordered by distance like the underlay pins, and for the
+                    # same reason: two at one distance is ECMP across relays.
+                    enforce=("distance",),
+                    tag=f"{scope}:relay:{link.remote.tunnel_ip}",
+                )
+            )
+    return section(
+        "/ip/route",
+        "underlay_route",
+        owner=f"{scope}:relay",
+        key=("dst-address", "gateway", "routing-table"),
+        ignore=("distance",),
+        items=items,
+    )
 
 
 def _underlay_routes(view: SiteFabricView) -> ConfigSection:

@@ -184,3 +184,92 @@ def test_the_pin_does_not_sort_before_the_tunnels_it_protects() -> None:
     sections = {s.path: s for s in render_fabric(view(link()), WG)}
 
     assert sections["/ip/route"].order >= sections["/interface/wireguard"].order
+
+
+# -- reaching another spoke through the hub ---------------------------------
+#
+# A spoke learns a remote spoke's LAN over BGP with the remote spoke's own
+# overlay address as the next hop -- an address it has no tunnel to. Nothing
+# routes it, so it falls to the WAN default route and is dropped: spoke-to-
+# spoke traffic never leaves the source. Measured on three CHR nodes -- hub to
+# either spoke 0% loss, spoke to spoke 100%. Pointing the overlay pool at the
+# hub, which is connected to every spoke, makes those next-hops resolve.
+
+POOL = FabricView(name="core", asn=65000, mtu=1400, ip_pool="10.255.0.0/16")
+
+
+def relay_routes(v: SiteFabricView) -> list[dict]:
+    # render_fabric emits the underlay pins and the relay routes as separate
+    # /ip/route sections (merge_sections unites them later, in render_device),
+    # so scan every section rather than the first the way routes() does.
+    out: list[dict] = []
+    for sec in render_fabric(v, WG):
+        if sec.path == "/ip/route":
+            out += [
+                dict(i.props) for i in sec.items
+                if i.props.get("dst-address") == "10.255.0.0/16"
+            ]
+    return out
+
+
+def test_a_spoke_pins_the_overlay_pool_toward_the_hub() -> None:
+    v = SiteFabricView(
+        fabric=POOL, site_name="branch", role=SiteRole.spoke, loopback_ip=None,
+        links=[link(remote=far(is_hub=True))], local_prefixes=[],
+    )
+    (relay,) = relay_routes(v)
+
+    # far()'s tunnel_ip is the hub's address on this spoke's tunnel -- reachable
+    # via the connected /31, so it is a working relay for the whole pool.
+    assert relay["gateway"] == "10.255.0.1"
+    assert relay["routing-table"] == "main"
+    assert relay["distance"] == 1
+
+
+def test_the_hub_pins_no_overlay_pool() -> None:
+    """The hub is directly connected to every spoke's /31; it forwards between
+    them without a relay route of its own."""
+    v = SiteFabricView(
+        fabric=POOL, site_name="hq", role=SiteRole.hub, loopback_ip=None,
+        links=[link(remote=far(is_hub=False))], local_prefixes=[],
+    )
+    assert relay_routes(v) == []
+
+
+def test_a_spoke_does_not_relay_through_another_spoke() -> None:
+    """In full_mesh a spoke also has tunnels to peer spokes. Only the hub is a
+    relay -- routing the pool through a peer spoke would be a loop."""
+    v = SiteFabricView(
+        fabric=POOL, site_name="branch", role=SiteRole.spoke, loopback_ip=None,
+        links=[link("to-peer", remote=far(site_name="branch2", is_hub=False))],
+        local_prefixes=[],
+    )
+    assert relay_routes(v) == []
+
+
+def test_a_dual_homed_spoke_ladders_the_relay_by_uplink_cost() -> None:
+    """Two hub tunnels give the relay a backup, laddered by the uplink's cost
+    like the underlay pins -- so the relay itself fails over."""
+    v = SiteFabricView(
+        fabric=POOL, site_name="branch", role=SiteRole.spoke, loopback_ip=None,
+        links=[
+            link("via-wan1", local=near(wan_name="wan1", cost=1.0),
+                 remote=far(is_hub=True, tunnel_ip="10.255.0.1")),
+            link("via-wan2", local=near(wan_name="wan2", interface="ether3", cost=2.0),
+                 remote=far(is_hub=True, tunnel_ip="10.255.0.3")),
+        ],
+        local_prefixes=[],
+    )
+    relay = sorted(relay_routes(v), key=lambda r: r["distance"])
+
+    assert [r["gateway"] for r in relay] == ["10.255.0.1", "10.255.0.3"]
+    assert [r["distance"] for r in relay] == [1, 2]
+
+
+def test_no_pool_no_relay() -> None:
+    """A fabric with no pool recorded can't name the addresses to relay."""
+    v = SiteFabricView(
+        fabric=FABRIC, site_name="branch", role=SiteRole.spoke, loopback_ip=None,
+        links=[link(remote=far(is_hub=True))], local_prefixes=[],
+    )
+    assert relay_routes(v) == []

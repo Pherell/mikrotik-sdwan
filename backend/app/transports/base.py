@@ -45,6 +45,10 @@ class Endpoint:
     # The site's declared preference between its own uplinks. Lower is better,
     # matching /ip/route distance, which is how it is used.
     cost: float = 1.0
+    # Whether the site on this end is the fabric's hub. A spoke reaches another
+    # spoke's overlay address through the hub, so it needs to know which of its
+    # links terminate there -- see app.render.fabric._overlay_relay_routes.
+    is_hub: bool = False
 
     @property
     def dial_out_only(self) -> bool:
@@ -74,6 +78,10 @@ class FabricView:
     name: str
     asn: int = 65000
     mtu: int = 1400
+    # The overlay address pool. A spoke routes it toward the hub so another
+    # spoke's tunnel address resolves through the relay rather than the WAN
+    # default route -- see app.render.fabric._overlay_relay_routes.
+    ip_pool: str | None = None
     params: dict[str, object] = field(default_factory=dict)
 
     def param(self, key: str, default: object = None) -> object:

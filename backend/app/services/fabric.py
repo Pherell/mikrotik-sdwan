@@ -325,6 +325,7 @@ async def _site_fabric_view(
         name=fabric.name,
         asn=fabric.asn,
         mtu=fabric.mtu,
+        ip_pool=fabric.ip_pool,
         params=dict(fabric.transport_params or {}),
     )
 
@@ -348,12 +349,16 @@ async def _site_fabric_view(
             LinkView(
                 slug=link.slug,
                 fabric=fabric_view,
-                local=_endpoint(site, local_wan, local_ip, loopback),
+                local=_endpoint(
+                    site, local_wan, local_ip, loopback,
+                    is_hub=SiteRole(role) == SiteRole.hub,
+                ),
                 remote=_endpoint(
                     remote_site,
                     remote_wan,
                     remote_ip,
                     _member_loopback(fabric, remote_site),
+                    is_hub=_effective_role(fabric, remote_site) == SiteRole.hub,
                 ),
                 # link.initiator names the side that dials in a/b terms; convert
                 # it to "is this side the dialler".
@@ -378,7 +383,14 @@ def _member_loopback(fabric: Fabric, site: Site) -> str | None:
     return (member.loopback_ip if member else None) or site.loopback_ip
 
 
-def _endpoint(site: Site, wan: Wan, tunnel_ip: str, loopback: str | None) -> Endpoint:
+def _effective_role(fabric: Fabric, site: Site) -> SiteRole:
+    member = next((m for m in fabric.members if m.site_id == site.id), None)
+    return SiteRole((member.role_override if member else None) or site.role)
+
+
+def _endpoint(
+    site: Site, wan: Wan, tunnel_ip: str, loopback: str | None, *, is_hub: bool = False
+) -> Endpoint:
     caps = site.capabilities or {}
     return Endpoint(
         site_name=site.name,
@@ -392,6 +404,7 @@ def _endpoint(site: Site, wan: Wan, tunnel_ip: str, loopback: str | None) -> End
         gateway=wan.gateway,
         prefix_len=wan.prefix_len,
         cost=wan.cost,
+        is_hub=is_hub,
     )
 
 
