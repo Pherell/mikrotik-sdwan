@@ -484,4 +484,6 @@ async def policy_view(
         policies=policies,
         paths_by_tag=paths_by_tag,
         underlay_addresses=sorted(set(underlay)),
+        # The site's own segments stay on main; a policy table cannot reach them.
+        lan_prefixes=sorted(set(site.local_prefixes or [])),
     )
