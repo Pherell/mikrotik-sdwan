@@ -7,7 +7,7 @@ with their credentials encrypted at rest (notification_channels). See
 app.services.alerts.
 
 Revision ID: c5e2f8a1d903
-Revises: b7f3a09e4c15
+Revises: c5e2b8d17a93
 Create Date: 2026-10-01
 """
 
@@ -20,7 +20,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = 'c5e2f8a1d903'
-down_revision: str | None = 'b7f3a09e4c15'
+down_revision: str | None = 'c5e2b8d17a93'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

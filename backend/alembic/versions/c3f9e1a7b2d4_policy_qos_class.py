@@ -7,7 +7,7 @@ what they did before, and no queue tree appears on any device until an
 operator sets both a class and an uplink bandwidth.
 
 Revision ID: c3f9e1a7b2d4
-Revises: b7f3a09e4c15
+Revises: c5e2f8a1d903
 Create Date: 2026-10-01
 """
 
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = 'c3f9e1a7b2d4'
-down_revision: str | None = 'b7f3a09e4c15'
+down_revision: str | None = 'c5e2f8a1d903'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
