@@ -24,10 +24,14 @@ Also, added after each bit them reached a real deployment:
 
 ## 2. End-to-end lab (containerlab + CHR)  — from M3
 
-Not yet built. `labs/` will bring up 2 hubs, 3 spokes, and a WAN-impairment
-container, then assert tunnels establish, BGP converges, prefixes are exchanged,
-a link failure fails over inside the SLA window, and a deliberately broken push
-self-rolls-back.
+`labs/` brings up one hub, two spokes and a WAN-impairment container;
+`labs/verify_fabric.py` asserts tunnels establish, BGP converges, prefixes are
+exchanged, steering renders its LAN guard and netwatch hold-down on real
+RouterOS, and hand-built config survives. `.github/workflows/lab.yml` runs it
+nightly, on demand, and on PRs labelled `lab` or touching router-facing code —
+once a CHR image source is configured (see `labs/README.md`, "Running in CI").
+Still to come: failover inside the SLA window under netem, and the
+self-rollback test.
 
 CHR's free tier is capped at 1 Mbps — enough for control-plane assertions, not
 for throughput tests.

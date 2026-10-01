@@ -1,0 +1,331 @@
+name: Lab
+
+# End-to-end: the controller against three real RouterOS CHRs in containerlab.
+# See labs/README.md, "Running in CI", for setup. In short:
+#
+#   * The CHR image is not public. Either push one to a registry
+#     (labs/build_chr_image.sh --push ghcr.io/<owner>/mikrotik_ros) and set the
+#     repository variable LAB_CHR_IMAGE, or set LAB_CHR_BUILD=true to build it
+#     with vrnetlab on every run. With neither, the job is skipped with a
+#     notice -- not failed -- so forks and unconfigured clones stay green.
+#   * The CHRs are QEMU VMs and need /dev/kvm. GitHub's standard Linux
+#     runners expose it; if yours does not, point LAB_RUNNER at one that does.
+#
+# Triggers:
+#   * workflow_dispatch -- always runs (if an image source is configured);
+#   * nightly schedule  -- same;
+#   * pull_request      -- only when the PR carries the `lab` label, or changes
+#     code that decides what is pushed to a router (render, transports,
+#     reconcile, drivers) or the lab itself. That cannot be expressed with
+#     `paths:` -- a paths filter would also block the label-only case -- so
+#     the gate job below decides, and a PR that needs neither skips cleanly.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_chr:
+        description: "Build the CHR image with vrnetlab even if LAB_CHR_IMAGE is set"
+        type: boolean
+        default: false
+      chr_version:
+        description: "RouterOS version to build (default: LAB_CHR_VERSION, else the clab topology's)"
+        type: string
+        default: ""
+      converge_timeout:
+        description: "Seconds to wait for IPsec / BGP / routes"
+        type: string
+        default: "300"
+  schedule:
+    - cron: "17 2 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read # pull a private CHR image from GHCR with GITHUB_TOKEN
+
+env:
+  # Pinned. containerlab's mikrotik_ros kind has changed interface handling
+  # between releases; bump deliberately.
+  CLAB_VERSION: "0.79.0"
+  VRNETLAB_REF: "v0.21.0"
+  TOPOLOGY: labs/hub-spoke.clab.yml
+
+jobs:
+  gate:
+    name: Decide whether to run
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+      source: ${{ steps.decide.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL_ADDED: ${{ github.event.label.name }}
+          HAS_LAB_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'lab') }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Secrets cannot be tested in `if:`; read them here instead. The
+          # image may be a variable or, if its name is itself sensitive, a
+          # secret of the same name.
+          IMAGE_VAR: ${{ vars.LAB_CHR_IMAGE }}
+          IMAGE_SECRET: ${{ secrets.LAB_CHR_IMAGE }}
+          BUILD_VAR: ${{ vars.LAB_CHR_BUILD }}
+          BUILD_INPUT: ${{ inputs.build_chr }}
+        run: |
+          set -euo pipefail
+          skip() {
+            echo "::notice title=Lab skipped::$1"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          if [ "$EVENT" = "pull_request" ]; then
+            if [ "$IS_FORK" = "true" ]; then
+              skip "Pull requests from forks get no secrets or packages access; run the lab from the base repository."
+            fi
+            # A `labeled` event for any other label is not a reason to re-run.
+            if [ "$ACTION" = "labeled" ] && [ "$LABEL_ADDED" != "lab" ]; then
+              skip "Label '$LABEL_ADDED' added; only 'lab' triggers the lab."
+            fi
+            if [ "$HAS_LAB_LABEL" != "true" ]; then
+              changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+              echo "changed files:"; printf '%s\n' "$changed"
+              if ! echo "$changed" | grep -Eq '^(backend/app/(render|transports|reconcile|drivers)/|labs/|\.github/workflows/lab\.yml$)'; then
+                skip "No router-facing code changed and the PR has no 'lab' label."
+              fi
+            fi
+          fi
+
+          if [ "$BUILD_INPUT" = "true" ] || { [ -z "$IMAGE_VAR$IMAGE_SECRET" ] && [ "$BUILD_VAR" = "true" ]; }; then
+            source=build
+          elif [ -n "$IMAGE_VAR$IMAGE_SECRET" ]; then
+            source=registry
+          else
+            skip "No CHR image source configured. Set the variable LAB_CHR_IMAGE (see labs/build_chr_image.sh) or LAB_CHR_BUILD=true."
+          fi
+          echo "image source: $source"
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+
+  lab:
+    name: containerlab fabric
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    # Must have /dev/kvm. Override with a larger or self-hosted runner via the
+    # repository variable LAB_RUNNER.
+    runs-on: ${{ vars.LAB_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    env:
+      ARTIFACTS: ${{ github.workspace }}/lab-artifacts
+      IMAGE_SOURCE: ${{ needs.gate.outputs.source }}
+      CONVERGE_TIMEOUT: ${{ inputs.converge_timeout || '300' }}
+      # The controller stack. Throwaway values: the database lives only as
+      # long as this job.
+      POSTGRES_PASSWORD: lab
+      SDWAN_SECRET_KEY: lab-secret-key-at-least-32-characters
+      SDWAN_JWT_SECRET: lab-jwt-secret-at-least-32-characters
+      SDWAN_BOOTSTRAP_ADMIN_PASSWORD: lab-bootstrap-password
+      # docker compose reads this list itself, so every `docker compose` below
+      # gets the lab overlay without repeating -f flags.
+      COMPOSE_FILE: docker-compose.yml:labs/docker-compose.lab.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner's system Python is externally managed (PEP 668), so
+      # `pip install httpx` into it fails; verify_fabric.py gets its own.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enable KVM
+        run: |
+          # GitHub's documented recipe: the device exists on hosted Linux
+          # runners but is root-only; QEMU in the vrnetlab containers needs it.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [ ! -e /dev/kvm ]; then
+            echo "::error title=No KVM::/dev/kvm is missing on this runner. CHR needs hardware virtualisation; set LAB_RUNNER to a runner that has it."
+            exit 1
+          fi
+          ls -l /dev/kvm
+
+      - name: Install containerlab ${{ env.CLAB_VERSION }}
+        run: |
+          bash -c "$(curl -fsSL https://get.containerlab.dev)" -- -v "$CLAB_VERSION"
+          containerlab version
+          sudo apt-get install -y -qq sshpass >/dev/null
+
+      - name: Resolve image name
+        id: image
+        env:
+          VERSION_INPUT: ${{ inputs.chr_version }}
+          VERSION_VAR: ${{ vars.LAB_CHR_VERSION }}
+        run: |
+          # The topology names the image; everything else is retagged to match,
+          # so the topology file stays the single source of truth.
+          ref=$(grep -Eo 'vrnetlab/mikrotik_ros:[^[:space:]"]+' "$TOPOLOGY" | head -n1)
+          test -n "$ref" || { echo "::error::no mikrotik_ros image in $TOPOLOGY"; exit 1; }
+          version="${VERSION_INPUT:-${VERSION_VAR:-${ref##*:}}}"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "topology image: $ref; build version: $version"
+
+      - name: Log in to the image registry
+        if: env.IMAGE_SOURCE == 'registry'
+        env:
+          IMAGE: ${{ vars.LAB_CHR_IMAGE || secrets.LAB_CHR_IMAGE }}
+          REG_USER: ${{ secrets.LAB_REGISTRY_USERNAME }}
+          REG_PASS: ${{ secrets.LAB_REGISTRY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          registry="${IMAGE%%/*}"
+          if [ -n "$REG_USER" ] && [ -n "$REG_PASS" ]; then
+            echo "$REG_PASS" | docker login "$registry" -u "$REG_USER" --password-stdin
+          elif [ "$registry" = "ghcr.io" ]; then
+            # Works for a package owned by this repository's owner and linked to
+            # (or granted read access by) this repository.
+            echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          else
+            echo "no credentials for $registry; trying an anonymous pull"
+          fi
+
+      - name: Pull the CHR image
+        if: env.IMAGE_SOURCE == 'registry'
+        env:
+          IMAGE: ${{ vars.LAB_CHR_IMAGE || secrets.LAB_CHR_IMAGE }}
+          REF: ${{ steps.image.outputs.ref }}
+        run: |
+          docker pull "$IMAGE"
+          docker tag "$IMAGE" "$REF"
+
+      - name: Build the CHR image with vrnetlab
+        if: env.IMAGE_SOURCE == 'build'
+        env:
+          CHR_URL: ${{ vars.LAB_CHR_URL }}
+          CHR_SHA256: ${{ vars.LAB_CHR_SHA256 }}
+          VERSION: ${{ steps.image.outputs.version }}
+          REF: ${{ steps.image.outputs.ref }}
+        run: |
+          bash labs/build_chr_image.sh --version "$VERSION" --vrnetlab-ref "$VRNETLAB_REF"
+          docker tag "vrnetlab/mikrotik_ros:$VERSION" "$REF"
+
+      - name: Deploy the lab
+        run: |
+          mkdir -p "$ARTIFACTS"
+          sudo containerlab deploy -t "$TOPOLOGY" --reconfigure
+          sudo containerlab inspect -t "$TOPOLOGY" | tee "$ARTIFACTS/clab-inspect.txt"
+
+      - name: Wait for the routers
+        run: |
+          # `clab deploy` returns when the containers start; RouterOS inside
+          # them boots, then vrnetlab pushes the startup config over FTP. The
+          # REST API answering with our user proves both happened.
+          for ip in 172.30.30.11 172.30.30.21 172.30.30.22; do
+            echo "waiting for $ip"
+            for _ in $(seq 1 120); do
+              if curl -fsSk -m 5 -u sdwan:sdwan-lab "https://$ip/rest/system/identity"; then
+                echo; continue 2
+              fi
+              sleep 5
+            done
+            echo "::error::$ip REST API never answered"
+            exit 1
+          done
+
+      - name: Start the controller
+        run: |
+          docker compose up -d --build --wait --wait-timeout 300
+          curl -fsS http://127.0.0.1:8000/healthz
+
+      - name: Verify the fabric
+        run: |
+          set -o pipefail
+          python -m pip install -q httpx
+          python labs/verify_fabric.py \
+            --api http://127.0.0.1:8000 \
+            --password "$SDWAN_BOOTSTRAP_ADMIN_PASSWORD" \
+            --converge-timeout "$CONVERGE_TIMEOUT" \
+            --json-out "$ARTIFACTS/verify.json" \
+            2>&1 | tee "$ARTIFACTS/verify.log"
+
+      - name: Summary
+        if: always()
+        run: |
+          f="$ARTIFACTS/verify.json"
+          if [ ! -f "$f" ]; then
+            echo "verify_fabric.py did not run" >> "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          jq -r '"### Lab: " + (if .ok then "passed" else "FAILED" end)
+                 + " (\(.passed) passed, \(.failed) failed, \(.skipped) skipped, \(.duration_seconds)s)",
+                 (if .error then "\n**Aborted in \(.aborted_in_phase):** \(.error)" else empty end),
+                 "", "| phase | check | result |", "|---|---|---|",
+                 (.checks[] | "| \(.phase) | \(.name) | \(.status) |")' "$f" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect logs and router state
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p "$ARTIFACTS/routers" "$ARTIFACTS/controller"
+          docker compose ps -a > "$ARTIFACTS/controller/ps.txt" 2>&1 || true
+          for svc in api worker migrate db; do
+            docker compose logs --no-color "$svc" > "$ARTIFACTS/controller/$svc.log" 2>&1 || true
+          done
+          for node in hub1:172.30.30.11 spoke1:172.30.30.21 spoke2:172.30.30.22; do
+            name="${node%%:*}"; ip="${node##*:}"; dir="$ARTIFACTS/routers/$name"
+            mkdir -p "$dir"
+            # vrnetlab's own log: QEMU boot and the startup-config push.
+            docker logs "clab-sdwan-$name" > "$dir/container.log" 2>&1 || true
+            # Full export over SSH, as the controller's user; admin:admin is
+            # vrnetlab's default and covers a router whose bootstrap failed.
+            for cred in sdwan:sdwan-lab admin:admin; do
+              if timeout 60 sshpass -p "${cred#*:}" ssh -o StrictHostKeyChecking=no \
+                   -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
+                   "${cred%%:*}@$ip" '/export terse show-sensitive' > "$dir/export.rsc" 2>"$dir/export.err"; then
+                rm -f "$dir/export.err"; break
+              fi
+            done
+            # The menus the checks read, as JSON, in case SSH was the problem.
+            for menu in ip/address ip/route ip/firewall/mangle ip/firewall/address-list \
+                        routing/table routing/rule routing/bgp/session ip/ipsec/active-peers \
+                        tool/netwatch interface; do
+              curl -sSk -m 15 -u sdwan:sdwan-lab "https://$ip/rest/$menu" \
+                > "$dir/$(echo "$menu" | tr / _).json" 2>&1 || true
+            done
+          done
+          # The export carries the lab's PSKs; they are throwaway, generated
+          # per run, but strip them anyway so artifacts are safe to share.
+          find "$ARTIFACTS/routers" -name export.rsc -exec \
+            sed -i -E 's/(secret|password|private-key|preshared-key)=[^ ]+/\1=<redacted>/g' {} +
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-${{ github.run_id }}-${{ github.run_attempt }}
+          path: lab-artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: always()
+        run: |
+          # Compose first: its api container is attached to the lab network,
+          # and clab cannot remove a network that still has endpoints.
+          docker compose down -v --remove-orphans || true
+          sudo containerlab destroy -t "$TOPOLOGY" --cleanup || true

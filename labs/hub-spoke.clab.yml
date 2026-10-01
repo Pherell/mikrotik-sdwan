@@ -11,6 +11,10 @@
 #
 #   sudo clab deploy -t hub-spoke.clab.yml
 #   sudo clab destroy -t hub-spoke.clab.yml --cleanup
+#
+# Build the image with labs/build_chr_image.sh. CI (.github/workflows/lab.yml)
+# reads the image name from this file and retags whatever it pulls or builds
+# to match, so this line is the one place the version is pinned.
 
 name: sdwan
 
@@ -60,6 +64,9 @@ topology:
         - ip link set eth2 master br0
         - ip link set br0 up
 
+  # "<node>:eth1" is the container's first data interface, which RouterOS
+  # sees as ether2 -- ether1 is vrnetlab's management port. The .rsc files
+  # and verify_fabric.py therefore put the uplink on ether2.
   links:
     - endpoints: ["hub1:eth1", "internet:hub1"]
     - endpoints: ["spoke1:eth1", "internet:spoke1"]
