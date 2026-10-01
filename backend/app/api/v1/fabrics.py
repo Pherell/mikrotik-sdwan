@@ -28,6 +28,7 @@ from app.schemas.fabric import (
     MemberRead,
 )
 from app.services.fabric import expand_fabric, load_fabric, reallocate_secrets
+from app.services.lifecycle import queue_cleanup
 from app.transports.base import TransportDriver, TransportError, available, get_transport
 from app.transports.params import describe
 from app.transports.params import validate as validate_params
@@ -247,9 +248,14 @@ async def delete_fabric(
         detail={"name": fabric.name},
         request=request,
     )
-    # Links and members cascade. The tunnels stay on the devices until each
-    # affected site is applied again -- deleting a fabric is not a push.
+    # Links and members cascade. Every member's device still carries the
+    # fabric's tunnels, BGP and policy rows, so each gets a cleanup apply
+    # queued (services.lifecycle): the worker pushes them within a minute,
+    # inside the usual rollback, and they show in the job log.
+    members = [m.site for m in fabric.members if m.site is not None]
     await session.delete(fabric)
+    await session.flush()
+    await queue_cleanup(session, members, requested_by=user.id)
 
 
 # -- membership -------------------------------------------------------------
@@ -318,6 +324,26 @@ async def remove_member(
     )
     if member is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That site is not in this fabric")
+
+    # Who has to change on the device: the departing site, and every site at
+    # the far end of a link it was part of. Read before the links go.
+    fabric = await _get_or_404(session, fabric_id, user.tenant_id)
+    departing = await session.get(Site, site_id)
+    departing_wans = {w.id for w in (departing.wans if departing else [])}
+    affected: list[Site] = [departing] if departing else []
+    for link in fabric.links:
+        if link.a_wan_id in departing_wans or link.b_wan_id in departing_wans:
+            for wan_id in (link.a_wan_id, link.b_wan_id):
+                if wan_id in departing_wans:
+                    continue
+                peer = next(
+                    (m.site for m in fabric.members
+                     if m.site and any(w.id == wan_id for w in m.site.wans)),
+                    None,
+                )
+                if peer is not None:
+                    affected.append(peer)
+
     await write_audit(
         session,
         actor=user,
@@ -328,6 +354,14 @@ async def remove_member(
         request=request,
     )
     await session.delete(member)
+    await session.flush()
+    # Drop the departed member's links now, not on the next manual expand:
+    # until they are gone, rendering any affected device still builds the
+    # tunnels, and the cleanup apply below would change nothing.
+    session.expire(fabric)
+    fabric = await _get_or_404(session, fabric_id, user.tenant_id)
+    await expand_fabric(session, fabric)
+    await queue_cleanup(session, affected, requested_by=user.id)
 
 
 # -- expansion --------------------------------------------------------------

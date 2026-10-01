@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.drivers.base import ConfigOp, ConfigSection, DeviceDriver, DriverError, OpKind
-from app.reconcile.diff import SectionDiff, diff_section
+from app.reconcile.diff import Collision, SectionDiff, diff_section
 
 
 @dataclass(slots=True)
@@ -17,10 +17,23 @@ class Plan:
     # Paths that could not be read. A section is skipped rather than treated as
     # empty, because an empty read would look like "remove everything".
     unreadable: dict[str, str] = field(default_factory=dict)
+    # Non-blocking findings about config the controller does not own but which
+    # changes what its own rows do -- see _shadow_warnings.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
         return all(s.empty for s in self.sections)
+
+    @property
+    def collisions(self) -> list[Collision]:
+        return [c for s in self.sections for c in s.collisions]
+
+    @property
+    def blocked(self) -> list[Collision]:
+        """Collisions not resolved by adoption. An apply with any is refused:
+        the withheld adds would leave the fabric half-built."""
+        return [c for c in self.collisions if not c.adopted]
 
     @property
     def counts(self) -> dict[str, int]:
@@ -54,6 +67,10 @@ class Plan:
             lines.extend(section.render())
         for path, error in self.unreadable.items():
             lines.append(f"! {path} could not be read: {error}")
+        for collision in self.collisions:
+            lines.append(collision.render())
+        for warning in self.warnings:
+            lines.append(f"? {warning}")
         return "\n".join(lines) if lines else "(no changes)"
 
     def to_json(self) -> dict[str, Any]:
@@ -63,6 +80,17 @@ class Plan:
             "counts": self.counts,
             "empty": self.empty,
             "unreadable": self.unreadable,
+            "collisions": [
+                {
+                    "path": c.path,
+                    "identity": [str(i) for i in c.identity],
+                    "item_id": c.item_id,
+                    "comment": c.comment,
+                    "adopted": c.adopted,
+                }
+                for c in self.collisions
+            ],
+            "warnings": list(self.warnings),
             "sections": [
                 {
                     "path": s.path,
@@ -76,8 +104,14 @@ class Plan:
         }
 
 
-async def build_plan(driver: DeviceDriver, sections: list[ConfigSection]) -> Plan:
-    """Read the device once per section and diff intent against it."""
+async def build_plan(
+    driver: DeviceDriver, sections: list[ConfigSection], *, adopt: bool = False
+) -> Plan:
+    """Read the device once per section and diff intent against it.
+
+    ``adopt`` takes over unmanaged rows that stand where intent wants to
+    write; without it they are reported as collisions. See diff_section.
+    """
     plan = Plan()
     for section in sections:
         try:
@@ -94,5 +128,56 @@ async def build_plan(driver: DeviceDriver, sections: list[ConfigSection]) -> Pla
             # would diff as "delete every managed row in it".
             plan.unreadable[section.path] = str(exc)
             continue
-        plan.sections.append(diff_section(section, live))
+        plan.sections.append(diff_section(section, live, adopt=adopt))
+        plan.warnings.extend(_shadow_warnings(section, live))
     return plan
+
+
+# Mangle actions that decide a packet's fate for steering. An unmanaged rule
+# doing any of these above ours, with passthrough off, means our rule never
+# sees the traffic it was written for.
+_STEERING_ACTIONS = {"mark-routing", "mark-connection", "accept"}
+
+
+def _shadow_warnings(section: ConfigSection, live: list[dict[str, Any]]) -> list[str]:
+    """Unowned config that silently changes what owned config does.
+
+    Not a block: the operator may have put it there on purpose. But a plan
+    that diffs clean while someone's own rule is eating the traffic is exactly
+    the case nobody can debug from the controller, so it is said out loud.
+    """
+    out: list[str] = []
+    if section.path == "/ip/firewall/mangle" and section.items:
+        first_owned = next(
+            (i for i, row in enumerate(live) if section.owns(row)), len(live)
+        )
+        for row in live[:first_owned]:
+            if section.owns(row) or row.get("disabled") in (True, "true"):
+                continue
+            if row.get("chain") not in ("prerouting", "output"):
+                continue
+            if row.get("action") not in _STEERING_ACTIONS:
+                continue
+            if row.get("passthrough") in (True, "true") and row.get("action") != "accept":
+                continue
+            out.append(
+                f"/ip/firewall/mangle [{row.get('.id', '?')}] chain={row.get('chain')} "
+                f"action={row.get('action')} sits above every sdwan rule and stops "
+                "the chain: traffic it matches is never steered"
+            )
+    if section.path == "/interface/wireguard":
+        ports = {
+            str(i.props.get("listen-port"))
+            for i in section.items
+            if i.props.get("listen-port") is not None
+        }
+        for row in live:
+            if section.owns(row):
+                continue
+            port = str(row.get("listen-port", ""))
+            if port and port in ports:
+                out.append(
+                    f"/interface/wireguard {row.get('name', '?')} already listens on "
+                    f"UDP {port}, which an sdwan tunnel needs"
+                )
+    return out

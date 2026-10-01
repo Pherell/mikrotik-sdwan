@@ -6,6 +6,7 @@ drivers know about REST payloads, CLI syntax, or RouterOS version quirks.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -94,17 +95,22 @@ class ConfigSection:
     # the one this project hits. Those rows cannot carry the ownership comment
     # every other menu is tracked by, so a comment-less section is owned by
     # name instead: a live row is ours only if its name is one this section
-    # currently renders. The trade-off is no orphan sweep for such a menu (a
-    # row we stop rendering is left, not deleted) -- correct by omission is
-    # far safer here than a name-prefix guess that could delete a user's own
-    # profile.
+    # currently renders.
     comment_capable: bool = True
+    # For a comment-less menu: a full-match regex over ``name`` that marks a
+    # row as controller-made even when nothing renders it any more. Without it
+    # a removed link's /ip/ipsec/profile was never swept. The pattern must be
+    # strict enough that it cannot match an operator's own row -- the ipsec
+    # one requires the controller's prefix *and* the 6-hex digest every link
+    # slug ends in (see app.fabric.expand.link_slug), not a loose "sdwan-*".
+    name_pattern: str | None = None
 
     def owns(self, row: dict[str, Any]) -> bool:
         if not self.comment_capable:
-            return row.get("name") in {
-                it.props.get("name") for it in self.items if it.props.get("name")
-            }
+            name = str(row.get("name", ""))
+            if name in {it.props.get("name") for it in self.items if it.props.get("name")}:
+                return True
+            return bool(self.name_pattern and name and re.fullmatch(self.name_pattern, name))
         return str(row.get("comment", "")).startswith(self.owner_tag)
 
 

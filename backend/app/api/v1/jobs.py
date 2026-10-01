@@ -27,13 +27,18 @@ async def _site_or_404(session: SessionDep, site_id: str, tenant_id: str) -> Sit
 
 
 @router.post("/sites/{site_id}/plan", response_model=PlanRead)
-async def plan(site_id: str, session: SessionDep, user: RequireViewer) -> PlanRead:
+async def plan(
+    site_id: str,
+    session: SessionDep,
+    user: RequireViewer,
+    adopt: bool = Query(default=False, description="Preview adopting unmanaged rows"),
+) -> PlanRead:
     """Render intent, diff it against the device, change nothing.
 
     Read-only, so a viewer may run it.
     """
     site = await _site_or_404(session, site_id, user.tenant_id)
-    result = await plan_site(session, site)
+    result = await plan_site(session, site, adopt=adopt)
     return PlanRead.model_validate(result.to_json())
 
 
@@ -114,7 +119,7 @@ async def apply(
         return job
 
     await session.flush()
-    await apply_site(session, site, job, dry_run=body.dry_run)
+    await apply_site(session, site, job, dry_run=body.dry_run, adopt=body.adopt)
 
     await write_audit(
         session,

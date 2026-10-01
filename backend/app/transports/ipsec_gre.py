@@ -41,6 +41,16 @@ DEFAULT_PARAMS: dict[str, object] = {
 }
 
 
+
+# What every profile this transport ever named looks like: "prof-" plus a link
+# slug, which always ends in a 6-hex digest (app.fabric.expand.link_slug).
+# Lets the reconciler sweep a removed link's profile -- the menu has no
+# comment to own it by -- without being loose enough to match a profile an
+# operator created by hand. A link whose slug predates the digest suffix is
+# not matched, and keeps the old behaviour (left, not deleted).
+PROFILE_NAME_PATTERN = r"prof-[\w-]*-[0-9a-f]{6}"
+
+
 class IpsecGreTransport:
     name = "ipsec_gre"
     supported_ros = {6, 7}
@@ -108,6 +118,7 @@ class IpsecGreTransport:
             # name instead. Verified against ROS 7.24: peer/proposal/policy
             # all take a comment; only profile does not.
             comment_capable=False,
+            name_pattern=PROFILE_NAME_PATTERN,
             items=[
                 ConfigItem(
                     props={

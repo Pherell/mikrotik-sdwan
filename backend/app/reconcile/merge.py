@@ -54,6 +54,7 @@ def merge_sections(sections: list[ConfigSection]) -> list[ConfigSection]:
                 ordered=section.ordered,
                 order=section.order,
                 comment_capable=section.comment_capable,
+                name_pattern=section.name_pattern,
             )
             continue
 
@@ -72,6 +73,13 @@ def merge_sections(sections: list[ConfigSection]) -> list[ConfigSection]:
         # If any contributor's menu rejects a comment, the merged section must
         # too -- one comment-incapable renderer poisons the whole path.
         existing.comment_capable = existing.comment_capable and section.comment_capable
+        if section.name_pattern:
+            if existing.name_pattern and existing.name_pattern != section.name_pattern:
+                raise ValueError(
+                    f"Renderers disagree on the name pattern owning {section.path}: "
+                    f"{existing.name_pattern!r} vs {section.name_pattern!r}."
+                )
+            existing.name_pattern = section.name_pattern
         # Apply at the earliest point any contributor asked for: a dependency
         # is satisfied by being early, never by being late.
         existing.order = min(existing.order, section.order)

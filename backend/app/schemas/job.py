@@ -23,6 +23,11 @@ class PlanRead(BaseModel):
     empty: bool
     unreadable: dict[str, str] = Field(default_factory=dict)
     sections: list[PlanSection] = Field(default_factory=list)
+    # Unmanaged device rows standing where intent wants to write. adopted=false
+    # ones block an apply; re-plan or apply with adopt=true to take them over.
+    collisions: list[dict] = Field(default_factory=list)
+    # Unmanaged config that changes what managed config does. Informational.
+    warnings: list[str] = Field(default_factory=list)
     text: str
 
 
@@ -57,6 +62,11 @@ class ApplyRequest(BaseModel):
     # so it needs the same confirmation an immediate apply does.
     confirm: bool = False
     dry_run: bool = False
+    # Take over unmanaged rows that have the identity of something this apply
+    # would add (a hand-built tunnel of the same name, a leftover whose
+    # comment was edited). Without it such rows block the apply instead of
+    # being duplicated beside. See reconcile.diff.diff_section.
+    adopt: bool = False
     # Set to queue this apply for a maintenance window instead of pushing it
     # now. Omitted or in the past: applies immediately, exactly as before.
     scheduled_for: UtcDatetime | None = None

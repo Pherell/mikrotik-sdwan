@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -17,7 +17,9 @@ from app.deps import (
 )
 from app.drivers.base import DriverError
 from app.drivers.factory import open_driver
+from app.models.enums import JobKind, JobState
 from app.models.fabric import Link
+from app.models.job import Job
 from app.models.site import Site, Wan
 from app.schemas.diagnostics import (
     PingRequest,
@@ -40,6 +42,7 @@ from app.schemas.site import (
 from app.security import SecretBox
 from app.services.diagnostics import run_ping, run_traceroute, tunnel_health
 from app.services.health import read_health
+from app.services.lifecycle import decommission_site
 from app.services.ports import read_ports
 from app.services.probe import apply_probe, probe_site
 
@@ -156,14 +159,66 @@ async def update_site(
 
 @router.delete("/{site_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_site(
-    site_id: str, session: SessionDep, user: RequireAdmin, request: Request
+    site_id: str,
+    session: SessionDep,
+    user: RequireAdmin,
+    request: Request,
+    decommission: bool | None = Query(
+        default=None,
+        description=(
+            "Remove every controller-owned row from the device before deleting "
+            "the record. Defaults to true for a site that has ever been applied "
+            "and false otherwise. Set false to keep the config on the router."
+        ),
+    ),
+    force: bool = Query(
+        default=False,
+        description="Delete the record even if the decommission apply fails.",
+    ),
 ) -> None:
+    """Delete a site -- by default, taking its config off the router first.
+
+    The record is the only thing that knows the device was ever configured;
+    deleting it first is how every ``sdwan:`` row on a router came to outlive
+    the site it belonged to. A site never applied has nothing to remove, so
+    it is deleted directly.
+    """
     site = await _get_or_404(session, site_id, user.tenant_id)
     if site.memberships:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Remove this site from its fabrics before deleting it",
         )
+    if decommission is None:
+        decommission = (
+            await session.scalar(
+                select(Job.id).where(
+                    Job.site_id == site.id,
+                    Job.kind == JobKind.apply,
+                    Job.state == JobState.succeeded,
+                ).limit(1)
+            )
+        ) is not None
+    if decommission:
+        job = await decommission_site(session, site, requested_by=user.id)
+        await write_audit(
+            session,
+            actor=user,
+            action="site.decommission",
+            object_type="site",
+            object_id=site.id,
+            detail={"job": job.id, "state": job.state, "error": job.error},
+            request=request,
+        )
+        if job.state != JobState.succeeded and not force:
+            # Commit the job record so the operator can read why, then refuse.
+            await session.commit()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Could not clean the router (job {job.id}: {job.error}). "
+                "Fix it and retry, or pass force=true to delete the record "
+                "and leave the config on the device.",
+            )
     await write_audit(
         session,
         actor=user,

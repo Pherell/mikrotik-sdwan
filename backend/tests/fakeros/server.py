@@ -125,6 +125,10 @@ class FakeRouterOS:
     def rows(self, path: str) -> list[dict[str, Any]]:
         return self.menus.setdefault(path.strip("/"), [])
 
+    def seed(self, path: str, rows: list[dict[str, Any]]) -> None:
+        """Put rows on the device as if somebody had configured them by hand."""
+        self.rows(path).extend(self._with_id(dict(r)) for r in rows)
+
     # RouterOS lists every interface in /interface whatever menu created it.
     # Without this a tunnel the reconciler just built into /interface/gre is
     # invisible to anything that asks the generic question -- which is the
@@ -194,6 +198,15 @@ class FakeRouterOS:
 
     async def _put(self, path: str, request: Request) -> Response:
         body = await _json(request)
+        # Interface names are unique device-wide on real RouterOS; a second
+        # add under a taken name is refused. Without this an add that should
+        # have been an adopt "succeeded" here and duplicated the tunnel.
+        if path.startswith("interface/") and body.get("name"):
+            if any(r.get("name") == body["name"] for r in self.menus.get(path, [])):
+                return JSONResponse(
+                    {"detail": "failure: already have interface with such name"},
+                    status_code=400,
+                )
         # Real RouterOS validates cross-references at insert time: an ipsec
         # identity or policy naming a peer that does not exist yet is refused
         # with "input does not match any value of peer". Without mirroring

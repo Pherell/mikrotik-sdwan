@@ -21,14 +21,18 @@ log = logging.getLogger(__name__)
 
 
 async def plan_site(
-    session: AsyncSession, site: Site, driver: DeviceDriver | None = None
+    session: AsyncSession,
+    site: Site,
+    driver: DeviceDriver | None = None,
+    *,
+    adopt: bool = False,
 ) -> Plan:
     """Render intent and diff it against the device. Read-only."""
     sections = await render_device(session, site)
     if driver is not None:
-        return await build_plan(driver, sections)
+        return await build_plan(driver, sections, adopt=adopt)
     async with open_driver(site) as d:
-        return await build_plan(d, sections)
+        return await build_plan(d, sections, adopt=adopt)
 
 
 async def apply_site(
@@ -37,6 +41,7 @@ async def apply_site(
     job: Job,
     *,
     dry_run: bool = False,
+    adopt: bool = False,
 ) -> Job:
     """Plan, then push inside the dead-man rollback, recording everything.
 
@@ -53,7 +58,7 @@ async def apply_site(
 
     try:
         async with open_driver(site) as driver:
-            plan = await build_plan(driver, await render_device(session, site))
+            plan = await build_plan(driver, await render_device(session, site), adopt=adopt)
             job.plan = plan.to_json()
             job.diff = {"text": plan.render()}
 
@@ -63,6 +68,14 @@ async def apply_site(
                     + ", ".join(plan.unreadable)
                     + ". Applying now would look like a request to delete "
                     "everything managed in those menus."
+                )
+
+            if plan.blocked and not dry_run:
+                raise DriverError(
+                    f"Refusing to apply: {len(plan.blocked)} unmanaged row(s) on the "
+                    "device already hold what this apply would create ("
+                    + "; ".join(c.render() for c in plan.blocked[:3])
+                    + "). Apply with adopt=true to take them over, or remove them."
                 )
 
             if dry_run or plan.empty:

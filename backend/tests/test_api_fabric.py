@@ -100,6 +100,7 @@ async def api(routers, monkeypatch) -> AsyncIterator[tuple]:
             await d.close()
 
     monkeypatch.setattr("app.services.reconcile.open_driver", fake_open_driver)
+    monkeypatch.setattr("app.services.lifecycle.open_driver", fake_open_driver)
 
     app = create_app()
     app.dependency_overrides[get_session] = _session
@@ -285,11 +286,12 @@ async def test_removing_a_member_drops_its_links(api) -> None:
     await client.delete(
         f"/fabrics/{fabric_id}/members/{sites['spoke2']}", headers=headers
     )
-    resp = await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
-
-    assert resp.json()["removed"] == 1
+    # Removal reconciles the links itself now; a later expand has nothing left
+    # to remove.
     links = (await client.get(f"/fabrics/{fabric_id}/links", headers=headers)).json()
     assert len(links) == 1
+    resp = await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+    assert resp.json()["removed"] == 0
 
 
 # -- rendering and apply ----------------------------------------------------
@@ -486,7 +488,7 @@ async def test_a_fabric_alone_installs_no_probes(api) -> None:
     assert all(g["keepalive"] == "10s,3" for g in gres)
 
 
-async def test_removing_a_site_from_the_fabric_tears_its_tunnels_down(api) -> None:
+async def test_removing_a_site_from_the_fabric_tears_its_tunnels_down(api, monkeypatch) -> None:
     client, _, routers = api
     headers = await _auth(client)
     fabric_id, sites = await _three_site_fabric(client, headers)
@@ -498,17 +500,38 @@ async def test_removing_a_site_from_the_fabric_tears_its_tunnels_down(api) -> No
     assert len(routers["198.51.100.5"].rows("interface/gre")) == 2
 
     await client.delete(f"/fabrics/{fabric_id}/members/{sites['spoke2']}", headers=headers)
-    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
-    resp = await client.post(
-        f"/sites/{sites['hub1']}/apply", headers=headers, json={"confirm": True}
-    )
 
-    assert resp.json()["state"] == "succeeded"
+    # Detach queues a cleanup apply for the departing site and each former
+    # peer; the worker sweep is what pushes them -- no manual expand or apply.
+    from sqlalchemy import select
+
+    from app.models.job import Job
+    from app.tasks.worker import run_scheduled_applies
+
+    _, maker, _ = api
+    async with maker() as s:
+        queued = {j.site_id for j in await s.scalars(select(Job)) if j.state == "queued"}
+    assert queued == {sites["hub1"], sites["spoke2"]}
+
+    monkeypatch.setattr("app.tasks.worker.SessionLocal", maker)
+    result = await run_scheduled_applies({})
+    assert result["pushed"] == 2
+
+    async with maker() as s:
+        jobs = [j for j in await s.scalars(select(Job)) if j.site_id in queued]
+    assert {j.state for j in jobs if j.scheduled_for is not None} == {"succeeded"}
     gres = routers["198.51.100.5"].rows("interface/gre")
     assert len(gres) == 1
     # The survivor is the spoke1 tunnel -- identified by the endpoint it dials,
     # not by a site name inside the (truncated, digest-suffixed) slug.
     assert gres[0]["remote-address"] == "203.0.113.1"
+    # And the departed spoke carries nothing of the fabric any more -- the
+    # comment-less ipsec profile included, swept by its name pattern.
+    spoke2 = routers["203.0.113.2"]
+    assert spoke2.rows("interface/gre") == []
+    assert spoke2.rows("ip/ipsec/peer") == []
+    assert spoke2.rows("ip/ipsec/profile") == []
+    assert spoke2.rows("routing/bgp/connection") == []
 
 
 # -- read-only device passthrough -------------------------------------------
@@ -1615,3 +1638,106 @@ async def test_the_whole_remove_then_delete_flow_works(api) -> None:
     for link in links:
         assert link.a_wan_id not in gone and link.b_wan_id not in gone
 
+
+
+# -- lifecycle: decommission, fabric delete ----------------------------------
+
+
+async def test_deleting_an_applied_site_takes_its_config_off_the_router(api) -> None:
+    """The record is the only thing that knows the device was configured.
+    Deleting it first is how sdwan rows used to outlive their site."""
+    client, _, routers = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+    await client.post(f"/sites/{sites['spoke2']}/apply", headers=headers, json={"confirm": True})
+    spoke2 = routers["203.0.113.2"]
+    assert spoke2.rows("interface/gre")
+    # A hand-made row the controller never owned must survive.
+    spoke2.seed("interface/gre", [{"name": "my-own-gre", "remote-address": "192.0.2.9"}])
+
+    await client.delete(f"/fabrics/{fabric_id}/members/{sites['spoke2']}", headers=headers)
+    resp = await client.delete(f"/sites/{sites['spoke2']}", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    assert [r["name"] for r in spoke2.rows("interface/gre")] == ["my-own-gre"]
+    assert not [
+        r for r in spoke2.rows("ip/address") if str(r.get("comment", "")).startswith("sdwan:")
+    ]
+
+
+async def test_delete_can_leave_the_config_on_the_router(api) -> None:
+    client, _, routers = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+    await client.post(f"/sites/{sites['spoke2']}/apply", headers=headers, json={"confirm": True})
+    await client.delete(f"/fabrics/{fabric_id}/members/{sites['spoke2']}", headers=headers)
+    loopbacks = len(routers["203.0.113.2"].rows("ip/address"))
+
+    resp = await client.delete(
+        f"/sites/{sites['spoke2']}", headers=headers, params={"decommission": "false"}
+    )
+    assert resp.status_code == 204
+    assert len(routers["203.0.113.2"].rows("ip/address")) == loopbacks
+
+
+async def test_deleting_a_fabric_queues_cleanup_for_every_member(api) -> None:
+    client, maker, _ = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+
+    assert (await client.delete(f"/fabrics/{fabric_id}", headers=headers)).status_code == 204
+
+    from sqlalchemy import select
+
+    from app.models.job import Job
+
+    async with maker() as s:
+        queued = {j.site_id for j in await s.scalars(select(Job)) if j.state == "queued"}
+    assert queued == set(sites.values())
+
+
+# -- re-attaching a router that already holds config -------------------------
+
+
+async def test_an_unmanaged_row_with_our_name_blocks_the_apply_instead_of_duplicating(
+    api,
+) -> None:
+    client, _, routers = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+    # Render once to learn the name the controller will use, then plant a
+    # comment-less copy of it -- a tunnel built by hand, or one whose comment
+    # somebody edited.
+    plan = (await client.post(f"/sites/{sites['spoke1']}/plan", headers=headers)).json()
+    gre_line = next(
+        line for sec in plan["sections"] if sec["path"] == "/interface/gre" for line in sec["lines"]
+    )
+    gre_name = gre_line.split()[2]
+    spoke1 = routers["203.0.113.1"]
+    spoke1.seed("interface/gre", [{"name": gre_name, "remote-address": "192.0.2.1"}])
+
+    plan = (await client.post(f"/sites/{sites['spoke1']}/plan", headers=headers)).json()
+    assert any(c["identity"] == [gre_name] and not c["adopted"] for c in plan["collisions"])
+
+    resp = await client.post(
+        f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
+    )
+    assert resp.json()["state"] == "failed"
+    assert "adopt=true" in resp.json()["error"]
+    assert len(spoke1.rows("interface/gre")) == 1  # nothing duplicated
+
+    resp = await client.post(
+        f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True, "adopt": True}
+    )
+    assert resp.json()["state"] == "succeeded", resp.json()
+    gres = spoke1.rows("interface/gre")
+    assert len(gres) == 1
+    assert gres[0]["comment"].startswith("sdwan:")
+    assert gres[0]["remote-address"] == "198.51.100.5"
+    # Now owned: the next plan is clean.
+    plan = (await client.post(f"/sites/{sites['spoke1']}/plan", headers=headers)).json()
+    assert plan["collisions"] == []

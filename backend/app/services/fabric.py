@@ -37,6 +37,7 @@ from app.transports.base import (
     available,
     get_transport,
 )
+from app.transports.ipsec_gre import PROFILE_NAME_PATTERN
 
 log = logging.getLogger(__name__)
 
@@ -266,9 +267,19 @@ def _cleanup_sections() -> list[ConfigSection]:
             owner_tag=OWNER_PREFIX + "fabric:",
             key=key,
             order=ORDER["tunnel"],
+            # A comment-less menu cannot be swept by comment. Owning it by the
+            # name pattern is what lets the last link's profile go when the
+            # last link does.
+            comment_capable=path not in _NAME_OWNED,
+            name_pattern=_NAME_OWNED.get(path),
         )
         for path, key in paths.items()
     ]
+
+
+# Menus that reject a comment, and the name pattern that marks a row in them
+# as ours.
+_NAME_OWNED: dict[str, str] = {"/ip/ipsec/profile": PROFILE_NAME_PATTERN}
 
 
 # Identity columns must match whatever the renderers use for the same menu, or

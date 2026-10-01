@@ -88,6 +88,11 @@ class SectionDiff:
     # False for a menu that rejects a comment (e.g. /ip/ipsec/profile): the op
     # must not carry one, or the driver re-injects it and the write is refused.
     comment_capable: bool = True
+    # Unowned live rows with the identity of something this section is about
+    # to add. Left alone, the add either fails ("already exists") or -- in a
+    # menu that does not enforce unique names -- lands as a duplicate beside
+    # the hand-made row. See diff_section's ``adopt``.
+    collisions: list[Collision] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
@@ -121,8 +126,43 @@ class SectionDiff:
         return [i.render(self.path) for i in self.items]
 
 
-def diff_section(section: ConfigSection, live_rows: list[dict[str, Any]]) -> SectionDiff:
-    """Compare one rendered section against what the device currently holds."""
+@dataclass(slots=True)
+class Collision:
+    """A device row the controller does not own, standing where it wants to write."""
+
+    path: str
+    identity: tuple[Any, ...]
+    item_id: str
+    comment: str
+    adopted: bool = False
+
+    def render(self) -> str:
+        ident = ",".join(str(i) for i in self.identity)
+        verb = "adopt" if self.adopted else "! collides with unmanaged row"
+        note = f" (comment {self.comment!r})" if self.comment else ""
+        return f"{verb} {self.path} {ident} [{self.item_id}]{note}"
+
+
+def diff_section(
+    section: ConfigSection, live_rows: list[dict[str, Any]], *, adopt: bool = False
+) -> SectionDiff:
+    """Compare one rendered section against what the device currently holds.
+
+    ``adopt`` decides what happens to a live row the controller does *not*
+    own but whose identity matches a row it wants to add -- a tunnel built by
+    hand under the same name, a leftover from an earlier install whose comment
+    was edited, a site re-attached after its record was deleted:
+
+    - ``False`` (default): the add is withheld and the row reported as a
+      collision. Planning an add there was the old behaviour, and it either
+      failed on apply or, in menus without unique names, duplicated config.
+    - ``True``: the row is taken over in place -- a ``set`` of every rendered
+      property plus the ownership comment -- so it is managed from then on.
+
+    Only meaningful for sections keyed by something other than the comment;
+    a comment-keyed menu (mangle, routing rules) identifies rows by the tag
+    itself, so an unowned row can never share an identity with one of ours.
+    """
     result = SectionDiff(
         path=section.path,
         owner_tag=section.owner_tag,
@@ -140,8 +180,47 @@ def diff_section(section: ConfigSection, live_rows: list[dict[str, Any]]) -> Sec
         item.identity(section.key): item for item in section.items
     }
 
+    unowned: dict[tuple[Any, ...], dict[str, Any]] = {}
+    if section.key and section.key != ("comment",):
+        for row in live_rows:
+            if not section.owns(row):
+                unowned.setdefault(_row_identity(row, section), row)
+
     for identity, item in desired.items():
         live = current.get(identity)
+        if live is None and identity in unowned:
+            foreign = unowned[identity]
+            result.collisions.append(
+                Collision(
+                    path=section.path,
+                    identity=identity,
+                    item_id=str(foreign.get(".id", "")),
+                    comment=str(foreign.get("comment", "") or ""),
+                    adopted=adopt,
+                )
+            )
+            if not adopt:
+                continue
+            # Every rendered property, write_once included: the foreign row's
+            # secret (a PSK, a private key) is unknown, so leaving it would
+            # adopt a tunnel that can never match its peer.
+            props = dict(item.props)
+            if section.comment_capable:
+                props["comment"] = item.tag or section.owner_tag
+            result.items.append(
+                ItemDiff(
+                    kind=OpKind.set,
+                    identity=identity,
+                    tag=item.tag,
+                    item_id=str(foreign.get(".id", "")),
+                    props=props,
+                    changes=[
+                        FieldChange(prop=k, before=canonical(foreign.get(k)), after=canonical(v))
+                        for k, v in props.items()
+                    ],
+                )
+            )
+            continue
         if live is None:
             props = dict(item.props)
             if section.comment_capable:
