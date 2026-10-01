@@ -217,6 +217,17 @@ class SdwanGroupRead(SdwanGroupBase):
     updated_at: UtcDatetime
 
 
+# Mirrors app.render.qos.QOS_CLASSES (kept literal here so the schema module
+# does not import the renderer). Highest priority first.
+QOS_CLASSES = ("realtime", "interactive", "default", "bulk")
+
+
+def _qos_class(v: str | None) -> str | None:
+    if v is not None and v not in QOS_CLASSES:
+        raise ValueError(f"qos_class must be one of: {', '.join(QOS_CLASSES)} (or null)")
+    return v
+
+
 class PolicyBase(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
@@ -235,9 +246,12 @@ class PolicyBase(BaseModel):
     # Which uplinks and how healthy: named once as a group, pointed at here.
     sdwan_group_id: str | None = None
     fallback: str = "any"
+    # Null means no QoS: the traffic is neither marked nor given a class.
+    qos_class: str | None = None
 
     _check_src = field_validator("src_prefixes")(_prefixes)
     _check_dst = field_validator("dst_prefixes")(_prefixes)
+    _check_qos = field_validator("qos_class")(_qos_class)
 
     @field_validator("fallback")
     @classmethod
@@ -283,6 +297,11 @@ class PolicyUpdate(BaseModel):
     dscp: int | None = None
     sdwan_group_id: str | None = None
     fallback: str | None = None
+    # Sending null explicitly clears QoS (exclude_unset keeps it distinct
+    # from "not sent").
+    qos_class: str | None = None
+
+    _check_qos = field_validator("qos_class")(_qos_class)
 
 
 class PolicyRead(PolicyBase):

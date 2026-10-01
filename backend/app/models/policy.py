@@ -155,6 +155,13 @@ class Policy(Base, UUIDPk, Timestamps, Tenanted):
     # What to do when no preferred path meets the SLA.
     fallback: Mapped[str] = mapped_column(String(16), nullable=False, default="any")
 
+    # -- QoS ----------------------------------------------------------------
+    # realtime / interactive / default / bulk, or null for "no QoS". Priority,
+    # not path: it marks the matched traffic so the per-uplink queue tree
+    # serves it first (or last) when that uplink is congested. Rendered by
+    # app.render.qos, independently of steering. See schemas.policy.QOS_CLASSES.
+    qos_class: Mapped[str | None] = mapped_column(String(16))
+
     sla_profile: Mapped[SlaProfile | None] = relationship(lazy="selectin")
     app_group: Mapped[AppGroup | None] = relationship(lazy="selectin")
 

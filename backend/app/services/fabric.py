@@ -27,6 +27,7 @@ from app.render.engine import ORDER
 from app.render.fabric import SiteFabricView, render_fabric
 from app.render.firewall import FirewallView, UplinkNat, render_firewall
 from app.render.policy import PathOption, SitePolicyView, render_policies
+from app.render.qos import QosUplink, SiteQosView, render_qos
 from app.render.site import render_site
 from app.security import SecretBox
 from app.transports.base import (
@@ -237,11 +238,27 @@ async def render_device(session: AsyncSession, site: Site) -> list[ConfigSection
     # steering must leave in the main table -- both are "this is how the tunnel
     # itself gets out", stated to two renderers that each need it.
     underlay = sorted({p for peers in firewall.peers_by_transport.values() for p in peers})
-    sections.extend(
-        render_policies(await policy_view(session, site, underlay=underlay))
-    )
+    policies = await policy_view(session, site, underlay=underlay)
+    sections.extend(render_policies(policies))
+    # QoS reuses the same policy set; rendered after steering so its
+    # postrouting rows sit after the steering rows in the merged mangle.
+    sections.extend(render_qos(qos_view(site, policies.policies)))
 
     return merge_sections(sections)
+
+
+def qos_view(site: Site, policies: list[Policy]) -> SiteQosView:
+    return SiteQosView(
+        site_name=site.name,
+        policies=policies,
+        uplinks=[
+            QosUplink(
+                wan_name=w.name, interface=w.interface, bandwidth_mbps=w.bandwidth_mbps
+            )
+            for w in site.wans
+            if w.enabled
+        ],
+    )
 
 
 def _cleanup_sections() -> list[ConfigSection]:
@@ -307,6 +324,9 @@ _EXTRA_OWNED: dict[str, tuple[str, ...]] = {
     # list named by the template's output.network. See render.fabric._bgp.
     "/ip/firewall/address-list": ("list", "address"),
     "/tool/netwatch": ("host", "comment"),
+    # QoS shaping (app.render.qos). Listed so clearing a WAN's bandwidth or
+    # the last policy's qos_class sweeps the queues off the device.
+    "/queue/tree": ("name",),
 }
 
 

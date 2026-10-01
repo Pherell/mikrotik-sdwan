@@ -168,6 +168,7 @@ async def export_intent(session: AsyncSession, tenant_id: str = "default") -> di
                 "dscp": p.dscp,
                 "sdwan_group": p.sdwan_group.name if p.sdwan_group else None,
                 "fallback": p.fallback,
+                "qos_class": p.qos_class,
             }
             for p in await session.scalars(
                 select(Policy)
