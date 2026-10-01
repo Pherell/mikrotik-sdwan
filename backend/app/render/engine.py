@@ -69,6 +69,12 @@ ORDER: Final[dict[str, int]] = {
     "routing_rule": 62,   # /routing/rule -- references a table, so after 15
     "firewall": 70,       # mangle marks, nat
     "policy": 80,         # routing rules and tables
+    # /queue/tree for QoS (render.qos). A queue names only the physical WAN
+    # interface and its parent queue (same section, rendered parent first);
+    # packet-mark is a free-form string RouterOS does not resolve, so nothing
+    # else must precede it. The cleanup section in services.fabric pulls the
+    # merged menu down to tunnel (40), which is equally safe for that reason.
+    "qos": 85,
     "monitoring": 90,     # netwatch probes
 }
 

@@ -99,6 +99,8 @@ class FakeRouterOS:
             "routing/bgp/instance",
             # Always present; the policy "any" fallback lives here.
             "routing/rule",
+            # Always present; QoS shaping lives here.
+            "queue/tree",
         ):
             self.menus[always_present] = []
         if wireguard:
