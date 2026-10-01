@@ -61,3 +61,31 @@ class JobState(StrEnum):
     failed = "failed"
     rolled_back = "rolled_back"
     cancelled = "cancelled"
+
+
+class AlertKind(StrEnum):
+    """What happened. Pairs (down/up, unreachable/reachable) are the two
+    edges of one state; the rest are discrete events or one-way edges."""
+
+    link_down = "link_down"
+    link_up = "link_up"
+    sla_breach = "sla_breach"
+    drift_detected = "drift_detected"
+    apply_failed = "apply_failed"
+    apply_rolled_back = "apply_rolled_back"
+    site_unreachable = "site_unreachable"
+    site_reachable = "site_reachable"
+
+
+class AlertSeverity(StrEnum):
+    """Ordered least to most urgent -- see app.services.alerts.SEVERITY_RANK.
+    A channel's min_severity is a comparison against that order."""
+
+    info = "info"
+    warning = "warning"
+    critical = "critical"
+
+
+class ChannelType(StrEnum):
+    webhook = "webhook"
+    telegram = "telegram"

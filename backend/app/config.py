@@ -91,6 +91,27 @@ class Settings(BaseSettings):
     # router is worse than refusing to mint the token at all.
     public_url: str | None = None
 
+    # Prometheus scrape credential for GET /metrics. Unset (or empty, which is
+    # what compose passes when the operator leaves it out) means the endpoint
+    # does not exist -- 404, not 401 -- so a default install publishes nothing
+    # about the fleet and does not even confirm the route is there. Set it and
+    # give Prometheus the same value as a bearer token.
+    metrics_token: str | None = None
+
+    # Outbound alert delivery (app.services.alerts). Per attempt timeout and
+    # the number of *extra* attempts after the first. Deliberately small: a
+    # destination that is down for longer than a few seconds is down, and the
+    # delivery sweep must get through every other tenant's alerts in the
+    # meantime. Retries only on connection errors, 429 and 5xx -- a 4xx means
+    # the request itself is wrong and sending it again changes nothing.
+    alert_delivery_timeout_seconds: float = 5.0
+    alert_delivery_retries: int = 2
+    # An alert still pending after this long (the worker was down, say) is
+    # marked expired instead of sent. A "link down" arriving an hour late,
+    # after the link already came back, is noise that teaches people to
+    # ignore the channel.
+    alert_max_age_seconds: int = 3600
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, v: object) -> object:

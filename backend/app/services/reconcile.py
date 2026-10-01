@@ -15,6 +15,7 @@ from app.models.job import Job
 from app.models.site import Site
 from app.reconcile.apply import ApplyOutcome, safe_apply
 from app.reconcile.plan import Plan, build_plan
+from app.services import alerts
 from app.services.fabric import render_device
 
 log = logging.getLogger(__name__)
@@ -111,6 +112,8 @@ async def apply_site(
         job.state = JobState.failed
         job.error = f"{type(exc).__name__}: {exc}"
 
+    # Fires only for failed / rolled_back; the success paths returned above.
+    await alerts.observe_apply(session, site, job)
     return await _finish(session, job)
 
 

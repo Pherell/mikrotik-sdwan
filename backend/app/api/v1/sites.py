@@ -41,6 +41,7 @@ from app.schemas.site import (
     WanUpdate,
 )
 from app.security import SecretBox
+from app.services import alerts
 from app.services.diagnostics import run_ping, run_traceroute, tunnel_health
 from app.services.health import read_health
 from app.services.lifecycle import decommission_site
@@ -241,6 +242,9 @@ async def probe(
     site = await _get_or_404(session, site_id, user.tenant_id)
     result = await probe_site(site)
     apply_probe(site, result)
+    await alerts.observe_reachability(
+        session, site, reachable=result.reachable, error=result.error
+    )
     await write_audit(
         session,
         actor=user,

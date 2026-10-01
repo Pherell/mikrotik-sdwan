@@ -21,6 +21,7 @@ from app.models.base import utcnow
 from app.models.enums import JobKind, JobState
 from app.models.job import Job
 from app.models.site import Site
+from app.services.alerts import deliver_pending
 from app.services.drift import check_all
 from app.services.reconcile import apply_site
 from app.services.uplinks import sweep_uplinks
@@ -154,6 +155,25 @@ async def uplink_sweep(ctx: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
+async def deliver_alerts(ctx: dict[str, Any]) -> dict[str, int]:
+    """Push pending alerts to their tenants' webhook / Telegram channels.
+
+    Its own job rather than a tail call from the poll, the drift sweep and the
+    apply: those write alerts inside their own transactions and must finish
+    regardless of whether Telegram is answering, and an apply triggered from
+    the API has no worker context to deliver from at all. A sweep every 15
+    seconds picks all of them up from one place. Delivery claims each row
+    before sending, so overlapping runs (several workers, or a slow sweep)
+    never double-send.
+    """
+    async with SessionLocal() as session:
+        counts = await deliver_pending(session)
+        await session.commit()
+    if any(counts.values()):
+        log.info("alert delivery: %s", counts)
+    return counts
+
+
 async def startup(ctx: dict[str, Any]) -> None:
     log.info("sdwan worker starting")
     await ctx["redis"].enqueue_job("telemetry_poll")
@@ -167,7 +187,9 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [drift_sweep, telemetry_poll, run_scheduled_applies, uplink_sweep]
+    functions: list[Any] = [
+        drift_sweep, telemetry_poll, run_scheduled_applies, uplink_sweep, deliver_alerts,
+    ]
     cron_jobs = [
         # Offset off the hour so the sweep does not collide with whatever else
         # a fleet runs at :00.
@@ -181,6 +203,10 @@ class WorkerSettings:
         # 17 = 2 mod 5). Second 30 keeps it clear of the every-minute
         # scheduled-apply tick at second 0.
         cron(uplink_sweep, minute=set(range(3, 60, 5)), second=30, run_at_startup=False),
+        # Alerts are only useful while they are news. 15s keeps the gap
+        # between "the poll saw it" and "the phone buzzed" well under one
+        # poll interval, and an empty sweep is one indexed query.
+        cron(deliver_alerts, second={0, 15, 30, 45}, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

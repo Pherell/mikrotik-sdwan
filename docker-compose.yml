@@ -13,6 +13,8 @@ x-backend-env: &backend-env
   # M8 enrollment: the address a factory-default router calls back to.
   # No default -- see app/config.py's public_url docstring for why.
   SDWAN_PUBLIC_URL: ${SDWAN_PUBLIC_URL:-}
+  # Bearer token for GET /metrics. Empty means the endpoint 404s.
+  SDWAN_METRICS_TOKEN: ${SDWAN_METRICS_TOKEN:-}
 
 services:
   db:

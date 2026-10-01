@@ -26,6 +26,7 @@ from app.models.enums import SiteStatus
 from app.models.fabric import Link
 from app.models.site import Site, Wan
 from app.models.telemetry import Sample
+from app.services import alerts
 from app.services.diagnostics import parse_duration_ms
 
 log = logging.getLogger(__name__)
@@ -80,7 +81,11 @@ async def poll_site(session: AsyncSession, site: Site) -> list[Sample]:
             resource_rows = await driver.read("/system/resource")
     except DriverError as exc:
         log.warning("telemetry poll failed for %s: %s", site.name, exc)
+        # Transition-deduplicated: only the first failed poll alerts.
+        await alerts.observe_reachability(session, site, reachable=False, error=str(exc))
         return []
+
+    await alerts.observe_reachability(session, site, reachable=True)
 
     now = datetime.now(UTC)
     samples: list[Sample] = []
@@ -95,6 +100,7 @@ async def poll_site(session: AsyncSession, site: Site) -> list[Sample]:
         row = by_host.get(far_tunnel_ip)
         if row is None:
             continue
+        await alerts.observe_link(session, site, link, row)
         values = {
             LOSS_PERCENT: _float(row.get("loss-percent")),
             RTT_AVG_MS: parse_duration_ms(row.get("rtt-avg")),
