@@ -963,3 +963,418 @@ def test_sni_combined_with_load_balance_is_refused_by_the_renderer() -> None:
                 lte=[path("lte", ["10.255.1.1"])],
             )
         )
+
+
+# -- local breakout ---------------------------------------------------------
+#
+# A member with via=direct sends matched traffic straight out that WAN's own
+# gateway (NATed by the uplink's masquerade) instead of through the hub. It is
+# one more route in the same policy table, ranked and demoted exactly like an
+# overlay path; what differs is the next hop and what netwatch probes.
+
+
+def wan(
+    name: str,
+    hops: list[str],
+    gateway: str | None = None,
+    interface: str | None = None,
+    cost: float = 1.0,
+) -> PathOption:
+    return PathOption(
+        wan_name=name,
+        interface=interface or f"ether-{name}",
+        gateway=gateway,
+        cost=cost,
+        next_hops=hops,
+    )
+
+
+def mixed(members: list[dict], strategy: str = "failover", sla=None) -> SdwanGroup:
+    return SdwanGroup(
+        id="grp-mixed",
+        name="mixed",
+        members=members,
+        strategy=strategy,
+        sla_profile=sla,
+        tenant_id="default",
+    )
+
+
+def policy_routes(result) -> list:
+    return [
+        i for i in result["/ip/route"].items if i.props["routing-table"] != "main"
+    ]
+
+
+def probe_routes(result) -> list:
+    return [
+        i for i in result["/ip/route"].items if i.props["routing-table"] == "main"
+    ]
+
+
+def test_direct_only_failover_routes_out_the_wan_gateways() -> None:
+    p = policy(
+        name="m365",
+        dst_prefixes=["52.96.0.0/14"],
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct"},
+                {"uplink": "lte", "weight": 1, "via": "direct"},
+            ]
+        ),
+    )
+    # Neither WAN has a tunnel: a direct path needs none.
+    result = sections_of(
+        view(
+            [p],
+            fibre=[wan("fibre", [], gateway="192.0.2.1")],
+            lte=[wan("lte", [], gateway="198.51.100.1")],
+        )
+    )
+
+    routes = {i.props["gateway"]: i.props for i in policy_routes(result)}
+    assert routes["192.0.2.1"]["distance"] == 1
+    assert routes["198.51.100.1"]["distance"] == 2
+    assert all(r["dst-address"] == "0.0.0.0/0" for r in routes.values())
+    assert all(r["routing-table"] == "sdwan-m365" for r in routes.values())
+    assert all(r["check-gateway"] == "ping" for r in routes.values())
+    assert len(steering(result["/ip/firewall/mangle"])) == 2  # prerouting + output
+
+
+def test_direct_paths_probe_an_internet_target_not_the_gateway() -> None:
+    """Pinging the WAN gateway only proves the CPE is up."""
+    p = policy(
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct"},
+                {"uplink": "lte", "weight": 1, "via": "direct"},
+            ]
+        )
+    )
+    result = sections_of(
+        view(
+            [p],
+            fibre=[wan("fibre", [], gateway="192.0.2.1")],
+            lte=[wan("lte", [], gateway="198.51.100.1")],
+        )
+    )
+    probes = {i.props["host"]: i.props for i in result["/tool/netwatch"].items}
+    # Defaults are handed out one per WAN, in WAN-name order.
+    assert set(probes) == {"1.1.1.1", "8.8.8.8"}
+    fibre = probes["1.1.1.1"]
+    # The scripts still move the *route*, which is keyed by its next hop, and
+    # name the policy table so main's routes via that gateway are untouched.
+    assert 'gateway="192.0.2.1" routing-table="sdwan-voice"' in fibre["down-script"]
+    assert f"distance={1 + SLA_PENALTY}}}" in fibre["down-script"]
+    assert "distance=1}" in fibre["up-script"]
+    # The hold-down re-check finds its own entry by the probed host.
+    assert 'host="1.1.1.1"' in fibre["up-script"]
+    lte = probes["8.8.8.8"]
+    assert f"distance={2 + SLA_PENALTY}}}" in lte["down-script"]
+
+
+def test_probe_targets_are_pinned_out_their_wan_with_unique_host_routes() -> None:
+    p = policy(
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct"},
+                {"uplink": "lte", "weight": 1, "via": "direct"},
+            ]
+        )
+    )
+    # A second policy breaking out of the same WAN shares its target.
+    q = policy(
+        name="saas",
+        priority=200,
+        sdwan_group=mixed([{"uplink": "fibre", "weight": 1, "via": "direct"}]),
+    )
+    result = sections_of(
+        view(
+            [p, q],
+            fibre=[wan("fibre", [], gateway="192.0.2.1")],
+            lte=[wan("lte", [], interface="lte1")],
+        )
+    )
+    pins = {i.props["dst-address"]: i.props for i in probe_routes(result)}
+    assert set(pins) == {"1.1.1.1/32", "8.8.8.8/32"}
+    assert pins["1.1.1.1/32"]["gateway"] == "192.0.2.1"
+    assert pins["8.8.8.8/32"]["gateway"] == "lte1"
+    tags = [i.tag for i in probe_routes(result)]
+    assert len(tags) == len(set(tags))
+    assert all(t.startswith("sdwan:policy:") for t in tags)
+
+
+def test_an_explicit_probe_target_is_used_and_never_reissued() -> None:
+    p = policy(
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct", "probe_target": "8.8.8.8"},
+                {"uplink": "lte", "weight": 1, "via": "direct"},
+            ]
+        )
+    )
+    result = sections_of(
+        view(
+            [p],
+            fibre=[wan("fibre", [], gateway="192.0.2.1")],
+            lte=[wan("lte", [], gateway="198.51.100.1")],
+        )
+    )
+    pins = {i.props["dst-address"]: i.props["gateway"] for i in probe_routes(result)}
+    assert pins["8.8.8.8/32"] == "192.0.2.1"
+    # lte would have defaulted to 8.8.8.8; it is taken, so it gets another.
+    assert "8.8.8.8/32" not in [k for k, g in pins.items() if g == "198.51.100.1"]
+    assert len(pins) == 2
+
+
+def test_two_wans_claiming_one_probe_target_is_refused() -> None:
+    p = policy(
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct", "probe_target": "9.9.9.9"},
+                {"uplink": "lte", "weight": 1, "via": "direct", "probe_target": "9.9.9.9"},
+            ]
+        )
+    )
+    with pytest.raises(ValueError, match="each WAN needs its own target"):
+        render_policies(
+            view(
+                [p],
+                fibre=[wan("fibre", [], gateway="192.0.2.1")],
+                lte=[wan("lte", [], gateway="198.51.100.1")],
+            )
+        )
+
+
+def test_mixed_direct_then_overlay_failover_distances() -> None:
+    """Direct on fibre first, then the same fibre through the hub, then LTE
+    through the hub: three paths in one table, ranked by member order."""
+    p = policy(
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct"},
+                {"uplink": "fibre", "weight": 1},
+                {"uplink": "lte", "weight": 1, "via": "overlay"},
+            ]
+        )
+    )
+    result = sections_of(
+        view(
+            [p],
+            fibre=[wan("fibre", ["10.255.0.1"], gateway="192.0.2.1")],
+            lte=[wan("lte", ["10.255.1.1"], gateway="198.51.100.1")],
+        )
+    )
+    routes = {i.props["gateway"]: i.props["distance"] for i in policy_routes(result)}
+    assert routes == {"192.0.2.1": 1, "10.255.0.1": 2, "10.255.1.1": 3}
+
+    probes = {i.props["host"]: i.props for i in result["/tool/netwatch"].items}
+    # The direct path probes the internet; overlay paths still probe the
+    # tunnel far end, with their historic table-less scripts.
+    assert set(probes) == {"1.1.1.1", "10.255.0.1", "10.255.1.1"}
+    assert f"distance={1 + SLA_PENALTY}}}" in probes["1.1.1.1"]["down-script"]
+    assert f"distance={2 + SLA_PENALTY}}}" in probes["10.255.0.1"]["down-script"]
+    assert "routing-table" not in probes["10.255.0.1"]["down-script"]
+    # Fibre-direct and fibre-overlay are distinct rows, not one overwriting
+    # the other.
+    comments = [i.props["comment"] for i in policy_routes(result)]
+    assert len(comments) == len(set(comments))
+    assert any(c.endswith(":fibre:direct") for c in comments)
+    assert any(c.endswith(":fibre") for c in comments)
+
+
+def test_an_overlay_member_still_skips_a_wan_without_tunnels() -> None:
+    p = policy(
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct"},
+                {"uplink": "fibre", "weight": 1},
+            ]
+        )
+    )
+    result = sections_of(view([p], fibre=[wan("fibre", [], gateway="192.0.2.1")]))
+    assert [i.props["gateway"] for i in policy_routes(result)] == ["192.0.2.1"]
+
+
+def test_an_interface_gateway_uplink_routes_by_interface_name() -> None:
+    """PPPoE/LTE have no gateway address; RouterOS accepts gateway=pppoe-out1."""
+    p = policy(
+        sdwan_group=mixed([{"uplink": "dsl", "weight": 1, "via": "direct"}])
+    )
+    result = sections_of(view([p], dsl=[wan("dsl", [], interface="pppoe-out1")]))
+
+    (route,) = policy_routes(result)
+    assert route.props["gateway"] == "pppoe-out1"
+    # Nothing to ping; the route goes inactive with the interface anyway.
+    assert "check-gateway" not in route.props
+    (pin,) = probe_routes(result)
+    assert pin.props["gateway"] == "pppoe-out1"
+    (probe,) = result["/tool/netwatch"].items
+    assert 'gateway="pppoe-out1"' in probe.props["down-script"]
+
+
+def test_load_balance_with_direct_members() -> None:
+    p = policy(
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 3, "via": "direct"},
+                {"uplink": "lte", "weight": 1},
+            ],
+            strategy="load_balance",
+        )
+    )
+    result = sections_of(
+        view(
+            [p],
+            fibre=[wan("fibre", [], gateway="192.0.2.1")],
+            lte=[wan("lte", ["10.255.1.1"], gateway="198.51.100.1")],
+        )
+    )
+    mangle = result["/ip/firewall/mangle"].items
+    classifiers = [i for i in mangle if i.props["action"] == "mark-connection"]
+    marks = [i.props["new-connection-mark"] for i in classifiers]
+    # The weight of a direct member counts like any other.
+    assert len(classifiers) == 4 and marks.count(marks[0]) == 3
+
+    by_table: dict[str, dict[str, int]] = {}
+    for r in policy_routes(result):
+        by_table.setdefault(r.props["routing-table"], {})[r.props["gateway"]] = r.props[
+            "distance"
+        ]
+    t0, t1 = sorted(by_table)
+    assert by_table[t0] == {"192.0.2.1": 1, "10.255.1.1": 2}
+    assert by_table[t1] == {"192.0.2.1": 2, "10.255.1.1": 1}
+
+    probes = {i.props["host"]: i.props for i in result["/tool/netwatch"].items}
+    direct = probes["1.1.1.1"]
+    assert direct["down-script"].count("routing-table=") == 2
+    assert f'gateway="192.0.2.1" routing-table="{t0}"] do={{/ip/route/set $r distance=101}}' in (
+        direct["down-script"]
+    )
+    assert "mangle" not in direct["down-script"] + direct["up-script"]
+
+
+def test_guards_still_come_first_and_cover_the_probe_targets() -> None:
+    """Breakout of 0.0.0.0/0 matches netwatch's own probe in output; marked
+    into the policy table it would measure whichever path the table prefers
+    rather than the WAN it is judging. The underlay and LAN guards are
+    unchanged."""
+    p = policy(
+        dst_prefixes=["0.0.0.0/0"],
+        sdwan_group=mixed(
+            [
+                {"uplink": "fibre", "weight": 1, "via": "direct"},
+                {"uplink": "lte", "weight": 1},
+            ]
+        ),
+    )
+    v = SitePolicyView(
+        site_name="branch-1",
+        policies=[p],
+        paths_by_tag={
+            "fibre": [wan("fibre", [], gateway="192.0.2.1")],
+            "lte": [wan("lte", ["10.255.1.1"], gateway="198.51.100.1")],
+        },
+        underlay_addresses=["203.0.113.7"],
+        lan_prefixes=["192.168.10.0/24"],
+    )
+    result = sections_of(v)
+    mangle = result["/ip/firewall/mangle"].items
+    actions = [i.props["action"] for i in mangle]
+    first_mark = next(n for n, a in enumerate(actions) if a != "accept")
+    assert all(a == "accept" for a in actions[:first_mark])
+    assert all(a != "accept" for a in actions[first_mark:])
+
+    infra_rule = next(
+        i for i in mangle[:first_mark] if i.props.get("dst-address-list", "").endswith("-infra")
+    )
+    assert infra_rule.props["chain"] == "output"
+    infra = {
+        i.props["address"]
+        for i in result["/ip/firewall/address-list"].items
+        if i.props["list"] == infra_rule.props["dst-address-list"]
+    }
+    assert infra == {"203.0.113.7", "1.1.1.1"}
+    lan_rules = [
+        i for i in mangle[:first_mark] if i.props.get("dst-address-list", "").endswith("-lan")
+    ]
+    assert {i.props["chain"] for i in lan_rules} == {"prerouting", "output"}
+
+
+def test_overlay_only_policies_render_exactly_as_before() -> None:
+    """No probe pins, no new infra entries, unchanged tags: an upgrade must not
+    rewrite a single row on a site that uses no breakout."""
+    p = policy(prefer=["mpls", "broadband"])
+    result = sections_of(
+        view_with_underlay(
+            [p],
+            ["203.0.113.7"],
+            mpls=[path("wan1", ["10.255.0.0"])],
+            broadband=[path("wan2", ["10.255.0.2"])],
+        )
+    )
+    assert probe_routes(result) == []
+    assert [i.tag for i in result["/ip/route"].items] == [
+        "sdwan:policy:voice:route:wan1",
+        "sdwan:policy:voice:route:wan2",
+    ]
+    assert [i.props["address"] for i in result["/ip/firewall/address-list"].items] == [
+        "203.0.113.7"
+    ]
+    assert {i.props["host"] for i in result["/tool/netwatch"].items} == {
+        "10.255.0.0",
+        "10.255.0.2",
+    }
+
+
+def test_a_legacy_member_without_via_is_overlay() -> None:
+    p = policy(sdwan_group=mixed([{"uplink": "fibre"}]))
+    result = sections_of(view([p], fibre=[wan("fibre", ["10.255.0.1"], gateway="192.0.2.1")]))
+    assert [i.props["gateway"] for i in policy_routes(result)] == ["10.255.0.1"]
+
+
+# -- the member schema ------------------------------------------------------
+
+
+def test_member_schema_accepts_direct_and_defaults_to_overlay() -> None:
+    from app.schemas.policy import GroupMember
+
+    assert GroupMember(uplink="wan1").via == "overlay"
+    m = GroupMember(uplink="wan1", via="direct", probe_target="1.1.1.1")
+    assert (m.via, m.probe_target) == ("direct", "1.1.1.1")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"uplink": "wan1", "via": "breakout"},
+        {"uplink": "wan1", "via": "direct", "probe_target": "not-an-ip"},
+        {"uplink": "wan1", "via": "direct", "probe_target": "192.168.1.1"},
+        {"uplink": "wan1", "via": "direct", "probe_target": "2606:4700::1111"},
+        {"uplink": "wan1", "probe_target": "1.1.1.1"},  # overlay: meaningless
+        {"uplink": "wan1", "mode": "direct"},  # extra=forbid
+    ],
+)
+def test_member_schema_rejects_bad_breakout_fields(body: dict) -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.policy import GroupMember
+
+    with pytest.raises(ValidationError):
+        GroupMember(**body)
+
+
+def test_one_uplink_may_appear_once_per_mode() -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.policy import SdwanGroupCreate
+
+    SdwanGroupCreate(
+        name="g",
+        members=[{"uplink": "fibre", "via": "direct"}, {"uplink": "fibre"}],
+    )
+    with pytest.raises(ValidationError, match="cannot appear twice"):
+        SdwanGroupCreate(
+            name="g",
+            members=[{"uplink": "fibre", "via": "direct"}, {"uplink": "fibre", "via": "direct"}],
+        )

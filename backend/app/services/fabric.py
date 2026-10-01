@@ -454,7 +454,14 @@ async def policy_view(
 
     Next hops are the far ends of this site's tunnels, not WAN gateways: policy
     traffic must ride the overlay, or steering would push it onto the internet
-    in the clear.
+    in the clear -- unless a group member asks for exactly that with
+    ``via=direct`` (local breakout). Every enabled WAN is listed, tunnels or
+    not, carrying its own ``gateway`` and ``interface``; the renderer turns
+    those into the breakout next hop (the gateway address, or the interface
+    name on a PPPoE/LTE uplink that has none) only for members that ask, and
+    still drops a tunnel-less WAN from every overlay member. Breakout traffic
+    is NATed by the uplink's existing masquerade rule (render.firewall), so
+    a ``masquerade=False`` private-transit WAN is no place for a direct member.
     """
     policies = [
         p

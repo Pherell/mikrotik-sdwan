@@ -26,11 +26,29 @@ should choose load_balance expecting a single transfer to go faster.
 Mangle rules are positional: RouterOS evaluates the chain top to bottom and the
 first match wins. Policies are therefore rendered in ``priority`` order and the
 section is marked ``ordered`` so the reconciler preserves it.
+
+**Local breakout.** A group member is either ``via=overlay`` (the default: the
+route's gateway is a tunnel's far end, so traffic rides the fabric to the hub)
+or ``via=direct``: the route's gateway is the WAN's own next hop and traffic
+leaves for the internet right here, NATed by the uplink's masquerade rule.
+That is what SaaS traffic wants -- hairpinning Microsoft 365 through a hub
+adds a continent of latency for nothing. Nothing else about the machinery
+changes: a direct path is one more route in the same policy table, ordered by
+the same distance, demoted by the same netwatch scripts, so "direct on fibre,
+then overlay via the hub" is an ordinary failover group and a direct member is
+an ordinary PCC bucket.
+
+What *does* differ is health. Pinging the WAN gateway only proves the CPE is
+alive, so a direct path is probed at an internet address instead (see
+``DEFAULT_PROBE_TARGETS``). RouterOS netwatch cannot choose a routing table,
+so the probe is forced out the right WAN by a /32 host route for the target
+in ``main`` -- which is why the target must be unique per WAN, and why it is
+also kept out of the output-chain marks by the infra guard.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from app.drivers.base import ConfigItem, ConfigSection
 from app.models.policy import Policy, SlaProfile
@@ -64,9 +82,60 @@ class PathOption:
     interface: str
     gateway: str | None
     cost: float
-    # Tunnel addresses reachable over this uplink, in fabric order. Steering
-    # points at the overlay, not at the WAN gateway, so traffic stays encrypted.
+    # Tunnel addresses reachable over this uplink, in fabric order. Overlay
+    # steering points at these, not at the WAN gateway, so traffic stays
+    # encrypted. For a direct path _paths_for replaces them with the single
+    # breakout next hop (see direct_hop).
     next_hops: list[str]
+    # The fields below are set by _paths_for on the copy it chooses, from the
+    # group member that selected the uplink. services.fabric.policy_view builds
+    # every option as overlay; the same WAN can then be chosen once per mode.
+    via: str = "overlay"
+    weight: int = 1
+    # The internet address netwatch probes for a direct path. None on overlay.
+    probe_target: str | None = None
+
+    @property
+    def direct_hop(self) -> str:
+        """Where a breakout route on this uplink points.
+
+        The WAN's gateway address when it has one. An interface-gateway uplink
+        -- PPPoE, LTE, anything point-to-point -- has no gateway address
+        (``Wan.gateway`` is None), and RouterOS accepts the interface name
+        itself as a route gateway there (``gateway=pppoe-out1``). That is also
+        the right answer on such a link: the far end can change on every
+        reconnect, and the interface cannot.
+        """
+        return self.gateway or self.interface
+
+    @property
+    def path_id(self) -> str:
+        """Distinguishes the two ways one WAN can be a path.
+
+        Overlay keeps the bare WAN name, so every tag and comment rendered
+        before breakout existed is unchanged and an upgrade rewrites no row.
+        """
+        return self.wan_name if self.via == "overlay" else f"{self.wan_name}:direct"
+
+
+# Default internet probe targets for direct paths, handed out one per WAN in
+# WAN-name order (so adding a *policy* never moves a WAN's target; adding a
+# WAN that sorts earlier can). Each is pinned out its WAN by a /32 in main --
+# see _probe_routes -- so they are deliberately well-known anycast resolvers
+# that answer ICMP from everywhere. The flip side, documented because it
+# matters: from main, the router reaches that address *only* via that WAN, so
+# a site whose clients use one of these as a DNS server will see it follow
+# the pin. Set GroupMember.probe_target to something else if that matters.
+DEFAULT_PROBE_TARGETS: tuple[str, ...] = (
+    "1.1.1.1",
+    "8.8.8.8",
+    "9.9.9.9",
+    "1.0.0.1",
+    "8.8.4.4",
+    "149.112.112.112",
+    "208.67.222.222",
+    "208.67.220.220",
+)
 
 
 @dataclass(slots=True)
@@ -106,13 +175,17 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     # drops the handshake that would have rebuilt it.
     infra = _infra_addresses(view)
     lan = _lan_addresses(view)
+    default_probes = _default_probe_targets(view)
+    # Every direct path actually rendered, across policies: their probe
+    # targets need a host route each, and a place in the infra guard.
+    direct_paths: list[PathOption] = []
 
     seen_marks: set[str] = set()
     for policy in sorted(view.policies, key=lambda p: (p.priority, p.name)):
         if not policy.enabled:
             continue
         mark = _mark(policy)
-        paths = _paths_for(policy, view)
+        paths = _paths_for(policy, view, default_probes)
         if not paths:
             # No uplink at this site carries any preferred tag. Rendering the
             # mangle rule anyway would blackhole the traffic into an empty
@@ -157,6 +230,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
 
         if mark not in seen_marks:
             seen_marks.add(mark)
+            direct_paths.extend(p for p in paths if p.via == "direct")
             if balanced:
                 tables.extend(_balanced_tables(mark, paths, view.site_name))
                 routes.extend(_balanced_routes(policy, mark, paths, view.site_name))
@@ -169,8 +243,21 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             else:
                 tables.append(_routing_table(mark, view.site_name))
                 routes.extend(_routes(policy, mark, paths, view.site_name))
-                probes.extend(_probes(policy, paths, view.site_name))
+                probes.extend(_probes(policy, paths, view.site_name, table=mark))
                 rules.extend(_fallback_rules(policy, [mark]))
+
+    # Direct paths are probed at an internet address pinned out their WAN by a
+    # host route in main (see _probe_routes). Those addresses join the infra
+    # guard: the probe is the router's own traffic, so without the guard the
+    # output copy of a policy whose match covers it -- 0.0.0.0/0 breakout, say
+    # -- would mark netwatch's ping into the policy table, and the probe would
+    # measure whichever path that table currently prefers instead of the WAN
+    # it is supposed to be judging. The peer underlay stays in the same guard,
+    # unchanged: a direct table's default route is no more a way to reach a
+    # tunnel's far end than an overlay one is.
+    if direct_paths:
+        routes.extend(_probe_routes(direct_paths, view.site_name))
+        infra = sorted(set(infra) | {p.probe_target for p in direct_paths if p.probe_target})
 
     # Guards go first, and only when steering was actually rendered. mangle is
     # positional, so an accept below the rule it guards protects nothing; and a
@@ -199,21 +286,45 @@ def _mark(policy: Policy) -> str:
     return f"sdwan-{_slug(policy.name)}"[:31]
 
 
-def _members(policy: Policy) -> list[str]:
-    """The group's uplinks, in preference order.
+def _members(policy: Policy) -> list[_Member]:
+    """The group's members, in preference order.
 
     A rule with no group steers nothing. That is deliberate: the group is where
     "which uplinks, in what order" lives now, and a rule without one has not
     said where its traffic should go.
+
+    Read defensively from the JSON column: rows written before ``via`` and
+    ``probe_target`` existed lack the keys and mean overlay, and anything that
+    is not a recognisable mode is treated as overlay too -- the schema refuses
+    it on write, so here it can only be hand-edited data, and overlay is the
+    mode that never sends traffic to the internet unencrypted.
     """
     group = policy.sdwan_group
     if group is None:
         return []
-    return [
-        str(member["uplink"])
-        for member in (group.members or [])
-        if isinstance(member, dict) and member.get("uplink")
-    ]
+    members: list[_Member] = []
+    for member in group.members or []:
+        if not isinstance(member, dict) or not member.get("uplink"):
+            continue
+        via = "direct" if member.get("via") == "direct" else "overlay"
+        probe = member.get("probe_target") if via == "direct" else None
+        members.append(
+            _Member(
+                uplink=str(member["uplink"]),
+                via=via,
+                weight=max(1, int(member.get("weight", 1) or 1)),
+                probe_target=str(probe) if probe else None,
+            )
+        )
+    return members
+
+
+@dataclass(slots=True, frozen=True)
+class _Member:
+    uplink: str
+    via: str
+    weight: int
+    probe_target: str | None
 
 
 def _sla(policy: Policy) -> SlaProfile:
@@ -222,16 +333,70 @@ def _sla(policy: Policy) -> SlaProfile:
     return (group.sla_profile if group is not None else None) or DEFAULT_SLA
 
 
-def _paths_for(policy: Policy, view: SitePolicyView) -> list[PathOption]:
-    """Uplinks present at this site, in the group's order."""
+def _paths_for(
+    policy: Policy, view: SitePolicyView, default_probes: dict[str, str] | None = None
+) -> list[PathOption]:
+    """Uplinks present at this site, in the group's order.
+
+    Each chosen path is a *copy* stamped with the member's mode and weight, so
+    one WAN can be chosen twice -- once direct, once overlay -- and the two
+    stay distinct routes, buckets and probes.
+
+    An overlay path needs a tunnel on that WAN (no tunnel, nowhere to send
+    it). A direct path needs nothing but the WAN itself: its next hop is the
+    WAN's gateway, or the interface when the uplink has no gateway address.
+    """
     chosen: list[PathOption] = []
-    seen: set[str] = set()
-    for uplink in _members(policy):
-        for path in sorted(view.paths_by_tag.get(uplink, []), key=lambda p: p.cost):
-            if path.wan_name not in seen and path.next_hops:
-                seen.add(path.wan_name)
-                chosen.append(path)
+    seen: set[tuple[str, str]] = set()
+    for member in _members(policy):
+        for path in sorted(view.paths_by_tag.get(member.uplink, []), key=lambda p: p.cost):
+            key = (path.wan_name, member.via)
+            if key in seen:
+                continue
+            if member.via == "direct":
+                target = member.probe_target or (default_probes or {}).get(path.wan_name)
+                if target is None:
+                    raise ValueError(
+                        f"policy {policy.name!r}: no internet probe target left for "
+                        f"direct uplink {path.wan_name!r} at {view.site_name!r} -- "
+                        f"more than {len(DEFAULT_PROBE_TARGETS)} WANs; set the "
+                        "group member's probe_target"
+                    )
+                seen.add(key)
+                chosen.append(
+                    replace(
+                        path,
+                        via="direct",
+                        weight=member.weight,
+                        next_hops=[path.direct_hop],
+                        probe_target=target,
+                    )
+                )
+            elif path.next_hops:
+                seen.add(key)
+                chosen.append(replace(path, via="overlay", weight=member.weight))
     return chosen
+
+
+def _default_probe_targets(view: SitePolicyView) -> dict[str, str]:
+    """WAN name -> the internet address its direct paths are probed at.
+
+    Assigned once per site, over every WAN the view knows, in name order --
+    not per policy -- so two policies breaking out of the same WAN share one
+    target and one host route, and adding a policy never moves a target.
+    Addresses an operator set explicitly on any member are taken out of the
+    pool first, so a default can never collide with them.
+    """
+    claimed = {
+        member.probe_target
+        for policy in view.policies
+        if policy.enabled
+        for member in _members(policy)
+        if member.probe_target
+    }
+    pool = [t for t in DEFAULT_PROBE_TARGETS if t not in claimed]
+    wans = sorted({p.wan_name for options in view.paths_by_tag.values() for p in options})
+    return dict(zip(wans, pool, strict=False))
 
 
 def _address_lists(policy: Policy, site_name: str) -> list[ConfigItem]:
@@ -533,24 +698,93 @@ def _routes(
     items: list[ConfigItem] = []
     for index, path in enumerate(paths):
         for hop in path.next_hops:
-            items.append(
-                ConfigItem(
-                    props={
-                        "dst-address": "0.0.0.0/0",
-                        "gateway": hop,
-                        "routing-table": mark,
-                        # Order of preference. Netwatch raises this by 100 when
-                        # the path breaches its SLA, which demotes it below the
-                        # next preference without removing it.
-                        "distance": index + 1,
-                        "check-gateway": "ping",
-                        "comment": f"{tag}:{path.wan_name}",
-                    },
-                    tag=f"{tag}:{path.wan_name}",
-                )
-            )
+            props: dict[str, object] = {
+                "dst-address": "0.0.0.0/0",
+                "gateway": hop,
+                "routing-table": mark,
+                # Order of preference. Netwatch raises this by 100 when
+                # the path breaches its SLA, which demotes it below the
+                # next preference without removing it. A direct path is
+                # ranked exactly like an overlay one: that is what lets
+                # "direct first, then via the hub" be a plain failover.
+                "distance": index + 1,
+                "comment": f"{tag}:{path.path_id}",
+            }
+            props.update(_check_gateway(path))
+            items.append(ConfigItem(props=props, tag=f"{tag}:{path.path_id}"))
     # The "any" fallback is a /routing/rule (action=lookup), not a route:
     # RouterOS 7 has no gateway-is-a-table route. See _fallback_rules.
+    return items
+
+
+def _check_gateway(path: PathOption) -> dict[str, object]:
+    """``check-gateway=ping``, where a ping can mean something.
+
+    Every overlay hop and every direct hop with a gateway address gets it, so
+    a dead next hop drops out of the table within seconds, before netwatch's
+    SLA window has even filled. A direct path through an interface gateway
+    (PPPoE, LTE) gets none: there is no address to ping, and the route already
+    goes inactive by itself when the interface goes down. Upstream failure
+    beyond either kind of next hop is what the internet probe is for.
+    """
+    if path.via == "direct" and path.gateway is None:
+        return {}
+    return {"check-gateway": "ping"}
+
+
+def _probe_routes(paths: list[PathOption], site_name: str) -> list[ConfigItem]:
+    """Pin each direct path's probe target out its own WAN, in ``main``.
+
+    RouterOS netwatch has no routing-table or interface option: its ICMP
+    probe is routed by main like any other router-originated packet. Left
+    alone it would leave by main's default route -- whichever WAN that is --
+    and a "fibre" probe could be answered over LTE. A /32 for the target via
+    the WAN's own next hop is the only way to make the probe judge the WAN it
+    is named after.
+
+    Consequences that come with that, stated rather than hidden:
+
+    - One address can only be pinned to one WAN, so targets are unique per
+      WAN (DEFAULT_PROBE_TARGETS hands them out one each); two WANs claiming
+      one target is refused here rather than rendered as ECMP.
+    - The pin applies to *all* main-table traffic to that address, not just
+      netwatch's -- pick a target the site's clients do not depend on.
+    - When the WAN's next hop itself dies the pin goes inactive and the probe
+      can leak out another WAN and still answer. That is the case
+      check-gateway (or the interface going down) already handles on the
+      policy route itself; the probe exists for failures *beyond* the next
+      hop, where the pin stays active and the probe fails as it should.
+    """
+    owner: dict[str, PathOption] = {}
+    for path in paths:
+        target = path.probe_target
+        if target is None:
+            continue
+        other = owner.get(target)
+        if other is not None and other.wan_name != path.wan_name:
+            raise ValueError(
+                f"probe target {target} is claimed by both {other.wan_name!r} and "
+                f"{path.wan_name!r} at {site_name!r}; netwatch cannot choose a "
+                "routing table, so each WAN needs its own target"
+            )
+        owner.setdefault(target, path)
+
+    tag = owner_tag("policy", site_name, "probe")
+    items: list[ConfigItem] = []
+    for target in sorted(owner):
+        path = owner[target]
+        items.append(
+            ConfigItem(
+                props={
+                    "dst-address": f"{target}/32",
+                    "gateway": path.direct_hop,
+                    "routing-table": "main",
+                    "distance": 1,
+                    "comment": f"{tag}:{path.wan_name}:{target}",
+                },
+                tag=f"{tag}:{path.wan_name}:{target}",
+            )
+        )
     return items
 
 
@@ -572,14 +806,11 @@ def _weights(policy: Policy, paths: list[PathOption]) -> list[int]:
 
     Paths are resolved from group members by tag, and a tag can match more than
     one uplink at a site, so this cannot be a straight zip: each path carries
-    its own weight from whichever member selected it.
+    its own weight from whichever member selected it (stamped by _paths_for).
+    Looking it up by WAN name instead silently gave weight 1 to every path a
+    member chose by *tag*, and cannot tell fibre-direct from fibre-overlay.
     """
-    group = policy.sdwan_group
-    by_uplink: dict[str, int] = {}
-    for member in (group.members or []) if group is not None else []:
-        if isinstance(member, dict) and member.get("uplink"):
-            by_uplink[str(member["uplink"])] = int(member.get("weight", 1) or 1)
-    return [max(1, by_uplink.get(path.wan_name, 1)) for path in paths]
+    return [max(1, path.weight) for path in paths]
 
 
 def _buckets(policy: Policy, paths: list[PathOption]) -> list[int]:
@@ -735,19 +966,15 @@ def _balanced_routes(
         for path_index, path in enumerate(paths):
             distance = 1 if path_index == table_index else 2
             for hop in path.next_hops:
-                items.append(
-                    ConfigItem(
-                        props={
-                            "dst-address": "0.0.0.0/0",
-                            "gateway": hop,
-                            "routing-table": table,
-                            "distance": distance,
-                            "check-gateway": "ping",
-                            "comment": f"{tag}:{table}:{path.wan_name}",
-                        },
-                        tag=f"{tag}:{table}:{path.wan_name}",
-                    )
-                )
+                props: dict[str, object] = {
+                    "dst-address": "0.0.0.0/0",
+                    "gateway": hop,
+                    "routing-table": table,
+                    "distance": distance,
+                    "comment": f"{tag}:{table}:{path.path_id}",
+                }
+                props.update(_check_gateway(path))
+                items.append(ConfigItem(props=props, tag=f"{tag}:{table}:{path.path_id}"))
         # "any" fallback for this bucket table is a /routing/rule, not a route
         # (RouterOS 7 has no gateway=main). See _fallback_rules.
     return items
@@ -786,6 +1013,7 @@ def _probes(
     site_name: str,
     *,
     mark: str | None = None,
+    table: str | None = None,
 ) -> list[ConfigItem]:
     """Netwatch entries carrying the group's SLA thresholds.
 
@@ -793,6 +1021,18 @@ def _probes(
     at a different distance in every table -- preferred in its own, a fallback
     in the others -- so a script that set one distance everywhere would flatten
     the balance into "everything via whichever path recovered last".
+
+    ``table`` is the failover policy's single table. Overlay scripts keep
+    their historic table-less shape (one table per policy, and rewriting every
+    deployed script for no behavioural gain is churn), but a *direct* path's
+    script must name it: its gateway is the WAN's own next hop, which main
+    also uses -- for the probe pin, and for the fabric's underlay pins -- so
+    a bare ``find gateway=`` would re-distance those too and quietly reorder
+    the tunnels' own underlay.
+
+    A direct path is probed at its internet target, not at the next hop it
+    routes through (see _probe_routes for how the probe is kept on its WAN);
+    the scripts still act on routes by the next hop, exactly as for overlay.
 
     Load balancing is health-aware through the routes alone. Every bucket table
     already holds the other members at distance 2, so demoting a breaching
@@ -809,20 +1049,22 @@ def _probes(
     items: list[ConfigItem] = []
     for index, path in enumerate(paths):
         if mark is None:
-            healthy = [(None, index + 1)]
+            scope = table if path.via == "direct" else None
+            healthy = [(scope, index + 1)]
         else:
             # Distance 1 in its own table, 2 in the rest -- exactly what
             # _balanced_routes wrote.
             healthy = [
-                (_bucket_mark(mark, table), 1 if table == index else 2)
-                for table in range(len(paths))
+                (_bucket_mark(mark, t), 1 if t == index else 2)
+                for t in range(len(paths))
             ]
-        demoted = [(table, distance + SLA_PENALTY) for table, distance in healthy]
-        comment = f"{tag}:{path.wan_name}"
+        demoted = [(t, distance + SLA_PENALTY) for t, distance in healthy]
+        comment = f"{tag}:{path.path_id}"
 
         for hop in path.next_hops:
+            host = path.probe_target if path.via == "direct" and path.probe_target else hop
             props: dict[str, object] = {
-                "host": hop,
+                "host": host,
                 "type": "icmp",
                 "interval": f"{sla.probe_interval_seconds}s",
                 "packet-count": sla.probe_count,
@@ -839,7 +1081,7 @@ def _probes(
                     hop,
                     healthy,
                     hold_down=sla.recovery_seconds,
-                    probe=(hop, comment),
+                    probe=(host, comment),
                 ),
                 "comment": comment,
             }

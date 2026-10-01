@@ -87,7 +87,10 @@ class SdwanGroup(Base, UUIDPk, Timestamps, Tenanted):
     description: Mapped[str | None] = mapped_column(Text)
 
     # [{"uplink": "fibre", "weight": 1}, ...] in preference order. "uplink" is
-    # a WAN tag or a WAN name, exactly as prefer_tags was.
+    # a WAN tag or a WAN name, exactly as prefer_tags was. Optional "via"
+    # ("overlay" default, or "direct" for local internet breakout) and, for
+    # direct members, "probe_target" -- see schemas.policy.GroupMember. JSON,
+    # so adding those keys needed no migration; old rows read as overlay.
     members: Mapped[list | None] = mapped_column(JSONCol, default=list)
 
     # failover: first healthy member wins, weights ignored.
