@@ -64,6 +64,14 @@ class Site(Base, UUIDPk, Timestamps, Tenanted):
     # --- operational -------------------------------------------------------
     rollback_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     drift_action: Mapped[str] = mapped_column(String(16), nullable=False, default="alert")
+    # What periodic uplink re-detection (services/uplinks.py) may do here:
+    # "off" -- never looked at; "report" -- differences are reported, nothing
+    # is written; "auto" -- facts of *dynamic* uplinks are kept current and a
+    # newly seen uplink is added disabled for review. Static uplinks and
+    # vanished ones are only ever reported. Nothing is ever pushed.
+    uplink_sync: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="report", server_default="report"
+    )
     tags: Mapped[dict | None] = mapped_column(JSONCol, default=dict)
 
     wans: Mapped[list[Wan]] = relationship(

@@ -35,6 +35,7 @@ from app.schemas.site import (
     SiteCreate,
     SiteRead,
     SiteUpdate,
+    UplinkCheck,
     WanCreate,
     WanRead,
     WanUpdate,
@@ -45,6 +46,7 @@ from app.services.health import read_health
 from app.services.lifecycle import decommission_site
 from app.services.ports import read_ports
 from app.services.probe import apply_probe, probe_site
+from app.services.uplinks import check_site_uplinks
 
 router = APIRouter(prefix="/sites", tags=["sites"])
 
@@ -249,6 +251,17 @@ async def probe(
         request=request,
     )
     return result
+
+
+@router.get("/{site_id}/uplinks/check", response_model=UplinkCheck)
+async def check_uplinks(
+    site_id: str, session: SessionDep, user: RequireViewer
+) -> UplinkCheck:
+    """Re-detect this site's uplinks and report how they differ from what is
+    stored. Read-only whatever the site's uplink_sync mode: what the periodic
+    sweep *would* do in auto mode is visible here without it happening."""
+    site = await _get_or_404(session, site_id, user.tenant_id)
+    return await check_site_uplinks(session, site, apply=False)
 
 
 async def _reject_duplicate_public_ip(

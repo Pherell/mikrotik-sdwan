@@ -62,6 +62,7 @@ async def export_intent(session: AsyncSession, tenant_id: str = "default") -> di
                 "local_prefixes": list(s.local_prefixes or []),
                 "rollback_timeout_seconds": s.rollback_timeout_seconds,
                 "drift_action": s.drift_action,
+                "uplink_sync": s.uplink_sync,
                 "tags": dict(s.tags or {}),
                 "wans": [
                     {
@@ -219,7 +220,7 @@ async def import_intent(
             for k in (
                 "description", "region", "role", "mgmt_host", "mgmt_port",
                 "device_kind", "username", "loopback_ip", "local_prefixes",
-                "rollback_timeout_seconds", "drift_action", "tags",
+                "rollback_timeout_seconds", "drift_action", "uplink_sync", "tags",
             )
             if k in spec
         }

@@ -23,6 +23,7 @@ from app.models.job import Job
 from app.models.site import Site
 from app.services.drift import check_all
 from app.services.reconcile import apply_site
+from app.services.uplinks import sweep_uplinks
 from app.telemetry.poller import poll_all
 
 log = logging.getLogger(__name__)
@@ -131,6 +132,28 @@ async def telemetry_poll(ctx: dict[str, Any]) -> dict[str, int]:
     return {"samples": written}
 
 
+async def uplink_sweep(ctx: dict[str, Any]) -> dict[str, int]:
+    """Re-detect uplinks on every reachable site whose uplink_sync is not off.
+
+    Every five minutes: a PPPoE reconnect or a moved DHCP lease breaks every
+    tunnel dialled to the old address, and an hour (the drift sweep's pace)
+    is too long to leave that unnoticed. It is cheap -- a handful of reads
+    per site -- and writes only in ``auto`` mode, only facts of dynamic
+    uplinks, and never pushes; see services/uplinks.py. One failing site is
+    counted and skipped, not allowed to stop the sweep.
+    """
+    async with SessionLocal() as session:
+        counts = await sweep_uplinks(session)
+        await session.commit()
+
+    if counts["changed"] or counts["failed"]:
+        log.info(
+            "uplink sweep: %d checked, %d with changes, %d facts written, %d failed",
+            counts["checked"], counts["changed"], counts["applied"], counts["failed"],
+        )
+    return counts
+
+
 async def startup(ctx: dict[str, Any]) -> None:
     log.info("sdwan worker starting")
     await ctx["redis"].enqueue_job("telemetry_poll")
@@ -144,7 +167,7 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [drift_sweep, telemetry_poll, run_scheduled_applies]
+    functions: list[Any] = [drift_sweep, telemetry_poll, run_scheduled_applies, uplink_sweep]
     cron_jobs = [
         # Offset off the hour so the sweep does not collide with whatever else
         # a fleet runs at :00.
@@ -153,6 +176,11 @@ class WorkerSettings:
         # the half-hour, and this is cheap -- one indexed query when nothing
         # is due, which is nearly always.
         cron(run_scheduled_applies, second=0, run_at_startup=True),
+        # Every five minutes, offset to :03/:08/:13/... so it lands neither on
+        # the :00 pile-up nor on the drift sweep at :17 (an offset of 2 would:
+        # 17 = 2 mod 5). Second 30 keeps it clear of the every-minute
+        # scheduled-apply tick at second 0.
+        cron(uplink_sweep, minute=set(range(3, 60, 5)), second=30, run_at_startup=False),
     ]
     on_startup = startup
     on_shutdown = shutdown

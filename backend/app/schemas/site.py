@@ -22,6 +22,15 @@ def _valid_ip(v: str | None) -> str | None:
     return v
 
 
+UPLINK_SYNC_MODES = ("off", "report", "auto")
+
+
+def _uplink_sync(v: str) -> str:
+    if v not in UPLINK_SYNC_MODES:
+        raise ValueError("uplink_sync must be 'off', 'report' or 'auto'")
+    return v
+
+
 class WanBase(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     interface: str = Field(min_length=1, max_length=64)
@@ -39,7 +48,10 @@ class WanBase(BaseModel):
     # NAT traffic leaving on this uplink. True for an internet connection;
     # false for private transit, where NAT would break the far end.
     masquerade: bool = True
-    tags: dict[str, str] = Field(default_factory=dict)
+    # Values may be booleans as well as strings: uplink re-detection marks an
+    # uplink it added on its own with pending_review=true, and a str-only
+    # schema would refuse to read that row back.
+    tags: dict[str, str | bool] = Field(default_factory=dict)
 
     _check_public_ip = field_validator("public_ip")(_valid_ip)
     _check_gateway = field_validator("gateway")(_valid_ip)
@@ -64,7 +76,7 @@ class WanUpdate(BaseModel):
     cost: float | None = None
     enabled: bool | None = None
     masquerade: bool | None = None
-    tags: dict[str, str] | None = None
+    tags: dict[str, str | bool] | None = None
 
 
 class WanRead(WanBase):
@@ -102,6 +114,8 @@ class SiteBase(BaseModel):
     local_prefixes: list[str] = Field(default_factory=list)
     rollback_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
     drift_action: str = "alert"
+    # What the periodic uplink re-detection may do: see services/uplinks.py.
+    uplink_sync: str = "report"
     tags: dict[str, str] = Field(default_factory=dict)
 
     _check_loopback = field_validator("loopback_ip")(_valid_ip)
@@ -119,6 +133,11 @@ class SiteBase(BaseModel):
         if v not in {"alert", "auto-remediate"}:
             raise ValueError("drift_action must be 'alert' or 'auto-remediate'")
         return v
+
+    @field_validator("uplink_sync")
+    @classmethod
+    def _check_uplink_sync(cls, v: str) -> str:
+        return _uplink_sync(v)
 
 
 class SiteCreate(SiteBase):
@@ -145,6 +164,7 @@ class SiteUpdate(BaseModel):
     local_prefixes: list[str] | None = None
     rollback_timeout_seconds: int | None = Field(default=None, ge=30, le=3600)
     drift_action: str | None = None
+    uplink_sync: str | None = None
     tags: dict[str, str] | None = None
     # Set either to null to forget the pinned identity and re-learn it. Do this
     # only when you know the device was legitimately rebuilt or re-keyed.
@@ -163,6 +183,11 @@ class SiteUpdate(BaseModel):
         if v is not None and v not in {"alert", "auto-remediate"}:
             raise ValueError("drift_action must be 'alert' or 'auto-remediate'")
         return v
+
+    @field_validator("uplink_sync")
+    @classmethod
+    def _check_uplink_sync_update(cls, v: str | None) -> str | None:
+        return None if v is None else _uplink_sync(v)
 
 
 class SiteRead(SiteBase):
@@ -237,5 +262,50 @@ class ProbeResult(BaseModel):
     # Interfaces that carried an uplink signal but look like a LAN (bridged and
     # serving DHCP), with the reason they were not offered.
     lan_interfaces: list[InterfaceNote] = Field(default_factory=list)
+    # Suggested uplinks that are down right now (kept, not dropped), and
+    # interfaces deliberately not offered because they are tunnels or the
+    # controller's own -- each with the reason.
+    uplink_notes: list[InterfaceNote] = Field(default_factory=list)
     # Uplinks already on this site whose stored facts the device contradicts.
     uplink_conflicts: list[UplinkConflict] = Field(default_factory=list)
+
+
+class UplinkChange(BaseModel):
+    """One difference between the uplinks stored for a site and what the
+    device shows now.
+
+    ``kind`` is one of:
+
+    * ``changed`` -- a stored uplink's fact (``field``) differs from the
+      device. ``applied`` says whether re-detection wrote the new value; it
+      only ever does for a dynamic uplink in ``auto`` mode.
+    * ``new`` -- the device has an uplink the site does not. In ``auto`` it is
+      added disabled and tagged pending_review; it is never enabled for you.
+    * ``vanished`` -- a stored uplink the device no longer shows at all.
+      Reported, never deleted: links and policies hang off it.
+    * ``down`` -- the uplink is still there but its interface or default
+      route is down. Informational.
+    """
+
+    kind: str
+    interface: str
+    wan_id: str | None = None
+    wan_name: str | None = None
+    field: str | None = None
+    stored: str | None = None
+    observed: str | None = None
+    applied: bool = False
+    note: str | None = None
+
+
+class UplinkCheck(BaseModel):
+    """Result of one uplink re-detection pass for a site."""
+
+    site_id: str
+    mode: str
+    reachable: bool
+    error: str | None = None
+    changes: list[UplinkChange] = Field(default_factory=list)
+    # True when this pass wrote anything: the site's rendered config is now
+    # out of date with the device until someone applies.
+    needs_apply: bool = False
