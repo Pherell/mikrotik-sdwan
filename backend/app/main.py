@@ -11,11 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
+from app.api.v1 import alerts as alerts_api
 from app.api.v1 import auth as auth_api
 from app.api.v1 import enrollment as enrollment_api
 from app.api.v1 import fabrics as fabrics_api
 from app.api.v1 import jobs as jobs_api
 from app.api.v1 import logs as logs_api
+from app.api.v1 import metrics as metrics_api
 from app.api.v1 import ops as ops_api
 from app.api.v1 import policies as policies_api
 from app.api.v1 import sites as sites_api
@@ -130,6 +132,11 @@ def create_app() -> FastAPI:
     app.include_router(tokens_api.router, prefix="/api/v1")
     app.include_router(telemetry_api.router, prefix="/api/v1")
     app.include_router(enrollment_api.router, prefix="/api/v1")
+    app.include_router(alerts_api.router, prefix="/api/v1")
+    # At the root, not under /api/v1: /metrics is where every Prometheus
+    # scrape config looks by default, and it is not part of the versioned
+    # API contract. Behind SDWAN_METRICS_TOKEN; 404 when that is unset.
+    app.include_router(metrics_api.router)
     return app
 
 

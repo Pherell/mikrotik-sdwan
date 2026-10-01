@@ -30,6 +30,7 @@ from app.models.enums import JobKind, JobState, SiteStatus
 from app.models.job import Job
 from app.models.site import Site
 from app.reconcile.plan import build_plan
+from app.services import alerts
 from app.services.fabric import render_device
 from app.services.reconcile import apply_site, new_job
 
@@ -54,6 +55,7 @@ async def check_site(session: AsyncSession, site: Site) -> Job:
         job.finished_at = datetime.now(UTC)
         site.status = SiteStatus.unreachable
         site.last_error = str(exc)
+        await alerts.observe_reachability(session, site, reachable=False, error=str(exc))
         await session.flush()
         return job
     except Exception as exc:
@@ -78,6 +80,9 @@ async def check_site(session: AsyncSession, site: Site) -> Job:
     job.diff = {"text": plan.render()}
     job.finished_at = datetime.now(UTC)
     site.last_seen_at = datetime.now(UTC).isoformat()
+    # One call for both outcomes: it records "clean" too, so the next drift
+    # after a clean check is an edge and alerts again.
+    await alerts.observe_drift(session, site, drifted=not plan.empty, counts=plan.counts)
 
     if plan.empty:
         job.state = JobState.succeeded
