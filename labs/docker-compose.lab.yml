@@ -1,0 +1,33 @@
+# Lab overlay: the controller attached to containerlab's management network.
+#
+#   sudo clab deploy -t labs/hub-spoke.clab.yml      # creates sdwan-mgmt first
+#   docker compose -f docker-compose.yml -f labs/docker-compose.lab.yml up -d --build --wait
+#
+# The CHRs' management addresses (172.30.30.0/24) live on the docker network
+# containerlab creates, `sdwan-mgmt`. Docker isolates bridge networks from each
+# other, so an api container on the compose default network cannot reach them;
+# joining it to the lab network is the simplest fix that needs no host routing.
+# The network is `external`, so containerlab must have deployed before this
+# comes up -- and compose must be torn down before `clab destroy`.
+#
+# The API is published on 127.0.0.1:8000 for labs/verify_fabric.py. Caddy and
+# the UI are left out: the lab verifies the controller, not the edge.
+services:
+  api:
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks: [default, sdwan-mgmt]
+
+  # The worker runs scheduled device work (health, drift) and opens the same
+  # device connections, so it needs the same reachability.
+  worker:
+    networks: [default, sdwan-mgmt]
+
+  ui:
+    profiles: ["never"]
+  caddy:
+    profiles: ["never"]
+
+networks:
+  sdwan-mgmt:
+    external: true
