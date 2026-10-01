@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from ipaddress import ip_network
+from ipaddress import ip_address, ip_network
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -112,6 +113,59 @@ class GroupMember(BaseModel):
     # someone sets it to something other than 1 under failover, where the
     # order of the uplinks is the whole preference.
     weight: int = Field(default=1, ge=1, le=100)
+    # How traffic leaves over this uplink.
+    #
+    # overlay (the default, and the only behaviour before this field existed):
+    #   through the fabric tunnels this WAN carries, to the hub or peer --
+    #   encrypted, and subject to whatever the far end does with it.
+    # direct: local internet breakout. Straight out this WAN's own gateway and
+    #   NATed by the uplink's masquerade rule, never touching the hub. This is
+    #   what SaaS traffic (Microsoft 365, video calls) wants: hairpinning it
+    #   through a hub only adds latency and burns the hub's bandwidth.
+    #
+    # A group may mix the two -- "direct on fibre first, then overlay via the
+    # hub" is the usual shape -- and the same uplink may appear once per mode.
+    # Stored inside the members JSON column, so this needs no migration; rows
+    # written before it existed have no key and read back as overlay.
+    via: Literal["overlay", "direct"] = "overlay"
+    # The internet address netwatch probes to judge a *direct* path. Optional:
+    # each WAN gets a default from app.render.policy.DEFAULT_PROBE_TARGETS.
+    # It must be distinct per WAN at a site, because RouterOS netwatch cannot
+    # pick a routing table: the probe is pinned out its WAN by a /32 host route
+    # in main, and one address can only be pinned to one WAN. A clash is
+    # refused at render time. Meaningless for overlay members, which probe the
+    # tunnel's far end, so it is rejected there rather than silently ignored.
+    probe_target: str | None = None
+
+    @field_validator("probe_target")
+    @classmethod
+    def _probe_is_a_host(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            address = ip_address(v)
+        except ValueError as exc:
+            raise ValueError(f"{v!r} is not an IP address") from exc
+        if address.version != 4:
+            # Every policy route this renders is IPv4 (0.0.0.0/0); an IPv6
+            # probe would be pinned by a route in a family nothing else uses.
+            raise ValueError("probe_target must be an IPv4 address")
+        if address.is_private or address.is_loopback or address.is_unspecified:
+            # The point is to prove the *internet* is reachable out this WAN. A
+            # private target proves only the CPE is up -- the weak check this
+            # field exists to replace -- and pinning one could steal a LAN or
+            # overlay address into main.
+            raise ValueError("probe_target must be a public internet address")
+        return str(address)
+
+    @model_validator(mode="after")
+    def _probe_only_for_direct(self) -> GroupMember:
+        if self.probe_target is not None and self.via != "direct":
+            raise ValueError(
+                "probe_target only applies to via='direct'. An overlay member "
+                "is probed at the tunnel's far end."
+            )
+        return self
 
 
 class SdwanGroupBase(BaseModel):
@@ -128,7 +182,10 @@ class SdwanGroupBase(BaseModel):
             raise ValueError("a group needs at least one uplink")
         if len(v) > MAX_MEMBERS:
             raise ValueError(f"a group holds at most {MAX_MEMBERS} uplinks")
-        names = [m.uplink for m in v]
+        # Unique per (uplink, via), not per uplink: "fibre direct, then fibre
+        # through the hub" is two different paths over one wire, and a
+        # legitimate failover order. The same pair twice is still nonsense.
+        names = [(m.uplink, m.via) for m in v]
         if len(names) != len(set(names)):
             raise ValueError("the same uplink cannot appear twice in a group")
         return v

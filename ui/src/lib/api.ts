@@ -351,6 +351,12 @@ export interface GroupMember {
   // Only meaningful under load_balance, where it is a share of the
   // *connections*, not of the bandwidth.
   weight: number;
+  // "overlay" (default): through the fabric tunnels. "direct": local internet
+  // breakout out this WAN's own gateway. Optional so existing callers that
+  // omit it keep meaning overlay.
+  via?: "overlay" | "direct";
+  // Internet address probed for a direct member; null = per-WAN default.
+  probe_target?: string | null;
 }
 
 export type GroupStrategy = "failover" | "load_balance";

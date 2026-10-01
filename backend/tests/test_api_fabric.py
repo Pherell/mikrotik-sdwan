@@ -876,6 +876,68 @@ async def test_policy_steers_onto_the_preferred_uplink(api) -> None:
     assert "distance=1" in probes["10.255.0.0"]["up-script"]
 
 
+async def test_local_breakout_applies_and_converges(api) -> None:
+    """Direct on wan1 first, then wan2 through the hub. The spoke's WANs were
+    entered without a gateway address, so the breakout routes by interface."""
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _dual_homed_fabric(client, headers)
+
+    group = await client.post(
+        "/sdwan-groups",
+        headers=headers,
+        json={
+            "name": "m365",
+            "members": [
+                {"uplink": "mpls", "via": "direct"},
+                {"uplink": "broadband"},
+            ],
+        },
+    )
+    assert group.status_code == 201, group.text
+    assert [m["via"] for m in group.json()["members"]] == ["direct", "overlay"]
+
+    resp = await client.post(
+        "/policies",
+        headers=headers,
+        json={
+            "name": "m365",
+            "dst_prefixes": ["52.96.0.0/14"],
+            "sdwan_group_id": group.json()["id"],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    job = await client.post(
+        f"/sites/{sites['spoke1']}/apply", headers=headers, json={"confirm": True}
+    )
+    assert job.json()["state"] == "succeeded", job.text
+
+    spoke = routers["203.0.113.1"]
+    table = {
+        r["gateway"]: r["distance"]
+        for r in spoke.rows("ip/route")
+        if r.get("routing-table") == "sdwan-m365"
+    }
+    assert table == {"ether1": "1", "10.255.0.2": "2"}
+    pins = [r for r in spoke.rows("ip/route") if r.get("dst-address") == "1.1.1.1/32"]
+    assert [r["gateway"] for r in pins] == ["ether1"]
+    assert "1.1.1.1" in {p["host"] for p in spoke.rows("tool/netwatch")}
+
+    plan = (await client.post(f"/sites/{sites['spoke1']}/plan", headers=headers)).json()
+    assert plan["empty"] is True, plan["text"]
+
+
+async def test_an_unknown_member_path_type_is_refused(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    resp = await client.post(
+        "/sdwan-groups",
+        headers=headers,
+        json={"name": "bad", "members": [{"uplink": "mpls", "via": "tunnel"}]},
+    )
+    assert resp.status_code == 422
+
+
 async def test_policy_apply_converges(api) -> None:
     client, _, _ = api
     headers = await _auth(client)
