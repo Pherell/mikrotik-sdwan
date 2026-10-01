@@ -676,27 +676,135 @@ def test_the_sla_script_demotes_per_table_not_globally() -> None:
     assert f"distance={2 + SLA_PENALTY}}}" in down
 
 
-def test_load_balance_health_scripts_gate_new_connections_on_the_pcc_rules() -> None:
-    """A degraded member should stop receiving *new* connections during the
-    detection window, not merely have its routes demoted -- otherwise PCC keeps
-    hashing fresh flows onto a link that is already failing. The down-script
-    disables that member's mark-connection rules; the up-script re-enables them,
-    and only after the routes are restored."""
+def test_load_balance_health_scripts_never_touch_the_classifiers() -> None:
+    """Disabling a member's classifiers sent its new connections out the main
+    table -- the raw WAN, NATed -- and re-enabling them re-hashed those live
+    flows back into the tunnel. Health now moves buckets by route distance
+    alone; each bucket table already falls back to the other members."""
     p = policy(sdwan_group=balanced(["fibre", "lte"], [3, 1]))
     result = sections_of(
         view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
     )
-    fibre = next(i for i in result["/tool/netwatch"].items if i.props["host"] == "10.255.0.1")
+    for probe in result["/tool/netwatch"].items:
+        for script in ("up-script", "down-script"):
+            assert "mangle" not in str(probe.props[script])
 
-    down = str(fibre.props["down-script"])
+
+def test_classifiers_only_classify_new_unmarked_connections() -> None:
+    """A classifier that re-hashed every packet re-pinned live flows -- and
+    their replies -- whenever anything above it changed."""
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [1, 1]))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+    classifiers = [
+        i for i in result["/ip/firewall/mangle"].items
+        if i.props["action"] == "mark-connection"
+    ]
+    assert classifiers
+    for item in classifiers:
+        assert item.props["connection-state"] == "new"
+        assert item.props["connection-mark"] == "no-mark"
+        # Re-asserted on apply, so a bucket the old scripts left off returns.
+        assert item.props["disabled"] is False
+        assert "disabled" in item.enforce
+
+
+def test_recovery_waits_out_the_hold_down_before_re_preferring() -> None:
+    sla = SlaProfile(
+        name="voice",
+        loss_percent=2,
+        latency_ms=120,
+        probe_interval_seconds=5,
+        probe_count=10,
+        recovery_seconds=45,
+    )
+    p = policy(sdwan_group=balanced(["fibre", "lte"], [1, 1], sla))
+    result = sections_of(
+        view([p], fibre=[path("fibre", ["10.255.0.1"])], lte=[path("lte", ["10.255.1.1"])])
+    )
+    fibre = next(i for i in result["/tool/netwatch"].items if i.props["host"] == "10.255.0.1")
     up = str(fibre.props["up-script"])
-    assert "/ip/firewall/mangle/find" in down
-    assert "disabled=yes" in down
-    assert "disabled=no" in up
-    # down: stop new connections before demoting routes. up: restore routes
-    # before re-opening to new connections.
-    assert down.index("mangle") < down.index("/ip/route")
-    assert up.index("/ip/route") < up.index("mangle")
+    down = str(fibre.props["down-script"])
+
+    assert up.startswith(":delay 45s; ")
+    # Re-checks its own probe and restores only if still up.
+    assert 'host="10.255.0.1"' in up and f'comment="{fibre.tag}"' in up
+    assert 'status] = "up") do={' in up
+    assert up.index(":delay") < up.index("/ip/route/set")
+    # Down is immediate.
+    assert ":delay" not in down
+    assert "\n" not in up
+
+
+def test_zero_recovery_restores_immediately() -> None:
+    sla = SlaProfile(
+        name="fast",
+        loss_percent=20,
+        latency_ms=300,
+        probe_interval_seconds=10,
+        probe_count=10,
+        recovery_seconds=0,
+    )
+    s = sections_of(view([policy(sla_profile=sla)], mpls=[path("wan1", ["10.255.0.0"])]))
+    up = str(s["/tool/netwatch"].items[0].props["up-script"])
+    assert ":delay" not in up
+    assert up.startswith(":foreach")
+
+
+# -- the LAN guard ----------------------------------------------------------
+#
+# A policy table holds only a default route into the overlay. Anything marked
+# into it while headed for one of the site's own segments went into a tunnel:
+# inter-VLAN traffic, and -- under PCC -- the replies of every balanced flow.
+
+
+def lan_view(policies: list[Policy], lan: list[str], **paths) -> SitePolicyView:
+    return SitePolicyView(
+        site_name="branch-1", policies=policies, paths_by_tag=paths, lan_prefixes=lan
+    )
+
+
+def test_traffic_to_a_local_segment_is_accepted_before_any_mark() -> None:
+    p = policy(src_prefixes=["192.168.10.0/24"], sdwan_group=balanced(["fibre", "lte"], [1, 1]))
+    s = sections_of(
+        lan_view(
+            [p],
+            ["192.168.10.0/24", "192.168.20.0/24"],
+            fibre=[path("fibre", ["10.255.0.1"])],
+            lte=[path("lte", ["10.255.1.1"])],
+        )
+    )
+    mangle = s["/ip/firewall/mangle"].items
+    guards = [
+        (n, i.props) for n, i in enumerate(mangle)
+        if i.props.get("dst-address-list") == "sdwan-branch-1-lan"
+    ]
+    assert {g["chain"] for _, g in guards} == {"prerouting", "output"}
+    assert all(g["action"] == "accept" for _, g in guards)
+    first_mark = min(n for n, i in enumerate(mangle) if i.props["action"] != "accept")
+    assert max(n for n, _ in guards) < first_mark
+
+    lan = {
+        i.props["address"] for i in s["/ip/firewall/address-list"].items
+        if i.props["list"] == "sdwan-branch-1-lan"
+    }
+    assert lan == {"192.168.10.0/24", "192.168.20.0/24"}
+
+
+def test_no_lan_prefixes_renders_no_lan_guard() -> None:
+    """An empty list would match nothing, but the rule should not exist either."""
+    s = sections_of(view([policy()], mpls=[path("wan1", ["10.255.0.0"])]))
+    assert not any(
+        i.props.get("dst-address-list", "").endswith("-lan")
+        for i in s["/ip/firewall/mangle"].items
+    )
+
+
+def test_lan_guard_is_swept_with_the_last_policy() -> None:
+    s = sections_of(lan_view([], ["192.168.10.0/24"], mpls=[path("wan1", ["10.255.0.0"])]))
+    assert s["/ip/firewall/mangle"].items == []
+    assert s["/ip/firewall/address-list"].items == []
 
 
 def test_failover_marks_traffic_passing_through_and_the_routers_own() -> None:

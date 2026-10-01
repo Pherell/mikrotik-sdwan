@@ -78,6 +78,9 @@ class SitePolicyView:
     # Addresses this router must always reach natively, never through a policy
     # table: the far end of every tunnel it builds. See _infra_rule.
     underlay_addresses: list[str] = field(default_factory=list)
+    # This site's own LAN segments. Traffic *to* them must resolve in main --
+    # see _lan_rules for why a policy table cannot reach them.
+    lan_prefixes: list[str] = field(default_factory=list)
 
 
 def render_policies(view: SitePolicyView) -> list[ConfigSection]:
@@ -102,6 +105,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     # the session drops, check-gateway takes the route out, and a strict table
     # drops the handshake that would have rebuilt it.
     infra = _infra_addresses(view)
+    lan = _lan_addresses(view)
 
     seen_marks: set[str] = set()
     for policy in sorted(view.policies, key=lambda p: (p.priority, p.name)):
@@ -156,7 +160,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             if balanced:
                 tables.extend(_balanced_tables(mark, paths, view.site_name))
                 routes.extend(_balanced_routes(policy, mark, paths, view.site_name))
-                probes.extend(_probes(policy, paths, view.site_name, mark=mark, buckets=buckets))
+                probes.extend(_probes(policy, paths, view.site_name, mark=mark))
                 rules.extend(
                     _fallback_rules(
                         policy, [_bucket_mark(mark, i) for i in range(len(paths))]
@@ -177,6 +181,9 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     # same for the peer underlay addresses.
     if mangle:
         guards: list[ConfigItem] = [_local_bypass_rule(view)]
+        if lan:
+            lists.extend(_lan_list(view, lan))
+            guards.extend(_lan_rules(view))
         if infra:
             lists.extend(_infra_list(view, infra))
             guards.append(_infra_rule(view))
@@ -431,6 +438,64 @@ def _infra_rule(view: SitePolicyView) -> ConfigItem:
     )
 
 
+def _lan_list_name(view: SitePolicyView) -> str:
+    return f"sdwan-{_slug(view.site_name)}-lan"[:63]
+
+
+def _lan_addresses(view: SitePolicyView) -> list[str]:
+    return sorted(a for a in set(view.lan_prefixes) if a)
+
+
+def _lan_list(view: SitePolicyView, prefixes: list[str]) -> list[ConfigItem]:
+    name = _lan_list_name(view)
+    tag = owner_tag("policy", view.site_name, "lan")
+    return [
+        ConfigItem(props={"list": name, "address": prefix}, tag=f"{tag}:{prefix}")
+        for prefix in prefixes
+    ]
+
+
+def _lan_rules(view: SitePolicyView) -> list[ConfigItem]:
+    """Accept, before any mark, everything addressed to this site's own LAN.
+
+    A policy table holds one thing: a default route into the overlay. It has
+    none of main's connected routes, so a packet marked into it while headed
+    for a local segment is sent into a tunnel. Two kinds of traffic were
+    getting caught that way:
+
+    - inter-VLAN traffic whose source a policy matches (``src=LAN`` with a
+      broad or empty destination), and
+    - *replies* coming back from the overlay. The PCC routing pass matches on
+      ``connection-mark`` alone, and a connection's mark is on its replies too,
+      so the return leg of every balanced flow was routed straight back into
+      the bucket table's tunnel instead of to the client.
+
+    Operators were working around it with an extra high-priority policy per LAN
+    segment; this guard makes that unnecessary. ``dst-address-type=local``
+    (_local_bypass_rule) does not cover it: it matches the router's own
+    addresses, not the subnets behind them.
+
+    Rendered in output too, so the router's own traffic to its LAN is not
+    captured by the output copy of a failover rule.
+    """
+    tag = owner_tag("policy", view.site_name, "lan_dst", "rule")
+    items: list[ConfigItem] = []
+    for chain in ("prerouting", "output"):
+        chain_tag = tag if chain == "prerouting" else f"{tag}:output"
+        items.append(
+            ConfigItem(
+                props={
+                    "chain": chain,
+                    "action": "accept",
+                    "dst-address-list": _lan_list_name(view),
+                    "comment": chain_tag,
+                },
+                tag=chain_tag,
+            )
+        )
+    return items
+
+
 def _local_bypass_rule(view: SitePolicyView) -> ConfigItem:
     """Accept, in prerouting, anything destined to one of this router's own
     addresses -- its LAN gateway, a local service.
@@ -567,6 +632,14 @@ def _pcc_rules(
         props.update(
             {
                 "chain": "prerouting",
+                # Classify a connection once, on its first packet. Without
+                # these the classifier re-hashed every packet of every flow,
+                # replies included, so anything that toggled a classifier
+                # (or another rule marking first) re-pinned live connections
+                # to a different bucket mid-flow -- they broke, and it showed
+                # up as the group flapping.
+                "connection-state": "new",
+                "connection-mark": "no-mark",
                 "action": "mark-connection",
                 "new-connection-mark": _conn_mark(mark, path_index),
                 # both-addresses so a client's connections to different servers
@@ -577,11 +650,19 @@ def _pcc_rules(
                 # the remaining classifiers still need to see unmatched
                 # connections.
                 "passthrough": True,
+                # Asserted, not left to runtime: an earlier version had the
+                # SLA scripts disable classifiers, and a device upgraded while
+                # a link was down would otherwise keep that bucket off forever.
+                "disabled": False,
                 "comment": owner_tag("policy", policy.name, f"pcc-{position}"),
             }
         )
         items.append(
-            ConfigItem(props=props, tag=owner_tag("policy", policy.name, f"pcc-{position}"))
+            ConfigItem(
+                props=props,
+                tag=owner_tag("policy", policy.name, f"pcc-{position}"),
+                enforce=("disabled",),
+            )
         )
 
     for path_index in sorted(set(buckets)):
@@ -705,7 +786,6 @@ def _probes(
     site_name: str,
     *,
     mark: str | None = None,
-    buckets: list[int] | None = None,
 ) -> list[ConfigItem]:
     """Netwatch entries carrying the group's SLA thresholds.
 
@@ -714,11 +794,15 @@ def _probes(
     in the others -- so a script that set one distance everywhere would flatten
     the balance into "everything via whichever path recovered last".
 
-    ``buckets`` is the PCC bucket assignment list from _buckets; when provided
-    (always alongside ``mark``), the down-script also disables the PCC
-    mark-connection rules for this path's bucket positions so that new
-    connections stop being hashed to a degraded link during the detection
-    window. The up-script re-enables them after route distances are restored.
+    Load balancing is health-aware through the routes alone. Every bucket table
+    already holds the other members at distance 2, so demoting a breaching
+    member moves its buckets onto the survivors -- still inside the overlay.
+    An earlier version also disabled the member's PCC classifiers, which did
+    the opposite of what it meant to: an unclassified connection carries no
+    routing mark, so it left by the *main* table, out the raw WAN, NATed. Then
+    the classifier came back on and re-hashed those live flows into the
+    tunnel, breaking them. That round trip is a large part of what looked like
+    the group flapping.
     """
     sla = _sla(policy)
     tag = owner_tag("policy", policy.name, "sla")
@@ -734,14 +818,7 @@ def _probes(
                 for table in range(len(paths))
             ]
         demoted = [(table, distance + SLA_PENALTY) for table, distance in healthy]
-
-        # PCC bucket positions owned by this path. Only set in load_balance
-        # mode; empty list in failover so _health_script skips mangle commands.
-        pcc_positions = (
-            [pos for pos, idx in enumerate(buckets) if idx == index]
-            if buckets is not None
-            else []
-        )
+        comment = f"{tag}:{path.wan_name}"
 
         for hop in path.next_hops:
             props: dict[str, object] = {
@@ -756,46 +833,43 @@ def _probes(
                 "thr-avg": f"{sla.latency_ms}ms",
                 "disabled": False,
                 # Demote rather than delete: the route stays in the table so the
-                # path can be re-preferred the moment it recovers.
-                # down: stop new connections first, then demote routes.
-                # up: restore routes first, then re-open to new connections.
-                "down-script": _health_script(
-                    hop, demoted, policy.name, pcc_positions, enable=False
-                ),
+                # path can be re-preferred once it has recovered.
+                "down-script": _health_script(hop, demoted),
                 "up-script": _health_script(
-                    hop, healthy, policy.name, pcc_positions, enable=True
+                    hop,
+                    healthy,
+                    hold_down=sla.recovery_seconds,
+                    probe=(hop, comment),
                 ),
-                "comment": f"{tag}:{path.wan_name}",
+                "comment": comment,
             }
             if sla.jitter_ms:
                 props["thr-jitter"] = f"{sla.jitter_ms}ms"
-            items.append(ConfigItem(props=props, tag=f"{tag}:{path.wan_name}"))
+            items.append(ConfigItem(props=props, tag=comment))
     return items
 
 
 def _health_script(
     gateway: str,
     targets: list[tuple[str | None, int]],
-    policy_name: str,
-    pcc_positions: list[int],
     *,
-    enable: bool,
+    hold_down: int = 0,
+    probe: tuple[str, str] | None = None,
 ) -> str:
-    """RouterOS script combining route distance changes with PCC mangle control.
+    """RouterOS script setting route distances.
 
     ``targets`` is (routing table, distance) pairs; a table of None means every
     table, which is the failover case where there is only one.
 
-    ``pcc_positions`` is the list of PCC bucket positions owned by this path.
-    When non-empty (load_balance mode), the script also enables or disables the
-    corresponding mark-connection mangle rules so new connections are not hashed
-    to a degraded link during the detection window.
-
-    Ordering is deliberate:
-      down (enable=False): disable PCC rules first, then demote routes.
-        New connections stop arriving before existing ones are rerouted.
-      up (enable=True): restore route distances first, then re-enable PCC.
-        The path is healthy before new connections are directed to it.
+    ``hold_down`` is the SLA profile's ``recovery_seconds``, used on the
+    up-script only. Down is acted on at once; up must *stay* up that long
+    before the path is re-preferred. Without it a link that breaches on
+    latency recovers the moment traffic leaves it, takes the traffic back,
+    breaches again -- and under load_balance, where a member's latency is a
+    function of the load PCC puts on it, that loop never settles. The script
+    waits, then re-reads its own netwatch entry (``probe`` = host, comment)
+    and restores only if it is still up; a link that dropped again during the
+    wait stays demoted, and its next up event starts a fresh hold-down.
 
     Distances are absolute, not relative. An earlier version added a penalty to
     the current distance, which compounds: two down events in a row demote the
@@ -805,29 +879,24 @@ def _health_script(
     Kept to one line: RouterOS stores scripts verbatim, and a multi-line value
     round-trips with whitespace changes that would diff dirty forever.
     """
-    route_clauses = []
+    clauses = []
     for table, distance in targets:
         where = f'gateway="{gateway}"'
         if table is not None:
             where += f' routing-table="{table}"'
-        route_clauses.append(
+        clauses.append(
             f":foreach r in=[/ip/route/find {where}] "
             f"do={{/ip/route/set $r distance={distance}}}"
         )
-
-    mangle_clauses = []
-    disabled_val = "no" if enable else "yes"
-    for pos in pcc_positions:
-        comment = owner_tag("policy", policy_name, f"pcc-{pos}")
-        mangle_clauses.append(
-            f":foreach m in=[/ip/firewall/mangle/find comment=\"{comment}\"] "
-            f"do={{/ip/firewall/mangle/set $m disabled={disabled_val}}}"
-        )
-
-    # down: PCC off first, then route demotion.
-    # up: route promotion first, then PCC on.
-    parts = mangle_clauses + route_clauses if not enable else route_clauses + mangle_clauses
-    return "; ".join(parts)
+    body = "; ".join(clauses)
+    if hold_down <= 0 or probe is None:
+        return body
+    host, comment = probe
+    return (
+        f":delay {hold_down}s; "
+        f':if ([/tool/netwatch/get [/tool/netwatch/find host="{host}" comment="{comment}"] status]'
+        f' = "up") do={{{body}}}'
+    )
 
 
 def _sections(
@@ -878,9 +947,10 @@ def _sections(
             owner=scope,
             key=("comment",),
             ordered=True,  # first match wins; position is the semantics
-            # disabled is managed at runtime by netwatch scripts (health-aware
-            # LB disables PCC rules for degraded links). Do not re-assert on
-            # every reconcile -- same contract as ignore=(distance,) on routes.
+            # Nothing toggles mangle rows at runtime any more (see _probes).
+            # Kept ignored so rows an operator disabled by hand are not
+            # silently re-enabled; PCC classifiers enforce it per row instead,
+            # so a bucket left disabled by the old scripts comes back.
             ignore=("disabled",),
             items=mangle,
         ),
