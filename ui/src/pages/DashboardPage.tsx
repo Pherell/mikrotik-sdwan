@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { GettingStarted } from "../components/GettingStarted";
 import { HowItWorks } from "../components/HowItWorks";
+import { Skeleton } from "../components/Skeleton";
 import { endpoints, type Job, type Site } from "../lib/api";
 
 /**
@@ -39,9 +40,59 @@ export function DashboardPage() {
   const hasApplied = (jobs.data ?? []).some(
     (j) => j.kind === "apply" && j.state === "succeeded",
   );
-  const setUp = sites.isLoading || hasApplied;
 
-  if (!sites.isLoading && all.length === 0) {
+  // First load: hold the layout with placeholders instead of flashing zeros,
+  // then swapping in the real numbers once the request lands.
+  if (sites.isLoading) {
+    return (
+      <>
+        <div className="tiles" aria-busy="true" aria-label="Loading dashboard">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div className="tile" key={i}>
+              <div
+                className="skeleton"
+                style={{ height: 30, width: "55%", marginBottom: 8 }}
+              />
+              <div
+                className="skeleton"
+                style={{ height: 12, width: "80%", marginBottom: 0 }}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="card">
+          <Skeleton rows={3} label="Loading fleet actions" />
+        </div>
+        <div className="card">
+          <Skeleton rows={5} label="Loading recent activity" />
+        </div>
+      </>
+    );
+  }
+
+  // The whole page is the device list; a failed request must say so loudly and
+  // offer a way back, not silently fall through to the empty-onboarding flow.
+  if (sites.isError) {
+    return (
+      <div className="card">
+        <div className="error">
+          <strong>Couldn't load the device list.</strong> The dashboard needs
+          it to show anything.
+          <br />
+          <span className="muted">{(sites.error as Error)?.message}</span>
+        </div>
+        <div className="row" style={{ justifyContent: "flex-start" }}>
+          <div className="no-grow">
+            <button className="primary" onClick={() => sites.refetch()}>
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (all.length === 0) {
     return (
       <>
         <GettingStarted
@@ -98,7 +149,36 @@ export function DashboardPage() {
         />
       </div>
 
-      {!setUp && (
+      {/* Jobs and fabrics are secondary data: their failures should be visible
+          with a retry, not silent gaps in the sections that depend on them. */}
+      {(jobs.isError || fabrics.isError) && (
+        <div className="card">
+          <div className="error">
+            <strong>Couldn't load some dashboard data:</strong>{" "}
+            {[
+              jobs.isError && "recent activity",
+              fabrics.isError && "fabric data",
+            ]
+              .filter(Boolean)
+              .join(" and ")}
+            . Showing everything else.
+          </div>
+          <div className="row" style={{ justifyContent: "flex-start" }}>
+            <div className="no-grow">
+              <button
+                onClick={() => {
+                  if (jobs.isError) jobs.refetch();
+                  if (fabrics.isError) fabrics.refetch();
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!hasApplied && (
         <GettingStarted
           sites={all}
           fabrics={fabrics.data ?? []}
