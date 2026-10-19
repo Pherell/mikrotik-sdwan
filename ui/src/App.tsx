@@ -4,7 +4,7 @@ import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { ArmedIndicator } from "./components/ArmedIndicator";
 import { Shortcuts } from "./components/Shortcuts";
-import { MobileBar, Sidebar, readCollapsed, writeCollapsed } from "./components/Sidebar";
+import { TopBar } from "./components/TopBar";
 import { endpoints, getToken, setToken } from "./lib/api";
 import "./styles.css";
 
@@ -13,10 +13,10 @@ export function App() {
   const location = useLocation();
   const hasToken = Boolean(getToken());
 
-  const [collapsed, setCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // A drawer that survived navigation would cover the page you just asked for.
+  // A menu left open across navigation would hover over the page you just
+  // asked for.
   useEffect(() => setMobileOpen(false), [location.pathname]);
 
   const { data: user, isError } = useQuery({
@@ -27,25 +27,18 @@ export function App() {
 
   if (!hasToken || isError) return <Navigate to="/login" replace />;
 
-  const toggleCollapsed = () =>
-    setCollapsed((previous) => {
-      writeCollapsed(!previous);
-      return !previous;
-    });
-
   return (
-    <div className="layout" data-collapsed={collapsed}>
-      {/* First tab stop on the page: 240px of navigation is a lot to walk
-          through with a keyboard before reaching the thing you came for. */}
+    <div className="layout">
+      {/* First tab stop on the page: the nav is the first thing a keyboard
+          user meets, so offer to jump straight past it. */}
       <a className="skip-link" href="#main">
         Skip to content
       </a>
       <Shortcuts onEscape={() => setMobileOpen(false)} />
-      <Sidebar
+      <TopBar
         user={user}
-        collapsed={collapsed}
-        onToggleCollapsed={toggleCollapsed}
         mobileOpen={mobileOpen}
+        onToggleMobile={() => setMobileOpen((v) => !v)}
         onCloseMobile={() => setMobileOpen(false)}
         onSignOut={() => {
           setToken(null);
@@ -53,7 +46,6 @@ export function App() {
         }}
       />
       <div className="content">
-        <MobileBar onOpen={() => setMobileOpen(true)} />
         <ArmedIndicator />
         <main id="main" tabIndex={-1}>
           <Outlet />

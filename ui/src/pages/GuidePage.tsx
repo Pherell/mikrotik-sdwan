@@ -8,7 +8,7 @@
  * the address pool cannot be changed later, or what to do when a device's
  * certificate changes.
  *
- * So this is permanent, reachable from the sidebar, and deeper than a
+ * So this is permanent, reachable from the top bar, and deeper than a
  * checklist. It reuses the pipeline diagram rather than describing it a second
  * time, because a second description is a second thing to keep true.
  */

@@ -119,6 +119,54 @@ export function DashboardPage() {
   );
 }
 
+function ToneIcon({ tone }: { tone?: "ok" | "warn" | "bad" }) {
+  if (tone === "ok")
+    return (
+      <svg
+        className="tile-icon"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="8" r="6.4" />
+        <path d="M5.2 8.3 7.3 10.4 11 6.2" strokeLinecap="round" />
+      </svg>
+    );
+  if (tone === "warn")
+    return (
+      <svg
+        className="tile-icon"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        aria-hidden="true"
+      >
+        <path d="M8 2.2 14.6 13.4H1.4L8 2.2Z" strokeLinejoin="round" />
+        <path d="M8 6.6v3" strokeLinecap="round" />
+        <circle cx="8" cy="11.4" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  if (tone === "bad")
+    return (
+      <svg
+        className="tile-icon"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="8" r="6.4" />
+        <path d="M8 4.8v3.6" strokeLinecap="round" />
+        <circle cx="8" cy="11.2" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  return null;
+}
+
 function Tile({
   label,
   value,
@@ -133,7 +181,10 @@ function Tile({
   const body = (
     <div className={`tile${tone ? ` tile-${tone}` : ""}`}>
       <div className="tile-value">{value}</div>
-      <div className="tile-label">{label}</div>
+      <div className="tile-label">
+        <ToneIcon tone={tone} />
+        {label}
+      </div>
     </div>
   );
   return to ? (
