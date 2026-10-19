@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { GettingStarted } from "../components/GettingStarted";
@@ -234,17 +234,17 @@ function FleetActions({ sites }: { sites: Site[] }) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<string | null>(null);
   const [results, setResults] = useState<{ site: string; state: string }[]>([]);
-  const [stop, setStop] = useState(false);
+  const stopRef = useRef(false);
 
   const candidates = sites.filter((s) => s.has_credentials);
 
   const applyAll = useMutation({
     mutationFn: async () => {
       setResults([]);
-      setStop(false);
+      stopRef.current = false;
       const out: { site: string; state: string }[] = [];
       for (const site of candidates) {
-        if (stop) break;
+        if (stopRef.current) break;
         setProgress(site.name);
         try {
           const job = await endpoints.apply(site.id, { confirm: true });
@@ -297,7 +297,7 @@ function FleetActions({ sites }: { sites: Site[] }) {
         </div>
         {applyAll.isPending && (
           <div className="no-grow">
-            <button onClick={() => setStop(true)}>Stop after this one</button>
+            <button onClick={() => (stopRef.current = true)}>Stop after this one</button>
           </div>
         )}
         <div className="no-grow">
