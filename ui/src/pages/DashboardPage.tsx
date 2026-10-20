@@ -24,7 +24,7 @@ export function DashboardPage() {
     queryFn: () => endpoints.jobs(),
     refetchInterval: 15_000,
   });
-  const fabrics = useQuery({ queryKey: ["fabrics"], queryFn: endpoints.fabrics });
+  const fabrics = useQuery({ queryKey: ["fabrics"], queryFn: () => endpoints.fabrics() });
 
   const all = sites.data ?? [];
   const byStatus = count(all.map((s) => s.status));

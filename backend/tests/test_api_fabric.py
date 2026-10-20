@@ -1615,3 +1615,54 @@ async def test_the_whole_remove_then_delete_flow_works(api) -> None:
     for link in links:
         assert link.a_wan_id not in gone and link.b_wan_id not in gone
 
+
+
+# -- phase 0: transport filter + global links -------------------------------
+
+
+async def test_list_fabrics_filters_by_transport(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    await _three_site_fabric(client, headers)  # "core", ipsec_gre
+    resp = await client.post(
+        "/fabrics",
+        headers=headers,
+        json={"name": "wg-net", "transport": "wireguard", "ip_pool": "10.254.0.0/24"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    wg = (await client.get("/fabrics?transport=wireguard", headers=headers)).json()
+    assert [f["name"] for f in wg] == ["wg-net"]
+
+    gre = (await client.get("/fabrics?transport=ipsec_gre", headers=headers)).json()
+    assert [f["name"] for f in gre] == ["core"]
+
+    bogus = await client.get("/fabrics?transport=carrier-pigeon", headers=headers)
+    assert bogus.status_code == 400
+
+
+async def test_global_links_span_fabrics(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+
+    resp = await client.post(
+        "/fabrics",
+        headers=headers,
+        json={
+            "name": "wg-net",
+            "transport": "wireguard",
+            "topology": "hub_spoke",
+            "ip_pool": "10.254.0.0/24",
+            "member_site_ids": list(sites.values()),
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    wg_id = resp.json()["id"]
+    await client.post(f"/fabrics/{wg_id}/expand", headers=headers)
+
+    links = (await client.get("/links", headers=headers)).json()
+    assert len(links) == 4  # two hub-spoke links per fabric
+    assert {link["fabric_id"] for link in links} == {fabric_id, wg_id}
+    assert all(link["has_secrets"] for link in links)

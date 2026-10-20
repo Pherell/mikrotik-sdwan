@@ -20,7 +20,7 @@ export function PoliciesPage() {
     queryFn: endpoints.sdwanGroups,
   });
   const sites = useQuery({ queryKey: ["sites"], queryFn: endpoints.sites });
-  const fabrics = useQuery({ queryKey: ["fabrics"], queryFn: endpoints.fabrics });
+  const fabrics = useQuery({ queryKey: ["fabrics"], queryFn: () => endpoints.fabrics() });
 
   // The addresses a steering rule must never cover: the uplinks the tunnels
   // are built on, and the pool the tunnels themselves live in. Steer either
