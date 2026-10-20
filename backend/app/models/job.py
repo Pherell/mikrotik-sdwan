@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, Tenanted, Timestamps, UUIDPk, utcnow
@@ -19,6 +19,29 @@ from app.models.site import JSONCol
 
 class Job(Base, UUIDPk, Timestamps, Tenanted):
     __tablename__ = "jobs"
+    __table_args__ = (
+        # One live apply per site. The API's "is an apply already running?"
+        # check is check-then-act inside a transaction that only commits at
+        # the end of the request, so two concurrent applies both pass it and
+        # push to the same device -- two dead-man rollbacks armed, and their
+        # pre-apply backups can delete each other. The endpoint commits its
+        # claim before pushing so the common case fails fast with a 409; this
+        # index makes the database the arbiter for the exact race where both
+        # slip through between the check and the commit.
+        Index(
+            "uq_jobs_one_active_apply_per_site",
+            "site_id",
+            unique=True,
+            sqlite_where=text(
+                f"kind = '{JobKind.apply}'"
+                f" AND state IN ('{JobState.queued}', '{JobState.running}')"
+            ),
+            postgresql_where=text(
+                f"kind = '{JobKind.apply}'"
+                f" AND state IN ('{JobState.queued}', '{JobState.running}')"
+            ),
+        ),
+    )
 
     kind: Mapped[JobKind] = mapped_column(String(24), nullable=False, index=True)
     state: Mapped[JobState] = mapped_column(
