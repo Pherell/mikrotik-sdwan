@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { GettingStarted } from "../components/GettingStarted";
 import { HowItWorks } from "../components/HowItWorks";
+import { Skeleton } from "../components/Skeleton";
 import { endpoints, type Job, type Site } from "../lib/api";
 
 /**
@@ -39,9 +40,59 @@ export function DashboardPage() {
   const hasApplied = (jobs.data ?? []).some(
     (j) => j.kind === "apply" && j.state === "succeeded",
   );
-  const setUp = sites.isLoading || hasApplied;
 
-  if (!sites.isLoading && all.length === 0) {
+  // First load: hold the layout with placeholders instead of flashing zeros,
+  // then swapping in the real numbers once the request lands.
+  if (sites.isLoading) {
+    return (
+      <>
+        <div className="tiles" aria-busy="true" aria-label="Loading dashboard">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div className="tile" key={i}>
+              <div
+                className="skeleton"
+                style={{ height: 30, width: "55%", marginBottom: 8 }}
+              />
+              <div
+                className="skeleton"
+                style={{ height: 12, width: "80%", marginBottom: 0 }}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="card">
+          <Skeleton rows={3} label="Loading fleet actions" />
+        </div>
+        <div className="card">
+          <Skeleton rows={5} label="Loading recent activity" />
+        </div>
+      </>
+    );
+  }
+
+  // The whole page is the device list; a failed request must say so loudly and
+  // offer a way back, not silently fall through to the empty-onboarding flow.
+  if (sites.isError) {
+    return (
+      <div className="card">
+        <div className="error">
+          <strong>Couldn't load the device list.</strong> The dashboard needs
+          it to show anything.
+          <br />
+          <span className="muted">{(sites.error as Error)?.message}</span>
+        </div>
+        <div className="row" style={{ justifyContent: "flex-start" }}>
+          <div className="no-grow">
+            <button className="primary" onClick={() => sites.refetch()}>
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (all.length === 0) {
     return (
       <>
         <GettingStarted
@@ -98,7 +149,36 @@ export function DashboardPage() {
         />
       </div>
 
-      {!setUp && (
+      {/* Jobs and fabrics are secondary data: their failures should be visible
+          with a retry, not silent gaps in the sections that depend on them. */}
+      {(jobs.isError || fabrics.isError) && (
+        <div className="card">
+          <div className="error">
+            <strong>Couldn't load some dashboard data:</strong>{" "}
+            {[
+              jobs.isError && "recent activity",
+              fabrics.isError && "fabric data",
+            ]
+              .filter(Boolean)
+              .join(" and ")}
+            . Showing everything else.
+          </div>
+          <div className="row" style={{ justifyContent: "flex-start" }}>
+            <div className="no-grow">
+              <button
+                onClick={() => {
+                  if (jobs.isError) jobs.refetch();
+                  if (fabrics.isError) fabrics.refetch();
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!hasApplied && (
         <GettingStarted
           sites={all}
           fabrics={fabrics.data ?? []}
@@ -119,6 +199,54 @@ export function DashboardPage() {
   );
 }
 
+function ToneIcon({ tone }: { tone?: "ok" | "warn" | "bad" }) {
+  if (tone === "ok")
+    return (
+      <svg
+        className="tile-icon"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="8" r="6.4" />
+        <path d="M5.2 8.3 7.3 10.4 11 6.2" strokeLinecap="round" />
+      </svg>
+    );
+  if (tone === "warn")
+    return (
+      <svg
+        className="tile-icon"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        aria-hidden="true"
+      >
+        <path d="M8 2.2 14.6 13.4H1.4L8 2.2Z" strokeLinejoin="round" />
+        <path d="M8 6.6v3" strokeLinecap="round" />
+        <circle cx="8" cy="11.4" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  if (tone === "bad")
+    return (
+      <svg
+        className="tile-icon"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="8" r="6.4" />
+        <path d="M8 4.8v3.6" strokeLinecap="round" />
+        <circle cx="8" cy="11.2" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  return null;
+}
+
 function Tile({
   label,
   value,
@@ -133,7 +261,10 @@ function Tile({
   const body = (
     <div className={`tile${tone ? ` tile-${tone}` : ""}`}>
       <div className="tile-value">{value}</div>
-      <div className="tile-label">{label}</div>
+      <div className="tile-label">
+        <ToneIcon tone={tone} />
+        {label}
+      </div>
     </div>
   );
   return to ? (
@@ -183,17 +314,17 @@ function FleetActions({ sites }: { sites: Site[] }) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<string | null>(null);
   const [results, setResults] = useState<{ site: string; state: string }[]>([]);
-  const [stop, setStop] = useState(false);
+  const stopRef = useRef(false);
 
   const candidates = sites.filter((s) => s.has_credentials);
 
   const applyAll = useMutation({
     mutationFn: async () => {
       setResults([]);
-      setStop(false);
+      stopRef.current = false;
       const out: { site: string; state: string }[] = [];
       for (const site of candidates) {
-        if (stop) break;
+        if (stopRef.current) break;
         setProgress(site.name);
         try {
           const job = await endpoints.apply(site.id, { confirm: true });
@@ -246,7 +377,7 @@ function FleetActions({ sites }: { sites: Site[] }) {
         </div>
         {applyAll.isPending && (
           <div className="no-grow">
-            <button onClick={() => setStop(true)}>Stop after this one</button>
+            <button onClick={() => (stopRef.current = true)}>Stop after this one</button>
           </div>
         )}
         <div className="no-grow">
