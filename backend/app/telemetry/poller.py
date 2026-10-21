@@ -40,8 +40,27 @@ RTT_JITTER_MS = "rtt_jitter_ms"
 CPU_PERCENT = "cpu_percent"
 FREE_MEMORY_BYTES = "free_memory_bytes"
 
+# Netwatch's cumulative counters, plus its current up/down state. These are
+# read from the same netwatch row as the instantaneous metrics above, in the
+# same single read -- no extra device load.
+NW_DONE_TESTS = "nw_done_tests"
+NW_FAILED_TESTS = "nw_failed_tests"
+NW_SENT_COUNT = "nw_sent_count"
+NW_RESPONSE_COUNT = "nw_response_count"
+# 1.0 when the row's status is "down", else 0.0. Classification (see
+# app.telemetry.evaluator) needs the latest probe state, and samples are the
+# only store it reads -- the poller does not keep device state anywhere else,
+# so the state has to land here as a sample like everything else.
+NW_DOWN = "nw_down"
+
 LINK_METRICS = (LOSS_PERCENT, RTT_AVG_MS, RTT_MIN_MS, RTT_MAX_MS, RTT_JITTER_MS)
 SITE_METRICS = (CPU_PERCENT, FREE_MEMORY_BYTES)
+# Deliberately NOT part of LINK_METRICS: the counters are cumulative since
+# the probe was created, so charted raw they climb monotonically and say
+# nothing -- they only mean something as deltas over a window, which is the
+# evaluator's job. LINK_METRICS is the chartable instantaneous set the series
+# API validates against, and counters would mislead there.
+COUNTER_METRICS = (NW_DONE_TESTS, NW_FAILED_TESTS, NW_SENT_COUNT, NW_RESPONSE_COUNT)
 
 
 def _float(value: Any) -> float | None:
@@ -101,8 +120,20 @@ async def poll_site(session: AsyncSession, site: Site) -> list[Sample]:
             RTT_MIN_MS: parse_duration_ms(row.get("rtt-min")),
             RTT_MAX_MS: parse_duration_ms(row.get("rtt-max")),
             RTT_JITTER_MS: parse_duration_ms(row.get("rtt-jitter")),
+            NW_DONE_TESTS: _float(row.get("done-tests")),
+            NW_FAILED_TESTS: _float(row.get("failed-tests")),
+            NW_SENT_COUNT: _float(row.get("sent-count")),
+            NW_RESPONSE_COUNT: _float(row.get("response-count")),
+            # Status is a string, not a number: fold it into the 1.0/0.0
+            # sample here, where the row is in hand. A row with no status at
+            # all writes nothing, like any other missing value.
+            NW_DOWN: (
+                None
+                if row.get("status") is None
+                else (1.0 if row.get("status") == "down" else 0.0)
+            ),
         }
-        for metric in LINK_METRICS:
+        for metric in LINK_METRICS + COUNTER_METRICS + (NW_DOWN,):
             value = values[metric]
             if value is None:
                 continue

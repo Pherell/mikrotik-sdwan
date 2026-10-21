@@ -23,6 +23,7 @@ from app.models.job import Job
 from app.models.site import Site
 from app.services.drift import check_all
 from app.services.reconcile import apply_site
+from app.telemetry.evaluator import evaluate_all
 from app.telemetry.poller import poll_all
 
 log = logging.getLogger(__name__)
@@ -123,12 +124,16 @@ async def telemetry_poll(ctx: dict[str, Any]) -> dict[str, int]:
     settings = get_settings()
     async with SessionLocal() as session:
         written = await poll_all(session)
+        # Judge the samples just written, in the same session and commit:
+        # the evaluator reads only the database (no driver session), so a
+        # separate sweep would just re-read what this one already has.
+        evaluations = await evaluate_all(session)
         await session.commit()
 
     await ctx["redis"].enqueue_job(
         "telemetry_poll", _defer_by=settings.telemetry_poll_seconds
     )
-    return {"samples": written}
+    return {"samples": written, "evaluations": evaluations}
 
 
 async def startup(ctx: dict[str, Any]) -> None:

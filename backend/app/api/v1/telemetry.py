@@ -9,8 +9,13 @@ from sqlalchemy import select
 
 from app.deps import RequireViewer, SessionDep
 from app.models.fabric import Fabric, Link
-from app.models.telemetry import Sample
-from app.schemas.telemetry import SeriesPoint, SeriesRead
+from app.models.telemetry import Sample, SlaEvaluation
+from app.schemas.telemetry import (
+    SeriesPoint,
+    SeriesRead,
+    SlaEvaluationListRead,
+    SlaEvaluationRead,
+)
 from app.telemetry.poller import LINK_METRICS
 
 router = APIRouter(prefix="/links", tags=["telemetry"])
@@ -59,4 +64,46 @@ async def link_series(
         link_id=link_id,
         metric=metric,
         points=[SeriesPoint(ts=r.collected_at, value=r.value) for r in rows],
+    )
+
+
+@router.get("/{link_id}/evaluations", response_model=SlaEvaluationListRead)
+async def link_evaluations(
+    link_id: str,
+    session: SessionDep,
+    user: RequireViewer,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = Query(100, ge=1, le=500),
+) -> SlaEvaluationListRead:
+    """The central evaluator's windowed verdicts for one link, newest first.
+
+    Same tenant-ownership check as link_series: a link is scoped through its
+    fabric, and another tenant's link is a 404, not an empty list.
+    """
+    owns = await session.scalar(
+        select(Link.id)
+        .join(Fabric, Link.fabric_id == Fabric.id)
+        .where(Link.id == link_id, Fabric.tenant_id == user.tenant_id)
+    )
+    if owns is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such link")
+
+    until = until or datetime.now(UTC)
+    since = since or (until - timedelta(hours=24))
+
+    rows = await session.scalars(
+        select(SlaEvaluation)
+        .where(
+            SlaEvaluation.link_id == link_id,
+            SlaEvaluation.bucket_start >= since,
+            SlaEvaluation.bucket_start <= until,
+        )
+        .order_by(SlaEvaluation.bucket_start.desc(), SlaEvaluation.evaluated_at.desc())
+        .limit(limit)
+    )
+
+    return SlaEvaluationListRead(
+        link_id=link_id,
+        evaluations=[SlaEvaluationRead.model_validate(r) for r in rows],
     )
