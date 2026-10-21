@@ -48,11 +48,11 @@ class ConfigItem:
     enforce: tuple[str, ...] = ()
 
     def identity(self, key: tuple[str, ...]) -> tuple[Any, ...]:
-        from app.drivers.coerce import canonical
+        from app.drivers.coerce import canonical_compare
 
         if not key:
             return (self.tag,)
-        return tuple(canonical(self.props.get(k)) for k in key)
+        return tuple(canonical_compare(self.props.get(k), k) for k in key)
 
 
 @dataclass(slots=True)

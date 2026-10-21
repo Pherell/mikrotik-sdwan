@@ -7,7 +7,15 @@ from __future__ import annotations
 
 import pytest
 
-from app.drivers.coerce import canonical, canonical_row, coerce, coerce_row, encode_payload
+from app.drivers.coerce import (
+    canonical,
+    canonical_compare,
+    canonical_row,
+    coerce,
+    coerce_row,
+    encode_payload,
+    parse_duration_ns,
+)
 
 
 @pytest.mark.parametrize(
@@ -77,3 +85,55 @@ def test_encode_payload_drops_none_and_stringifies() -> None:
         "mtu": "1400",
         "passive": "true",
     }
+
+
+# -- duration folding (canonical_compare) ------------------------------------
+#
+# RouterOS re-renders durations in compound form. These pairs are the same
+# quantity spelled two ways; the differ must see one value, or the
+# reconciler re-pushes it forever.
+
+@pytest.mark.parametrize(
+    ("intent", "device", "prop"),
+    [
+        ("90s", "1m30s", "interval"),
+        (90, "1m30s", "interval"),
+        ("90", "1m30s", "interval"),
+        ("8h", "28800s", "lifetime"),
+        ("120s", "2m", "dpd-interval"),
+        ("30s", "00:00:30", "hold-time"),
+        ("150ms", "150ms", "thr-avg"),
+        ("1m,3", "60s,3", "keepalive"),
+        ("10s,3", "10s,3", "keepalive"),
+    ],
+)
+def test_canonical_compare_folds_duration_spellings(intent, device, prop) -> None:
+    assert canonical_compare(intent, prop) == canonical_compare(device, prop)
+
+
+@pytest.mark.parametrize(
+    ("intent", "device", "prop"),
+    [
+        ("90s", "91s", "interval"),          # genuinely different durations
+        ("10s,3", "10s,4", "keepalive"),     # retry count still compares raw
+        ("25M", "25000000", "max-limit"),    # not a duration prop: no folding
+        ("auto", "auto2", "interval"),      # unparseable: plain string compare
+    ],
+)
+def test_canonical_compare_keeps_real_differences(intent, device, prop) -> None:
+    assert canonical_compare(intent, prop) != canonical_compare(device, prop)
+
+
+def test_parse_duration_ns_forms() -> None:
+    assert parse_duration_ns("1m30s") == 90_000_000_000
+    assert parse_duration_ns("150ms") == 150_000_000
+    assert parse_duration_ns("1w") == 604_800_000_000_000
+    assert parse_duration_ns("00:00:30") == 30_000_000_000
+    assert parse_duration_ns(True) is None
+    assert parse_duration_ns("ether1") is None
+    assert parse_duration_ns("") is None
+
+
+def test_encode_payload_keeps_the_authored_duration_form() -> None:
+    """Folding is compare-only: a write must carry intent's spelling."""
+    assert encode_payload({"interval": "90s"}) == {"interval": "90s"}

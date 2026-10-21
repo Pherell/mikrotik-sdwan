@@ -1,0 +1,246 @@
+[
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "address": "192.168.10.0/24",
+          "list": "sdwan-core-adv"
+        },
+        "tag": "sdwan:fabric:core:oslo:bgp-network"
+      }
+    ],
+    "key": [
+      "list",
+      "address"
+    ],
+    "order": 10,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo:bgp-network",
+    "path": "/ip/firewall/address-list",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "as": "65001",
+          "name": "sdwan-core",
+          "router-id": "10.254.0.7"
+        },
+        "tag": "sdwan:fabric:core:oslo:bgp-instance"
+      }
+    ],
+    "key": [
+      "name"
+    ],
+    "order": 14,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo:bgp-instance",
+    "path": "/routing/bgp/instance",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "afi": "ip",
+          "as": "65001",
+          "hold-time": "30s",
+          "keepalive-time": "10s",
+          "name": "sdwan-core",
+          "output.network": "sdwan-core-adv",
+          "output.redistribute": "connected"
+        },
+        "tag": "sdwan:fabric:core:oslo:bgp-template"
+      }
+    ],
+    "key": [
+      "name"
+    ],
+    "order": 16,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo:bgp-template",
+    "path": "/routing/bgp/template",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "listen-port": "13231",
+          "mtu": "1400",
+          "name": "wg-oslo-bergen",
+          "private-key": ""
+        },
+        "tag": "sdwan:fabric:core:oslo-bergen:wg"
+      }
+    ],
+    "key": [
+      "name"
+    ],
+    "order": 40,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo-bergen:wg",
+    "path": "/interface/wireguard",
+    "write_once": [
+      "private-key"
+    ]
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "allowed-address": "0.0.0.0/0",
+          "endpoint-address": "203.0.113.2",
+          "endpoint-port": "13231",
+          "interface": "wg-oslo-bergen",
+          "preshared-key": "",
+          "public-key": ""
+        },
+        "tag": "sdwan:fabric:core:oslo-bergen:wg-peer"
+      }
+    ],
+    "key": [
+      "interface",
+      "public-key"
+    ],
+    "order": 40,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo-bergen:wg-peer",
+    "path": "/interface/wireguard/peers",
+    "write_once": [
+      "preshared-key"
+    ]
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "address": "10.255.0.0/31",
+          "interface": "wg-oslo-bergen"
+        },
+        "tag": "sdwan:fabric:core:oslo-bergen:address"
+      }
+    ],
+    "key": [
+      "address"
+    ],
+    "order": 50,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo-bergen:address",
+    "path": "/ip/address",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [
+      "distance"
+    ],
+    "items": [],
+    "key": [
+      "dst-address",
+      "gateway",
+      "routing-table"
+    ],
+    "order": 60,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo:underlay",
+    "path": "/ip/route",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [
+      "distance"
+    ],
+    "items": [],
+    "key": [
+      "dst-address",
+      "gateway",
+      "routing-table"
+    ],
+    "order": 60,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo:relay",
+    "path": "/ip/route",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [
+      "established",
+      "local.role",
+      "remote.capabilities",
+      "remote.id"
+    ],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "instance": "sdwan-core",
+          "local.address": "10.255.0.0",
+          "local.role": "ibgp",
+          "name": "bgp-oslo-bergen",
+          "remote.address": "10.255.0.1",
+          "remote.as": "65001",
+          "routing-table": "main",
+          "templates": "sdwan-core"
+        },
+        "tag": "sdwan:fabric:core:oslo:bgp:oslo-bergen"
+      }
+    ],
+    "key": [
+      "name"
+    ],
+    "order": 60,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo:bgp",
+    "path": "/routing/bgp/connection",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "action": "change-mss",
+          "chain": "forward",
+          "comment": "sdwan:fabric:core:oslo:mss:oslo-bergen",
+          "new-mss": "clamp-to-pmtu",
+          "out-interface": "wg-oslo-bergen",
+          "protocol": "tcp",
+          "tcp-flags": "syn"
+        },
+        "tag": "sdwan:fabric:core:oslo:mss:oslo-bergen"
+      }
+    ],
+    "key": [
+      "comment"
+    ],
+    "order": 70,
+    "ordered": false,
+    "owner_tag": "sdwan:fabric:core:oslo:mss:",
+    "path": "/ip/firewall/mangle",
+    "write_once": []
+  }
+]

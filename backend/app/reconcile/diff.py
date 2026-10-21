@@ -7,8 +7,9 @@ Two invariants hold everything together:
 same device is neither read as drift nor removed as unmanaged.
 
 **Canonical comparison.** Intent and device state are both pushed through
-``coerce.canonical`` before comparing, so ``mtu=1400`` and ``"1400"`` are the
-same value. Without this every apply would diff dirty forever.
+``coerce.canonical_compare`` before comparing, so ``mtu=1400`` and ``"1400"``
+are the same value -- and so are ``interval=90s`` and ``"1m30s"``. Without
+this every apply would diff dirty forever.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.drivers.base import ConfigItem, ConfigOp, ConfigSection, OpKind
-from app.drivers.coerce import canonical
+from app.drivers.coerce import canonical, canonical_compare
 from app.drivers.redact import redact_props
 
 # Never compared: RouterOS bookkeeping and read-only state that is not intent.
@@ -270,8 +271,8 @@ def _compare(
     for prop, value in item.props.items():
         if prop in ignored or prop in write_once:
             continue
-        want = canonical(value)
-        got = canonical(live.get(prop))
+        want = canonical_compare(value, prop)
+        got = canonical_compare(live.get(prop), prop)
         if want != got:
             changes.append(FieldChange(prop=prop, before=got, after=want))
 
@@ -289,7 +290,7 @@ def _compare(
 def _row_identity(row: dict[str, Any], section: ConfigSection) -> tuple[Any, ...]:
     if not section.key:
         return (str(row.get("comment", "")),)
-    return tuple(canonical(row.get(k)) for k in section.key)
+    return tuple(canonical_compare(row.get(k), k) for k in section.key)
 
 
 def _mask(prop: str, value: str) -> str:

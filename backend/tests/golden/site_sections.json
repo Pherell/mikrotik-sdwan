@@ -1,0 +1,77 @@
+[
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "address": "192.168.10.0/24",
+          "list": "sdwan-local-branch-1"
+        },
+        "tag": "sdwan:site:branch-1:local"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "address": "192.168.11.0/24",
+          "list": "sdwan-local-branch-1"
+        },
+        "tag": "sdwan:site:branch-1:local"
+      }
+    ],
+    "key": [
+      "list",
+      "address"
+    ],
+    "order": 10,
+    "ordered": false,
+    "owner_tag": "sdwan:site:",
+    "path": "/ip/firewall/address-list",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "name": "lo-sdwan",
+          "protocol-mode": "none"
+        },
+        "tag": "sdwan:site:branch-1:loopback"
+      }
+    ],
+    "key": [
+      "name"
+    ],
+    "order": 20,
+    "ordered": false,
+    "owner_tag": "sdwan:site:",
+    "path": "/interface/bridge",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "address": "10.254.0.7/32",
+          "interface": "lo-sdwan"
+        },
+        "tag": "sdwan:site:branch-1:loopback-address"
+      }
+    ],
+    "key": [
+      "address"
+    ],
+    "order": 50,
+    "ordered": false,
+    "owner_tag": "sdwan:site:",
+    "path": "/ip/address",
+    "write_once": []
+  }
+]
