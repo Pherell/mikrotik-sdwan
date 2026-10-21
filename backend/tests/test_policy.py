@@ -387,7 +387,10 @@ def test_netwatch_carries_the_profile_thresholds() -> None:
     assert props["thr-avg"] == "150ms"  # ROS7 latency threshold is thr-avg
     assert props["thr-jitter"] == "30ms"
     assert props["interval"] == "5s"
-    assert props["packet-count"] == 20
+    # The profile asked for 20 packets, but one lost packet in 20 measures as
+    # 5% loss -- already above the 2% threshold. Calibration raises the count
+    # to the smallest size whose single packet (2%) does not breach alone.
+    assert props["packet-count"] == 50
 
 
 def test_a_policy_without_a_profile_falls_back_to_sane_defaults() -> None:
@@ -434,6 +437,119 @@ def test_scripts_are_a_single_line() -> None:
     for item in s["/tool/netwatch"].items:
         assert "\n" not in item.props["down-script"]
         assert "\n" not in item.props["up-script"]
+
+
+# -- shared probes & calibration --------------------------------------------
+
+
+def test_policies_sharing_a_group_share_one_probe_per_hop() -> None:
+    """Five rules over one group used to put five identical probes -- and
+    five copies of their scripts -- on the device. The shared probe's
+    scripts carry every sharing policy's table instead."""
+    shared = group(["mpls"])
+    a = policy(name="voice", sdwan_group=shared)
+    b = policy(name="video", sdwan_group=shared)
+
+    s = sections_of(view([a, b], mpls=[path("wan1", ["10.255.0.0"])]))
+    probes = s["/tool/netwatch"].items
+
+    assert len(probes) == 1
+    down = str(probes[0].props["down-script"])
+    up = str(probes[0].props["up-script"])
+    for mark in ("sdwan-voice", "sdwan-video"):
+        assert f'routing-table="{mark}"' in down
+        assert f'routing-table="{mark}"' in up
+    assert down.count("distance=101") == 2
+    assert up.count("distance=1}") == 2
+
+
+def test_a_shared_probe_keeps_each_policys_own_preference() -> None:
+    """Same hop, two groups with opposite preference orders: one probe, and
+    its script restores a different distance in each policy's table."""
+    a = policy(name="voice", sdwan_group=group(["mpls", "broadband"]))
+    reversed_group = SdwanGroup(
+        id="grp-rev",
+        name="rev",
+        members=[{"uplink": "broadband", "weight": 1}, {"uplink": "mpls", "weight": 1}],
+        strategy="failover",
+        tenant_id="default",
+    )
+    b = policy(name="video", sdwan_group=reversed_group)
+
+    s = sections_of(
+        view(
+            [a, b],
+            mpls=[path("wan1", ["10.255.0.0"])],
+            broadband=[path("wan2", ["10.255.0.2"])],
+        )
+    )
+    probes = [p for p in s["/tool/netwatch"].items if p.props["host"] == "10.255.0.0"]
+
+    assert len(probes) == 1
+    up = str(probes[0].props["up-script"])
+    # sdwan-voice prefers this hop (distance 1); sdwan-video has it second.
+    assert 'routing-table="sdwan-voice"' in up and "distance=1}" in up
+    assert 'routing-table="sdwan-video"' in up and "distance=2}" in up
+
+
+def test_policies_with_different_sla_standards_get_separate_probes() -> None:
+    """Sharing is keyed on the standard, not just the hop: the thresholds
+    live on the netwatch entry, so different standards cannot share one."""
+    strict = SlaProfile(
+        name="strict",
+        loss_percent=5,
+        latency_ms=150,
+        probe_interval_seconds=10,
+        probe_count=10,
+        recovery_seconds=60,
+    )
+    lax = SlaProfile(
+        name="lax",
+        loss_percent=20,
+        latency_ms=300,
+        probe_interval_seconds=10,
+        probe_count=10,
+        recovery_seconds=60,
+    )
+    a = policy(name="voice", sdwan_group=group(["mpls"], strict))
+    b = policy(name="video", sdwan_group=group(["mpls"], lax))
+
+    s = sections_of(view([a, b], mpls=[path("wan1", ["10.255.0.0"])]))
+    probes = s["/tool/netwatch"].items
+
+    assert len(probes) == 2
+    assert {p.props["thr-loss-percent"] for p in probes} == {5, 20}
+
+
+def test_a_fine_loss_threshold_raises_the_packet_count() -> None:
+    sla = SlaProfile(
+        name="strict",
+        loss_percent=5,
+        latency_ms=150,
+        probe_interval_seconds=10,
+        probe_count=10,
+        recovery_seconds=60,
+    )
+    s = sections_of(view([policy(sla_profile=sla)], mpls=[path("wan1", ["10.255.0.0"])]))
+    # One packet in 10 measures as 10% loss: a 5% threshold needs >= 20.
+    assert s["/tool/netwatch"].items[0].props["packet-count"] == 20
+
+
+def test_a_coarse_loss_threshold_keeps_the_configured_count() -> None:
+    s = sections_of(view([policy()], mpls=[path("wan1", ["10.255.0.0"])]))
+    # Default standard: 20% loss at count 10 -- one packet is 10%, which the
+    # threshold can already resolve, so calibration changes nothing.
+    assert s["/tool/netwatch"].items[0].props["packet-count"] == 10
+
+
+def test_probes_carry_the_calibration_flags() -> None:
+    s = sections_of(view([policy()], mpls=[path("wan1", ["10.255.0.0"])]))
+    props = s["/tool/netwatch"].items[0].props
+    assert props["early-failure-detection"] is True
+    # A probe's initial state after reboot/apply is not evidence; the first
+    # real test decides, so neither script fires on it.
+    assert props["ignore-initial-down"] is True
+    assert props["ignore-initial-up"] is True
 
 
 # -- app groups -------------------------------------------------------------
@@ -832,9 +948,12 @@ def test_failover_marks_traffic_passing_through_and_the_routers_own() -> None:
     assert len(result["/routing/table"].items) == 1
 
     probes = result["/tool/netwatch"].items
-    # One clause, no routing-table filter: there is only one table.
-    assert "routing-table=" not in str(probes[0].props["up-script"])
+    # One clause, and it names the policy's one table explicitly. The script
+    # used to match the gateway in every table (a wildcard), which was only
+    # safe while no other policy held this gateway; shared probes name their
+    # tables so one policy's breach cannot rewrite another's distances.
     assert str(probes[0].props["up-script"]).count(":foreach") == 1
+    assert 'routing-table="sdwan-voice"' in str(probes[0].props["up-script"])
 
 
 def test_a_single_member_group_never_balances() -> None:

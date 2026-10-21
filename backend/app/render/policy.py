@@ -10,7 +10,9 @@ The mechanism, in the order the packet meets it:
    ``distance``, each with ``check-gateway=ping`` so a dead next hop drops out.
 5. ``/tool/netwatch`` -- probes with the SLA's thresholds; its scripts raise the
    distance of a path that breaches them, which moves traffic without tearing
-   anything down.
+   anything down. Probes are shared: one entry per (next hop, SLA standard),
+   however many policies steer over that hop, and its scripts name every
+   affected routing table explicitly.
 
 Under ``load_balance`` steps 2-4 change shape. RouterOS has no weighted
 next-hop selection, so spreading traffic means PCC: hash each connection into
@@ -30,6 +32,7 @@ section is marked ``ordered`` so the reconciler preserves it.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 
 from app.drivers.base import ConfigItem, ConfigSection
@@ -45,6 +48,11 @@ SLA_PENALTY = 100
 # mangle chain grows with the cap rather than with whatever numbers somebody
 # typed: weights of 100 and 1 would otherwise render 101 classifier rules.
 MAX_BUCKETS = 16
+
+# Ceiling for the calibrated probe packet count (see _effective_packet_count).
+# At RouterOS's default 50 ms packet interval, 100 packets is a 5 s test --
+# already half of the default 10 s probe interval.
+MAX_PACKET_COUNT = 100
 
 DEFAULT_SLA = SlaProfile(
     name="default",
@@ -83,6 +91,26 @@ class SitePolicyView:
     lan_prefixes: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class ProbeIntent:
+    """One policy's stake in probing one next hop.
+
+    Intents are collected per policy and merged by _merge_probes: policies
+    that share a group -- or merely share an SLA standard and a hop -- end up
+    sharing one netwatch entry instead of each rendering its own probe of the
+    same target with the same thresholds.
+    """
+
+    hop: str
+    wan_name: str
+    sla: SlaProfile
+    # (routing table, healthy distance) pairs this policy needs the probe's
+    # scripts to demote and restore. Tables are always named: a wildcard
+    # script would also rewrite the distances other policies gave the same
+    # gateway in their own tables.
+    targets: list[tuple[str, int]]
+
+
 def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     if not view.policies:
         # Still emit the empty sections: a policy that was deleted must have its
@@ -95,6 +123,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
     routes: list[ConfigItem] = []
     probes: list[ConfigItem] = []
     rules: list[ConfigItem] = []
+    intents: list[ProbeIntent] = []
 
     # Guard addresses are computed now but emitted after the loop (see below),
     # because they belong only where steering was actually rendered. The peer
@@ -160,7 +189,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             if balanced:
                 tables.extend(_balanced_tables(mark, paths, view.site_name))
                 routes.extend(_balanced_routes(policy, mark, paths, view.site_name))
-                probes.extend(_probes(policy, paths, view.site_name, mark=mark))
+                intents.extend(_probe_intents(policy, paths, mark, balanced=True))
                 rules.extend(
                     _fallback_rules(
                         policy, [_bucket_mark(mark, i) for i in range(len(paths))]
@@ -169,7 +198,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             else:
                 tables.append(_routing_table(mark, view.site_name))
                 routes.extend(_routes(policy, mark, paths, view.site_name))
-                probes.extend(_probes(policy, paths, view.site_name))
+                intents.extend(_probe_intents(policy, paths, mark, balanced=False))
                 rules.extend(_fallback_rules(policy, [mark]))
 
     # Guards go first, and only when steering was actually rendered. mangle is
@@ -189,6 +218,7 @@ def render_policies(view: SitePolicyView) -> list[ConfigSection]:
             guards.append(_infra_rule(view))
         mangle = guards + mangle
 
+    probes = _merge_probes(intents)
     return _sections(view, lists, mangle, tables, routes, probes, rules)
 
 
@@ -780,72 +810,159 @@ def _fallback_rules(policy: Policy, table_names: list[str]) -> list[ConfigItem]:
     ]
 
 
-def _probes(
-    policy: Policy,
-    paths: list[PathOption],
-    site_name: str,
-    *,
-    mark: str | None = None,
-) -> list[ConfigItem]:
-    """Netwatch entries carrying the group's SLA thresholds.
+def _probe_intents(
+    policy: Policy, paths: list[PathOption], mark: str, *, balanced: bool
+) -> list[ProbeIntent]:
+    """What this policy needs probed, before sharing is worked out.
 
-    ``mark`` switches this to the load-balanced shape. There, one gateway sits
-    at a different distance in every table -- preferred in its own, a fallback
-    in the others -- so a script that set one distance everywhere would flatten
-    the balance into "everything via whichever path recovered last".
+    Under load_balance one gateway sits at a different distance in every
+    bucket table -- preferred in its own, a fallback in the others -- so the
+    intent lists every bucket table with its own distance. Under failover
+    there is exactly one table: the policy's own mark, at the path's
+    preference distance.
 
-    Load balancing is health-aware through the routes alone. Every bucket table
-    already holds the other members at distance 2, so demoting a breaching
-    member moves its buckets onto the survivors -- still inside the overlay.
-    An earlier version also disabled the member's PCC classifiers, which did
-    the opposite of what it meant to: an unclassified connection carries no
-    routing mark, so it left by the *main* table, out the raw WAN, NATed. Then
-    the classifier came back on and re-hashed those live flows into the
-    tunnel, breaking them. That round trip is a large part of what looked like
-    the group flapping.
+    Load balancing is health-aware through the routes alone. Every bucket
+    table already holds the other members at distance 2, so demoting a
+    breaching member moves its buckets onto the survivors -- still inside the
+    overlay. An earlier version also disabled the member's PCC classifiers,
+    which did the opposite of what it meant to: an unclassified connection
+    carries no routing mark, so it left by the *main* table, out the raw WAN,
+    NATed. Then the classifier came back on and re-hashed those live flows
+    into the tunnel, breaking them. That round trip is a large part of what
+    looked like the group flapping.
     """
     sla = _sla(policy)
-    tag = owner_tag("policy", policy.name, "sla")
-    items: list[ConfigItem] = []
+    intents: list[ProbeIntent] = []
     for index, path in enumerate(paths):
-        if mark is None:
-            healthy = [(None, index + 1)]
-        else:
+        if balanced:
             # Distance 1 in its own table, 2 in the rest -- exactly what
             # _balanced_routes wrote.
-            healthy = [
+            targets = [
                 (_bucket_mark(mark, table), 1 if table == index else 2)
                 for table in range(len(paths))
             ]
-        demoted = [(table, distance + SLA_PENALTY) for table, distance in healthy]
-        comment = f"{tag}:{path.wan_name}"
-
+        else:
+            targets = [(mark, index + 1)]
         for hop in path.next_hops:
-            props: dict[str, object] = {
-                "host": hop,
-                "type": "icmp",
-                "interval": f"{sla.probe_interval_seconds}s",
-                "packet-count": sla.probe_count,
-                "thr-loss-percent": sla.loss_percent,
-                # ROS 7 netwatch has no "thr-latency"; the latency fail
-                # threshold is thr-avg (fail above this average RTT). thr-max
-                # exists too, for peak RTT; avg is the SLA metric we mean.
-                "thr-avg": f"{sla.latency_ms}ms",
-                "disabled": False,
-                # Demote rather than delete: the route stays in the table so the
-                # path can be re-preferred once it has recovered.
-                "down-script": _health_script(hop, demoted),
-                "up-script": _health_script(
-                    hop,
-                    healthy,
-                    hold_down=sla.recovery_seconds,
-                    probe=(hop, comment),
-                ),
-                "comment": comment,
-            }
-            if sla.jitter_ms:
-                props["thr-jitter"] = f"{sla.jitter_ms}ms"
-            items.append(ConfigItem(props=props, tag=comment))
+            intents.append(
+                ProbeIntent(hop=hop, wan_name=path.wan_name, sla=sla, targets=targets)
+            )
+    return intents
+
+
+def _effective_packet_count(sla: SlaProfile) -> int:
+    """Probe packets per test, raised until the loss threshold is resolvable.
+
+    One lost packet measures as 100/count percent loss. At the default count
+    of 10 that is a 10% step, so a profile asking for 2% loss would breach on
+    any single lost packet -- the threshold is finer than the instrument.
+    The floor is the smallest count whose single packet does not by itself
+    exceed the threshold, capped so the test itself (count x 50 ms at
+    RouterOS's default packet interval) stays well inside the probe
+    interval. An operator's larger explicit count always wins.
+    """
+    count = sla.probe_count
+    if sla.loss_percent > 0:
+        floor = -(-100 // sla.loss_percent)  # ceil(100 / loss_percent)
+        cap = min(MAX_PACKET_COUNT, max(1, int(sla.probe_interval_seconds * 16)))
+        count = max(count, min(floor, cap))
+    return count
+
+
+def _sla_fingerprint(sla: SlaProfile) -> tuple[int, int, int, int, int, int]:
+    """The rendered SLA standard, for probe sharing and probe identity.
+
+    Uses the *effective* packet count, so two profiles that differ only in a
+    raw count the calibration overrides anyway still share one probe.
+    """
+    return (
+        sla.loss_percent,
+        sla.latency_ms,
+        sla.jitter_ms or 0,
+        sla.probe_interval_seconds,
+        _effective_packet_count(sla),
+        sla.recovery_seconds,
+    )
+
+
+@dataclass(slots=True)
+class _MergedProbe:
+    wan_name: str
+    sla: SlaProfile
+    targets: dict[str, int] = field(default_factory=dict)
+
+
+def _merge_probes(intents: list[ProbeIntent]) -> list[ConfigItem]:
+    """One netwatch entry per (next hop, SLA standard), shared by policies.
+
+    Probes used to be rendered per policy, so five rules over one group put
+    five identical probes -- and five copies of their scripts -- on the
+    device for the same hop. The merged entry's scripts carry the union of
+    every sharing policy's (table, distance) targets, each table named
+    explicitly: the failover shape used to demote through a wildcard that
+    matched the gateway in *every* table, which was only ever safe while
+    nothing else held that gateway. Sharing makes the explicit form
+    necessary, not just tidier.
+
+    The comment carries a short hash of the SLA standard. Thresholds live on
+    the netwatch entry itself, so a standard that changes is a different
+    probe: the old entry is swept and a new one created, rather than one
+    entry being silently re-purposed under the policies sharing it.
+    """
+    groups: dict[tuple[str, tuple[int, int, int, int, int, int]], _MergedProbe] = {}
+    for intent in intents:
+        key = (intent.hop, _sla_fingerprint(intent.sla))
+        merged = groups.setdefault(
+            key, _MergedProbe(wan_name=intent.wan_name, sla=intent.sla)
+        )
+        for table, distance in intent.targets:
+            # A table belongs to one policy, so a clash can only be the same
+            # hop listed twice for it; the more preferred distance wins.
+            current = merged.targets.get(table)
+            if current is None or distance < current:
+                merged.targets[table] = distance
+
+    items: list[ConfigItem] = []
+    for (hop, fingerprint), merged in groups.items():
+        sla = merged.sla
+        digest = hashlib.sha1(repr(fingerprint).encode()).hexdigest()[:8]
+        comment = f"{owner_tag('policy', 'sla')}:{merged.wan_name}:{digest}"
+        healthy = sorted(merged.targets.items())
+        demoted = [(table, distance + SLA_PENALTY) for table, distance in healthy]
+        props: dict[str, object] = {
+            "host": hop,
+            "type": "icmp",
+            "interval": f"{sla.probe_interval_seconds}s",
+            "packet-count": _effective_packet_count(sla),
+            "thr-loss-percent": sla.loss_percent,
+            # ROS 7 netwatch has no "thr-latency"; the latency fail
+            # threshold is thr-avg (fail above this average RTT). thr-max
+            # exists too, for peak RTT; avg is the SLA metric we mean.
+            "thr-avg": f"{sla.latency_ms}ms",
+            # Conclude a failing test as soon as its outcome is decided
+            # instead of waiting out the full packet train: demotion comes
+            # sooner at the same sample size.
+            "early-failure-detection": True,
+            # The state a probe wakes up in after a reboot or an apply is
+            # not evidence about the path; firing the scripts on it demotes
+            # (or restores) on boot noise. The first real test decides.
+            "ignore-initial-down": True,
+            "ignore-initial-up": True,
+            "disabled": False,
+            # Demote rather than delete: the route stays in the table so the
+            # path can be re-preferred once it has recovered.
+            "down-script": _health_script(hop, demoted),
+            "up-script": _health_script(
+                hop,
+                healthy,
+                hold_down=sla.recovery_seconds,
+                probe=(hop, comment),
+            ),
+            "comment": comment,
+        }
+        if sla.jitter_ms:
+            props["thr-jitter"] = f"{sla.jitter_ms}ms"
+        items.append(ConfigItem(props=props, tag=comment))
     return items
 
 
@@ -859,7 +976,8 @@ def _health_script(
     """RouterOS script setting route distances.
 
     ``targets`` is (routing table, distance) pairs; a table of None means every
-    table, which is the failover case where there is only one.
+    table. No renderer emits None any more -- probes name every table they
+    touch, so a shared probe cannot rewrite another policy's distances.
 
     ``hold_down`` is the SLA profile's ``recovery_seconds``, used on the
     up-script only. Down is acted on at once; up must *stay* up that long
