@@ -207,6 +207,22 @@ export interface Plan {
   text: string;
 }
 
+export interface IntentPreviewSection {
+  path: string;
+  order: number;
+  item_count: number;
+  lines: string[];
+}
+
+/** Rendered intent only — the device was not contacted, so this is not a diff. */
+export interface IntentPreview {
+  source: string;
+  diffed_against_device: boolean;
+  section_count: number;
+  total_items: number;
+  sections: IntentPreviewSection[];
+}
+
 export type JobState =
   | "queued"
   | "running"
@@ -625,6 +641,7 @@ export const endpoints = {
   health: (id: string) => api.get<DeviceHealth>(`/sites/${id}/health`),
   addWan: (siteId: string, body: unknown) => api.post<Wan>(`/sites/${siteId}/wans`, body),
   plan: (siteId: string) => api.post<Plan>(`/sites/${siteId}/plan`),
+  preview: (siteId: string) => api.post<IntentPreview>(`/sites/${siteId}/preview`),
   apply: (siteId: string, body: { confirm?: boolean; dry_run?: boolean }) =>
     api.post<Job>(`/sites/${siteId}/apply`, body),
   jobs: (siteId?: string) =>

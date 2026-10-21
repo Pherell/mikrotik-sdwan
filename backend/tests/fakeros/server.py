@@ -60,6 +60,10 @@ class FakeRouterOS:
         self.password = password
         self._ids = itertools.count(1)
         self.commands: list[tuple[str, dict[str, Any]]] = []
+        # Every GET, as (path, query params), so a test can prove what the
+        # controller asked the device for -- e.g. that a plan read carried a
+        # .proplist and which menus were never read at all.
+        self.reads: list[tuple[str, dict[str, str]]] = []
         # Addresses ping and traceroute answer for. None means everything
         # answers, which is the boring case; a set is how a test asks for the
         # interesting one.
@@ -178,6 +182,7 @@ class FakeRouterOS:
         return JSONResponse({"detail": "unsupported"}, status_code=405)
 
     def _get(self, path: str, query: dict[str, str]) -> Response:
+        self.reads.append((path, dict(query)))
         if path == "interface" and "interface" not in self.menus:
             rows = self._all_interfaces()
         elif path not in self.menus:
@@ -190,6 +195,12 @@ class FakeRouterOS:
                 for r in rows
                 if all(_stringify(r.get(k)) == v for k, v in query.items() if not k.startswith("."))
             ]
+        if ".proplist" in query:
+            # Verified against a real CHR (7.24.5): the device returns only
+            # the named properties, and a property a row does not have is
+            # silently absent from that row -- never null, never an error.
+            wanted = [p for p in query[".proplist"].split(",") if p]
+            rows = [{k: v for k, v in r.items() if k in wanted} for r in rows]
         return JSONResponse([_row_out(r) for r in rows])
 
     async def _put(self, path: str, request: Request) -> Response:

@@ -163,9 +163,20 @@ class Ros6SshDriver:
     # -- DeviceDriver ------------------------------------------------------
 
     async def read(
-        self, path: str, query: dict[str, Any] | None = None
+        self,
+        path: str,
+        query: dict[str, Any] | None = None,
+        props: list[str] | tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
-        """Read a menu via ``print as-value``, which is parseable output."""
+        """Read a menu via ``print as-value``, which is parseable output.
+
+        The RouterOS 6 console has no ``.proplist``: ``print as-value``
+        always returns every property. ``props`` is therefore honoured
+        client-side -- rows are trimmed to the requested properties so
+        callers see the same shape the ROS 7 driver returns, but the wire
+        saving does not exist on this legacy path and nothing here pretends
+        otherwise.
+        """
         menu = path.strip("/").replace("/", " ")
         where = ""
         if query:
@@ -185,6 +196,9 @@ class Ros6SshDriver:
                     row[key.strip()] = value.strip()
             if row:
                 rows.append(coerce_row(row))
+        if props:
+            keep = set(props)
+            rows = [{k: v for k, v in row.items() if k in keep} for row in rows]
         return rows
 
     async def run(self, command: str, params: dict[str, Any] | None = None) -> Any:

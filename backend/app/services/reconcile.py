@@ -8,8 +8,9 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.drivers.base import DeviceDriver, DriverError
+from app.drivers.base import ConfigSection, DeviceDriver, DriverError
 from app.drivers.factory import open_driver
+from app.drivers.redact import redact_props
 from app.models.enums import JobKind, JobState, SiteStatus
 from app.models.job import Job
 from app.models.site import Site
@@ -29,6 +30,67 @@ async def plan_site(
         return await build_plan(driver, sections)
     async with open_driver(site) as d:
         return await build_plan(d, sections)
+
+
+async def preview_intent(session: AsyncSession, site: Site) -> dict:
+    """Render what the controller intends to own on this site. Device-free.
+
+    This is B5 layer (1), and it is intent-only by design: the controller
+    keeps no stored last-known device state anywhere, so there is nothing
+    honest to diff against without contacting the device (that live diff is
+    layer (2), ``plan_site``). The result is therefore labelled as intent --
+    ``source``/``diffed_against_device`` -- so no consumer can mistake it
+    for a plan.
+
+    No driver is opened here, which is the point: the preview works for a
+    site that is unprovisioned, has no credentials, or is simply unreachable,
+    because ``render_device`` is a pure DB-to-sections render.
+    """
+    sections = await render_device(session, site)
+    return _intent_preview(sections)
+
+
+def _intent_preview(sections: list[ConfigSection]) -> dict:
+    """Format rendered sections as an intent preview, secrets masked.
+
+    Lines mirror ``ItemDiff.render`` for adds -- ``+ <path> <identity>
+    k=v ...`` with the ownership comment included where the menu carries
+    one, and props passed through ``redact_props`` -- so a secret rendered
+    into intent never appears here in the clear. Sections with no items are
+    cleanup scopes (they exist so orphaned rows can be swept); they intend
+    to own nothing, so, like ``Plan.to_json``, they are omitted.
+    """
+    rendered: list[dict] = []
+    total = 0
+    for section in sorted(sections, key=lambda s: s.order):
+        if not section.items:
+            continue
+        lines: list[str] = []
+        for item in section.items:
+            props = dict(item.props)
+            if section.comment_capable:
+                props["comment"] = item.tag or section.owner_tag
+            shown = " ".join(
+                f"{k}={v}" for k, v in sorted(redact_props(props).items())
+            )
+            ident = ",".join(str(i) for i in item.identity(section.key))
+            lines.append(f"+ {section.path} {ident}  {shown}")
+        total += len(section.items)
+        rendered.append(
+            {
+                "path": section.path,
+                "order": section.order,
+                "item_count": len(section.items),
+                "lines": lines,
+            }
+        )
+    return {
+        "source": "intent",
+        "diffed_against_device": False,
+        "section_count": len(rendered),
+        "total_items": total,
+        "sections": rendered,
+    }
 
 
 async def apply_site(

@@ -26,6 +26,28 @@ class PlanRead(BaseModel):
     text: str
 
 
+class IntentPreviewSection(BaseModel):
+    path: str
+    order: int
+    item_count: int
+    lines: list[str] = Field(default_factory=list)
+
+
+class IntentPreviewRead(BaseModel):
+    """What the controller intends to own, rendered from configuration only.
+
+    Not a plan: nothing was read from the device, so ``diffed_against_device``
+    is always false and ``source`` is always "intent". Secrets are already
+    masked by the preview formatter.
+    """
+
+    source: str = "intent"
+    diffed_against_device: bool = False
+    section_count: int
+    total_items: int
+    sections: list[IntentPreviewSection] = Field(default_factory=list)
+
+
 class JobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

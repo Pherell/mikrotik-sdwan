@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { endpoints, type Job, type Plan } from "../lib/api";
+import { endpoints, type IntentPreview, type Job, type Plan } from "../lib/api";
 import { DiffView } from "./DiffView";
 import { useToast } from "./Toaster";
 import { JobResult } from "./JobResult";
@@ -16,6 +16,7 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
   const toast = useToast();
   const [plan, setPlan] = useState<Plan | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  const [preview, setPreview] = useState<IntentPreview | null>(null);
 
   const doPlan = useMutation({
     mutationFn: () => endpoints.plan(siteId),
@@ -29,6 +30,14 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
       );
     },
     onError: (e) => toast.bad(`Plan failed: ${(e as Error).message}`),
+  });
+
+  // Intent only: the device is not contacted, so this never touches the
+  // plan/apply state above — it just shows what the configuration renders to.
+  const doPreview = useMutation({
+    mutationFn: () => endpoints.preview(siteId),
+    onSuccess: (result) => setPreview(result),
+    onError: (e) => toast.bad(`Preview failed: ${(e as Error).message}`),
   });
 
   const doApply = useMutation({
@@ -67,6 +76,11 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
             {doPlan.isPending ? "Planning…" : "Plan changes"}
           </button>
         </div>
+        <div className="no-grow">
+          <button onClick={() => doPreview.mutate()} disabled={doPreview.isPending}>
+            {doPreview.isPending ? "Previewing…" : "Preview intent"}
+          </button>
+        </div>
         {plan && !nothingToDo && !blocked && (
           <div className="no-grow">
             <button
@@ -93,6 +107,30 @@ export function ApplyPanel({ siteId }: { siteId: string }) {
 
       {doPlan.isError && <div className="error">{(doPlan.error as Error).message}</div>}
       {doApply.isError && <div className="error">{(doApply.error as Error).message}</div>}
+      {doPreview.isError && (
+        <div className="error">{(doPreview.error as Error).message}</div>
+      )}
+
+      {preview && (
+        <div style={{ marginBottom: 12 }}>
+          <p className="warn" style={{ marginTop: 0 }}>
+            <strong>Intent preview</strong> — rendered from your configuration only;
+            the device was not contacted, so this is not a diff.
+          </p>
+          <p className="muted">
+            {preview.section_count} sections · {preview.total_items} managed objects
+          </p>
+          {preview.sections.map((section) => (
+            <div key={section.path} style={{ marginBottom: 12 }}>
+              <div className="muted" style={{ marginBottom: 4 }}>
+                {section.path} — {section.item_count}{" "}
+                {section.item_count === 1 ? "object" : "objects"}
+              </div>
+              <pre className="diff">{section.lines.join("\n")}</pre>
+            </div>
+          ))}
+        </div>
+      )}
 
       {plan && !nothingToDo && !blocked && (
         <p className="muted">
