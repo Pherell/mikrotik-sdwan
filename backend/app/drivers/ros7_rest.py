@@ -163,10 +163,19 @@ class Ros7RestDriver:
     # -- DeviceDriver ------------------------------------------------------
 
     async def read(
-        self, path: str, query: dict[str, Any] | None = None
+        self,
+        path: str,
+        query: dict[str, Any] | None = None,
+        props: list[str] | tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
         url = "/" + self._norm(path)
         params = {k: str(v) for k, v in (query or {}).items()}
+        if props:
+            # RouterOS filters server-side on .proplist, verified against a
+            # real CHR (7.24.5): only the named props come back, and a prop
+            # the menu does not have is silently omitted rather than an
+            # error -- so asking for `comment` on a comment-less menu is safe.
+            params[".proplist"] = ",".join(props)
         resp = await self._send("GET", url, params=params)
 
         data = resp.json() if resp.content else []

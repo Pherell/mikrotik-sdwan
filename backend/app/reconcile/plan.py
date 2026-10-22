@@ -1,4 +1,23 @@
-"""Turn rendered sections plus live device state into an ordered change plan."""
+"""Turn rendered sections plus live device state into an ordered change plan.
+
+Reads are filtered (plan B6). An apply used to download every full menu the
+controller manages -- every property of every row, including the operator's
+own rows -- and filter ownership client-side. Now each section read asks
+the device for exactly the properties the differ reads (``section_proplist``),
+so the operator's rows cross the wire as little more than their identity,
+and a cleanup section for a transport the site no longer uses returns a
+handful of small rows instead of the whole menu.
+
+Two things B6 deliberately does *not* do:
+
+* Skip a cleanup section's read entirely. The section exists to remove
+  orphans left by a link or transport the site *stopped* using; the menus
+  that look unused are exactly the ones that may still hold managed rows.
+  Filtering the read is safe, omitting it strands configuration.
+* Filter anywhere else. The telemetry poller, diagnostics and the device
+  console read for their own purposes and keep their full reads; this
+  module is the apply path, which is where the repeated cost was.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +26,48 @@ from typing import Any
 
 from app.drivers.base import ConfigOp, ConfigSection, DeviceDriver, DriverError, OpKind
 from app.reconcile.diff import SectionDiff, diff_section
+
+
+def section_proplist(section: ConfigSection) -> list[str]:
+    """The properties a read of ``section`` must return for a correct diff.
+
+    Derived from what ``app.reconcile.diff`` actually reads on a live row,
+    nothing more:
+
+    * ``.id`` -- set/remove ops and move ordering address rows by it;
+    * ``comment`` on comment-capable sections -- ownership (``owns``) and
+      row identity both key off it, and a retagged row is itself a diff;
+    * ``name`` -- identity for the comment-less sections owned by name;
+    * the section's ``key`` props -- row identity;
+    * the ``before`` predicate's props -- position checks match them on
+      rows the controller does *not* own;
+    * every prop any intent item carries -- ``_compare`` reads each one
+      back from the live row. An intent prop missing here would read as
+      ``None`` on a converged device and diff as a phantom ``set`` on
+      every apply, so this part is completeness-critical, not trimming.
+
+    Ignored and write-once props are included when an item carries them:
+    harmless (the differ skips them) and simpler than re-deriving the
+    differ's skip logic in a second place that could drift from it.
+    """
+    props: list[str] = [".id"]
+
+    def add(name: str) -> None:
+        if name not in props:
+            props.append(name)
+
+    if section.comment_capable:
+        add("comment")
+    add("name")
+    for prop in section.key:
+        add(prop)
+    if section.before:
+        for prop in section.before:
+            add(prop)
+    for item in section.items:
+        for prop in item.props:
+            add(prop)
+    return props
 
 
 @dataclass(slots=True)
@@ -77,11 +138,17 @@ class Plan:
 
 
 async def build_plan(driver: DeviceDriver, sections: list[ConfigSection]) -> Plan:
-    """Read the device once per section and diff intent against it."""
+    """Read the device once per section and diff intent against it.
+
+    One read per rendered section is the whole read profile of an apply:
+    menus no section names are never read at all. Each read carries the
+    section's ``section_proplist`` so the device returns only the
+    properties the diff needs.
+    """
     plan = Plan()
     for section in sections:
         try:
-            live = await driver.read(section.path)
+            live = await driver.read(section.path, props=section_proplist(section))
         except DriverError as exc:
             if not section.items:
                 # A section with nothing to write exists only to clean up rows a

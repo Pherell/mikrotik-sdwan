@@ -193,8 +193,21 @@ class DeviceDriver(Protocol):
 
     async def capabilities(self) -> DeviceCaps: ...
 
-    async def read(self, path: str, query: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """Return rows from a menu, with values coerced to native Python types."""
+    async def read(
+        self,
+        path: str,
+        query: dict[str, Any] | None = None,
+        props: list[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return rows from a menu, with values coerced to native Python types.
+
+        ``props`` asks the device to return only those properties (the
+        RouterOS ``.proplist``). It is a wire-size optimisation, never a
+        correctness contract: a driver that cannot filter server-side may
+        return fuller rows, and callers must not assume a prop they did not
+        request is absent -- only that a prop they did request is present
+        when the device holds it.
+        """
         ...
 
     async def apply(self, ops: list[ConfigOp]) -> ApplyResult:
