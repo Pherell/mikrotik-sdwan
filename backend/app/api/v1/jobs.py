@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.deps import RequireOperator, RequireViewer, SessionDep, get_owned, write_audit
 from app.drivers.base import ConfigOp, OpKind
@@ -13,8 +14,8 @@ from app.models.enums import JobKind, JobState
 from app.models.job import Job
 from app.models.site import Site
 from app.reconcile.apply import find_stale_rollbacks
-from app.schemas.job import ApplyRequest, IntentPreviewRead, JobRead, PlanRead
-from app.services.reconcile import apply_site, new_job, plan_site, preview_intent
+from app.schemas.job import ApplyRequest, JobRead, PlanRead
+from app.services.reconcile import active_apply_job, apply_site, new_job, plan_site
 
 router = APIRouter(tags=["jobs"])
 
@@ -35,22 +36,6 @@ async def plan(site_id: str, session: SessionDep, user: RequireViewer) -> PlanRe
     site = await _site_or_404(session, site_id, user.tenant_id)
     result = await plan_site(session, site)
     return PlanRead.model_validate(result.to_json())
-
-
-@router.post("/sites/{site_id}/preview", response_model=IntentPreviewRead)
-async def preview(
-    site_id: str, session: SessionDep, user: RequireViewer
-) -> IntentPreviewRead:
-    """Render the intent for a site without contacting the device at all.
-
-    Unlike /plan this opens no driver session: it shows what the controller
-    intends to own, rendered from configuration alone, so it works for an
-    unprovisioned or unreachable site -- and it is labelled as intent, never
-    as a diff against the device. Read-only, so a viewer may run it.
-    """
-    site = await _site_or_404(session, site_id, user.tenant_id)
-    result = await preview_intent(session, site)
-    return IntentPreviewRead.model_validate(result)
 
 
 @router.post("/sites/{site_id}/apply", response_model=JobRead)
@@ -86,13 +71,7 @@ async def apply(
             status.HTTP_400_BAD_REQUEST, "window_closes_at must be after scheduled_for"
         )
 
-    running = await session.scalar(
-        select(Job).where(
-            Job.site_id == site.id,
-            Job.kind == JobKind.apply,
-            Job.state.in_([JobState.queued, JobState.running]),
-        )
-    )
+    running = await active_apply_job(session, site.id)
     if running is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -103,6 +82,25 @@ async def apply(
     job.scheduled_for = body.scheduled_for
     job.window_closes_at = body.window_closes_at
     session.add(job)
+    await session.flush()
+
+    # Claim the site's single push slot in its own transaction, before the
+    # push starts. The request session otherwise commits only when the
+    # request ends -- after a push that can run for minutes -- so two
+    # concurrent applies would both pass the check above and push to the
+    # same device. Committing the claim now means the second request sees
+    # the first one's row and gets the 409 above; the partial unique index
+    # on jobs rejects the exact race where both slip through between the
+    # check and the commit.
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Another apply for this site started a moment ago; "
+            "wait for it to finish and retry.",
+        ) from None
 
     # A future scheduled_for: leave it queued for
     # app.tasks.worker.run_scheduled_applies to pick up when its window
@@ -111,7 +109,6 @@ async def apply(
     # for what was already the common case.
     is_scheduled = body.scheduled_for is not None and body.scheduled_for > utcnow()
     if is_scheduled:
-        await session.flush()
         await write_audit(
             session,
             actor=user,
@@ -129,7 +126,6 @@ async def apply(
         )
         return job
 
-    await session.flush()
     await apply_site(session, site, job, dry_run=body.dry_run)
 
     await write_audit(
