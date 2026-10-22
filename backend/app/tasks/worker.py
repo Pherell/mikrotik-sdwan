@@ -22,8 +22,7 @@ from app.models.enums import JobKind, JobState
 from app.models.job import Job
 from app.models.site import Site
 from app.services.drift import check_all
-from app.services.reconcile import apply_site
-from app.telemetry.evaluator import evaluate_all
+from app.services.reconcile import active_apply_job, apply_site
 from app.telemetry.poller import poll_all
 
 log = logging.getLogger(__name__)
@@ -72,12 +71,14 @@ async def run_scheduled_applies(ctx: dict[str, Any]) -> dict[str, int]:
     missed = 0
 
     async with SessionLocal() as session:
-        due = await session.scalars(
-            select(Job).where(
-                Job.kind == JobKind.apply,
-                Job.state == JobState.queued,
-                Job.scheduled_for.isnot(None),
-                Job.scheduled_for <= now,
+        due = list(
+            await session.scalars(
+                select(Job).where(
+                    Job.kind == JobKind.apply,
+                    Job.state == JobState.queued,
+                    Job.scheduled_for.isnot(None),
+                    Job.scheduled_for <= now,
+                )
             )
         )
         for job in due:
@@ -99,6 +100,26 @@ async def run_scheduled_applies(ctx: dict[str, Any]) -> dict[str, int]:
                 job.error = "Site no longer exists"
                 job.finished_at = now
                 missed += 1
+                continue
+
+            # The sweep commits once at the end, and two jobs for the same
+            # site can be due in one sweep -- or an interactive apply can be
+            # pushing while the sweep runs. Pushing twice arms two dead-man
+            # rollbacks on the same device, so a site that already has an
+            # apply in flight is skipped, loudly.
+            if await active_apply_job(session, site.id, exclude_id=job.id) is not None:
+                job.state = JobState.failed
+                job.error = (
+                    "Skipped: another apply is already queued or running for "
+                    "this site. Reschedule if the change is still wanted."
+                )
+                job.finished_at = now
+                missed += 1
+                log.warning(
+                    "job %s skipped: site %s already has an apply in flight",
+                    job.id,
+                    site.name,
+                )
                 continue
 
             await apply_site(session, site, job)
@@ -124,16 +145,12 @@ async def telemetry_poll(ctx: dict[str, Any]) -> dict[str, int]:
     settings = get_settings()
     async with SessionLocal() as session:
         written = await poll_all(session)
-        # Judge the samples just written, in the same session and commit:
-        # the evaluator reads only the database (no driver session), so a
-        # separate sweep would just re-read what this one already has.
-        evaluations = await evaluate_all(session)
         await session.commit()
 
     await ctx["redis"].enqueue_job(
         "telemetry_poll", _defer_by=settings.telemetry_poll_seconds
     )
-    return {"samples": written, "evaluations": evaluations}
+    return {"samples": written}
 
 
 async def startup(ctx: dict[str, Any]) -> None:
