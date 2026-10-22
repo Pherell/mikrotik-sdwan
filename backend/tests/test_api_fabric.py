@@ -1666,3 +1666,110 @@ async def test_global_links_span_fabrics(api) -> None:
     assert len(links) == 4  # two hub-spoke links per fabric
     assert {link["fabric_id"] for link in links} == {fabric_id, wg_id}
     assert all(link["has_secrets"] for link in links)
+
+
+# -- three-defect cleanup: honest defaults, driverless transport, subnets ---
+
+
+async def test_new_fabric_defaults_to_hub_spoke(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+
+    resp = await client.post(
+        "/fabrics",
+        headers=headers,
+        json={"name": "plain", "transport": "wireguard", "ip_pool": "10.255.0.0/24"},
+    )
+    assert resp.status_code == 201, resp.text
+    # hub_spoke_dynamic expands exactly like hub_spoke today, so it must not
+    # be what a fabric silently gets; it stays available as an explicit
+    # choice for existing data and the day the mesh engine lands.
+    assert resp.json()["topology"] == "hub_spoke"
+
+    explicit = await client.post(
+        "/fabrics",
+        headers=headers,
+        json={
+            "name": "explicit-dynamic",
+            "transport": "wireguard",
+            "topology": "hub_spoke_dynamic",
+            "ip_pool": "10.255.0.0/24",
+        },
+    )
+    assert explicit.status_code == 201, explicit.text
+    assert explicit.json()["topology"] == "hub_spoke_dynamic"
+
+
+async def test_driverless_transport_is_rejected_clearly(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+
+    resp = await client.post(
+        "/fabrics",
+        headers=headers,
+        json={"name": "policy-net", "transport": "ipsec_policy"},
+    )
+    # ipsec_policy is a defined Transport with no driver. "Unknown transport"
+    # would send the operator hunting for a typo; the error has to say the
+    # transport exists but is not available.
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert "not available" in detail and "no driver" in detail
+
+
+async def test_second_fabric_skips_subnets_held_by_the_first(api) -> None:
+    client, _, _ = api
+    headers = await _auth(client)
+    fabric_id, sites = await _three_site_fabric(client, headers)  # pool 10.255.0.0/24
+    await client.post(f"/fabrics/{fabric_id}/expand", headers=headers)
+
+    resp = await client.post(
+        "/fabrics",
+        headers=headers,
+        json={
+            "name": "wg-net",
+            "transport": "wireguard",
+            "topology": "hub_spoke",
+            "ip_pool": "10.255.0.0/24",
+            "member_site_ids": list(sites.values()),
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    wg_id = resp.json()["id"]
+    await client.post(f"/fabrics/{wg_id}/expand", headers=headers)
+
+    first = {
+        link["subnet"]
+        for link in (await client.get(f"/fabrics/{fabric_id}/links", headers=headers)).json()
+    }
+    second = {
+        link["subnet"]
+        for link in (await client.get(f"/fabrics/{wg_id}/links", headers=headers)).json()
+    }
+    assert first == {"10.255.0.0/31", "10.255.0.2/31"}
+    # Same default pool: without cross-fabric reservation the second fabric
+    # would re-hand exactly the first fabric's /31s from the bottom.
+    assert second == {"10.255.0.4/31", "10.255.0.6/31"}
+    assert first.isdisjoint(second)
+
+    # A fabric on a pool that does not overlap is unaffected and still
+    # allocates from its own bottom.
+    resp = await client.post(
+        "/fabrics",
+        headers=headers,
+        json={
+            "name": "elsewhere",
+            "transport": "wireguard",
+            "topology": "hub_spoke",
+            "ip_pool": "10.99.0.0/24",
+            "member_site_ids": list(sites.values()),
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    other_id = resp.json()["id"]
+    await client.post(f"/fabrics/{other_id}/expand", headers=headers)
+    third = {
+        link["subnet"]
+        for link in (await client.get(f"/fabrics/{other_id}/links", headers=headers)).json()
+    }
+    assert third == {"10.99.0.0/31", "10.99.0.2/31"}
