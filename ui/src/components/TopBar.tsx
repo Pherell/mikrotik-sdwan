@@ -27,8 +27,14 @@ const NAV: Entry[] = [
     ],
   },
   {
-    label: "Tunnels",
-    children: [{ to: "/tunnel-networks", label: "Tunnel networks" }],
+    label: "VPN",
+    children: [
+      { to: "/vpn", label: "All tunnels" },
+      { to: "/vpn/wireguard", label: "WireGuard" },
+      { to: "/vpn/ipsec", label: "IPsec" },
+      { to: "/vpn/gre", label: "GRE / IPIP" },
+      { to: "/vpn/l2", label: "L2 — VXLAN / EoIP" },
+    ],
   },
   {
     label: "Devices",

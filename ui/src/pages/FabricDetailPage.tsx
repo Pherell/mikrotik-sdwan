@@ -17,7 +17,7 @@ export function FabricDetailPage() {
   const { fabricId = "" } = useParams();
   const queryClient = useQueryClient();
   const [expansion, setExpansion] = useState<Expansion | null>(null);
-  const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState<"topology" | "tunnels" | "settings">("topology");
   const navigate = useNavigate();
   const me = useQuery({ queryKey: ["me"], queryFn: endpoints.me });
   const transports = useQuery({
@@ -47,7 +47,7 @@ export function FabricDetailPage() {
     mutationFn: () => endpoints.deleteFabric(fabricId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["fabrics"] });
-      navigate("/fabrics", { replace: true });
+      navigate("/vpn", { replace: true });
     },
   });
 
@@ -83,7 +83,7 @@ export function FabricDetailPage() {
   return (
     <>
       <p>
-        <Link to="/tunnel-networks">← All tunnel networks</Link>
+        <Link to="/vpn">← All tunnels</Link>
       </p>
 
       <div className="card">
@@ -99,9 +99,7 @@ export function FabricDetailPage() {
             </button>
           </div>
           <div className="no-grow">
-            <button onClick={() => setEditing(!editing)}>
-              {editing ? "Close" : "Settings"}
-            </button>
+            <button onClick={() => setTab("settings")}>Settings</button>
           </div>
           {me.data?.role === "admin" && (
             <div className="no-grow">
@@ -176,13 +174,42 @@ export function FabricDetailPage() {
         {expansion && <ExpansionResult result={expansion} />}
       </div>
 
-      {editing && <FabricSettings fabric={f} onDone={() => setEditing(false)} />}
+      <div className="tabs">
+        <button
+          type="button"
+          className={`tab${tab === "topology" ? " active" : ""}`}
+          onClick={() => setTab("topology")}
+        >
+          Topology
+        </button>
+        <button
+          type="button"
+          className={`tab${tab === "tunnels" ? " active" : ""}`}
+          onClick={() => setTab("tunnels")}
+        >
+          Tunnels
+        </button>
+        <button
+          type="button"
+          className={`tab${tab === "settings" ? " active" : ""}`}
+          onClick={() => setTab("settings")}
+        >
+          Settings
+        </button>
+      </div>
 
+      {tab === "settings" && (
+        <FabricSettings fabric={f} onDone={() => setTab("topology")} />
+      )}
+
+      {tab === "topology" && (
       <div className="card">
         <h2>Topology</h2>
         <TopologyGraph fabric={f} links={links.data ?? []} sites={sites.data ?? []} />
       </div>
+      )}
 
+      {tab === "topology" && (
       <div className="card">
         <h2>Members</h2>
         {f.members.length === 0 ? (
@@ -236,7 +263,9 @@ export function FabricDetailPage() {
           <div className="error">{(addMember.error as Error).message}</div>
         )}
       </div>
+      )}
 
+      {tab === "tunnels" && (
       <div className="card">
         <h2>Tunnels</h2>
         <p className="muted" style={{ marginTop: 0 }}>
@@ -283,6 +312,7 @@ export function FabricDetailPage() {
           </>
         )}
       </div>
+      )}
     </>
   );
 }

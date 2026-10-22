@@ -33,6 +33,7 @@ from app.transports.params import describe
 from app.transports.params import validate as validate_params
 
 router = APIRouter(prefix="/fabrics", tags=["fabrics"])
+links_router = APIRouter(prefix="/links", tags=["fabrics"])
 
 
 async def _get_or_404(session: SessionDep, fabric_id: str, tenant_id: str) -> Fabric:
@@ -96,10 +97,19 @@ async def list_transports(_: RequireViewer) -> list[dict]:
 
 
 @router.get("", response_model=list[FabricRead])
-async def list_fabrics(session: SessionDep, user: RequireViewer) -> list[FabricRead]:
+async def list_fabrics(
+    session: SessionDep, user: RequireViewer, transport: str | None = None
+) -> list[FabricRead]:
+    if transport is not None and transport not in available():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"unknown transport '{transport}'"
+        )
+    conditions = [Fabric.tenant_id == user.tenant_id]
+    if transport is not None:
+        conditions.append(Fabric.transport == transport)
     ids = list(
         await session.scalars(
-            select(Fabric.id).where(Fabric.tenant_id == user.tenant_id).order_by(Fabric.name)
+            select(Fabric.id).where(*conditions).order_by(Fabric.name)
         )
     )
     return [
@@ -384,6 +394,26 @@ async def list_links(
     await _get_or_404(session, fabric_id, user.tenant_id)
     links = await session.scalars(
         select(Link).where(Link.fabric_id == fabric_id).order_by(Link.slug)
+    )
+    return [
+        LinkRead.model_validate({**link.__dict__, "has_secrets": bool(link.secrets_enc)})
+        for link in links
+    ]
+
+
+@links_router.get("", response_model=list[LinkRead])
+async def list_all_links(session: SessionDep, user: RequireViewer) -> list[LinkRead]:
+    """Every link in the tenant, across all fabrics.
+
+    Feeds the cross-protocol "all tunnels" view: one read instead of one
+    request per fabric. Tenant scope comes through the fabric join — Link
+    rows carry no tenant id of their own.
+    """
+    links = await session.scalars(
+        select(Link)
+        .join(Fabric, Link.fabric_id == Fabric.id)
+        .where(Fabric.tenant_id == user.tenant_id)
+        .order_by(Fabric.name, Link.slug)
     )
     return [
         LinkRead.model_validate({**link.__dict__, "has_secrets": bool(link.secrets_enc)})

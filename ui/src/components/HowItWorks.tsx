@@ -22,14 +22,14 @@ const NODES = [
   {
     id: "network",
     label: "Tunnel network",
-    to: "/tunnel-networks",
+    to: "/vpn",
     made: "Devices you pick, and how they should connect (IPsec, WireGuard, GRE…).",
     gives: "One encrypted network joining those devices.",
   },
   {
     id: "tunnels",
     label: "Tunnels",
-    to: "/tunnel-networks",
+    to: "/vpn",
     made: "Computed, never written. Every uplink pair the network's shape allows.",
     gives: "The individual tunnels, with addresses and keys allocated.",
   },

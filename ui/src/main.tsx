@@ -12,7 +12,7 @@ import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GuidePage } from "./pages/GuidePage";
 import { LogsPage } from "./pages/LogsPage";
 import { FabricDetailPage } from "./pages/FabricDetailPage";
-import { FabricsPage } from "./pages/FabricsPage";
+import { AllTunnelsPage, PROTOCOLS, ProtocolNetworksPage } from "./pages/VpnPages";
 import { JobsPage } from "./pages/JobsPage";
 import { PoliciesPage } from "./pages/PoliciesPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -42,7 +42,7 @@ function LegacySiteRedirect() {
 
 function LegacyFabricRedirect() {
   const { fabricId } = useParams();
-  return <Navigate to={`/tunnel-networks/${fabricId}`} replace />;
+  return <Navigate to={`/vpn/${fabricId}`} replace />;
 }
 
 const root = document.getElementById("root");
@@ -63,9 +63,26 @@ createRoot(root).render(
             <Route path="/sdwan-groups" element={<SdwanGroupsPage />} />
             <Route path="/traffic-rules" element={<PoliciesPage />} />
 
-            {/* Tunnels: the overlay those uplinks carry. */}
-            <Route path="/tunnel-networks" element={<FabricsPage />} />
-            <Route path="/tunnel-networks/:fabricId" element={<FabricDetailPage />} />
+            {/* VPN: the overlay those uplinks carry, split per protocol.
+                One fabric engine underneath; the menu is the filter. */}
+            <Route path="/vpn" element={<AllTunnelsPage />} />
+            <Route
+              path="/vpn/wireguard"
+              element={<ProtocolNetworksPage protocol={PROTOCOLS.wireguard} />}
+            />
+            <Route
+              path="/vpn/ipsec"
+              element={<ProtocolNetworksPage protocol={PROTOCOLS.ipsec} />}
+            />
+            <Route
+              path="/vpn/gre"
+              element={<ProtocolNetworksPage protocol={PROTOCOLS.gre} />}
+            />
+            <Route
+              path="/vpn/l2"
+              element={<ProtocolNetworksPage protocol={PROTOCOLS.l2} />}
+            />
+            <Route path="/vpn/:fabricId" element={<FabricDetailPage />} />
 
             {/* Devices. */}
             <Route path="/devices" element={<SitesPage />} />
@@ -76,7 +93,9 @@ createRoot(root).render(
                 Renaming the words should not cost anyone a 404. */}
             <Route path="/sites" element={<Navigate to="/devices" replace />} />
             <Route path="/sites/:siteId" element={<LegacySiteRedirect />} />
-            <Route path="/fabrics" element={<Navigate to="/tunnel-networks" replace />} />
+            <Route path="/tunnel-networks" element={<Navigate to="/vpn" replace />} />
+            <Route path="/tunnel-networks/:fabricId" element={<LegacyFabricRedirect />} />
+            <Route path="/fabrics" element={<Navigate to="/vpn" replace />} />
             <Route path="/fabrics/:fabricId" element={<LegacyFabricRedirect />} />
             <Route path="/policies" element={<Navigate to="/traffic-rules" replace />} />
             <Route path="/jobs" element={<JobsPage />} />
