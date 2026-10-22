@@ -2,9 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 
 
-import { endpoints, type Policy, type SlaProfile,
-  type SdwanGroup,
-} from "../lib/api";
+import { endpoints, type Policy, type SdwanGroup } from "../lib/api";
 import { type Infra, swallowed } from "../lib/cidr";
 import { Skeleton } from "../components/Skeleton";
 import { PageHeader } from "../components/PageHeader";
@@ -14,7 +12,6 @@ export function PoliciesPage() {
   const [adding, setAdding] = useState(false);
 
   const policies = useQuery({ queryKey: ["policies"], queryFn: endpoints.policies });
-  const slas = useQuery({ queryKey: ["slas"], queryFn: endpoints.slaProfiles });
   const sdwanGroups = useQuery({
     queryKey: ["sdwan-groups"],
     queryFn: endpoints.sdwanGroups,
@@ -175,8 +172,6 @@ export function PoliciesPage() {
         {remove.isError && <div className="error">{(remove.error as Error).message}</div>}
         {update.isError && <div className="error">{(update.error as Error).message}</div>}
       </div>
-
-      <SlaProfiles profiles={slas.data ?? []} />
     </>
   );
 }
@@ -189,74 +184,6 @@ function describeMatch(p: Policy): string {
   if (p.dst_ports) parts.push(`port ${p.dst_ports}`);
   if (p.dscp !== null) parts.push(`dscp ${p.dscp}`);
   return parts.join(" · ") || "everything";
-}
-
-function SlaProfiles({ profiles }: { profiles: SlaProfile[] }) {
-  const queryClient = useQueryClient();
-  const [adding, setAdding] = useState(false);
-
-  const remove = useMutation({
-    mutationFn: (id: string) => endpoints.deleteSla(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["slas"] }),
-  });
-
-  return (
-    <div className="card">
-      <div className="row" style={{ alignItems: "center" }}>
-        <h2 style={{ margin: 0 }}>SLA profiles</h2>
-        <div className="no-grow">
-          <button onClick={() => setAdding(!adding)}>
-            {adding ? "Cancel" : "New profile"}
-          </button>
-        </div>
-      </div>
-      {adding && (
-        <SlaForm
-          onDone={() => {
-            setAdding(false);
-            queryClient.invalidateQueries({ queryKey: ["slas"] });
-          }}
-        />
-      )}
-      {remove.isError && <div className="error">{(remove.error as Error).message}</div>}
-      {profiles.length === 0 ? (
-        <p className="muted">
-          None defined. Policies without one use 20% loss / 300 ms, probed every 10 s.
-        </p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Loss</th>
-              <th>Latency</th>
-              <th>Jitter</th>
-              <th>Probe</th>
-              <th>Detects in</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {profiles.map((s) => (
-              <tr key={s.id}>
-                <td>{s.name}</td>
-                <td>{s.loss_percent}%</td>
-                <td>{s.latency_ms} ms</td>
-                <td>{s.jitter_ms ? `${s.jitter_ms} ms` : "—"}</td>
-                <td className="muted">
-                  {s.probe_count} × {s.probe_interval_seconds}s
-                </td>
-                <td className="muted">~{s.detection_seconds}s</td>
-                <td>
-                  <button onClick={() => remove.mutate(s.id)}>Delete</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
 }
 
 function NewPolicyForm({
@@ -456,115 +383,3 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
-function SlaForm({ onDone }: { onDone: () => void }) {
-  const [form, setForm] = useState({
-    name: "",
-    loss_percent: 20,
-    latency_ms: 300,
-    jitter_ms: "",
-    probe_interval_seconds: 10,
-    probe_count: 10,
-    recovery_seconds: 60,
-  });
-
-  const create = useMutation({
-    mutationFn: () =>
-      endpoints.createSla({
-        ...form,
-        jitter_ms: form.jitter_ms ? Number(form.jitter_ms) : null,
-      }),
-    onSuccess: onDone,
-  });
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        create.mutate();
-      }}
-      style={{ margin: "12px 0" }}
-    >
-      {create.isError && <div className="error">{(create.error as Error).message}</div>}
-      <div className="row">
-        <label>
-          Name
-          <input
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-        </label>
-        <label>
-          Loss %
-          <input
-            type="number"
-            min={1}
-            max={100}
-            value={form.loss_percent}
-            onChange={(e) => setForm({ ...form, loss_percent: Number(e.target.value) })}
-          />
-        </label>
-        <label>
-          Latency (ms)
-          <input
-            type="number"
-            min={1}
-            value={form.latency_ms}
-            onChange={(e) => setForm({ ...form, latency_ms: Number(e.target.value) })}
-          />
-        </label>
-        <label>
-          Jitter (ms)
-          <input
-            type="number"
-            placeholder="optional"
-            value={form.jitter_ms}
-            onChange={(e) => setForm({ ...form, jitter_ms: e.target.value })}
-          />
-          <span className="muted">
-            RouterOS measures jitter as max − min RTT within one probe test.
-          </span>
-        </label>
-      </div>
-      <div className="row">
-        <label>
-          Probe every (s)
-          <input
-            type="number"
-            min={1}
-            value={form.probe_interval_seconds}
-            onChange={(e) =>
-              setForm({ ...form, probe_interval_seconds: Number(e.target.value) })
-            }
-          />
-        </label>
-        <label>
-          Packets per probe
-          <input
-            type="number"
-            min={1}
-            value={form.probe_count}
-            onChange={(e) => setForm({ ...form, probe_count: Number(e.target.value) })}
-          />
-        </label>
-        <label>
-          Recovery hold (s)
-          <input
-            type="number"
-            min={0}
-            value={form.recovery_seconds}
-            onChange={(e) => setForm({ ...form, recovery_seconds: Number(e.target.value) })}
-          />
-        </label>
-      </div>
-      <p className="muted">
-        Detection takes roughly {form.probe_interval_seconds * 2}s. Tightening the
-        interval speeds that up and costs router CPU; below a second or two you start
-        failing over on ordinary jitter.
-      </p>
-      <button className="primary" type="submit" disabled={create.isPending}>
-        {create.isPending ? "Creating…" : "Create"}
-      </button>
-    </form>
-  );
-}

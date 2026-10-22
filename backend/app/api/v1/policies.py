@@ -19,6 +19,7 @@ from app.schemas.policy import (
     SdwanGroupUpdate,
     SlaProfileCreate,
     SlaProfileRead,
+    SlaProfileUpdate,
 )
 
 router = APIRouter(tags=["policies"])
@@ -63,6 +64,47 @@ async def create_sla(
         object_type="sla_profile",
         object_id=profile.id,
         detail={"name": profile.name},
+        request=request,
+    )
+    return _sla_read(profile)
+
+
+@router.patch("/sla-profiles/{profile_id}", response_model=SlaProfileRead)
+async def update_sla(
+    profile_id: str,
+    body: SlaProfileUpdate,
+    session: SessionDep,
+    user: RequireOperator,
+    request: Request,
+) -> SlaProfileRead:
+    profile = await get_owned(session, SlaProfile, profile_id, user.tenant_id)
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such SLA profile")
+
+    data = body.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(profile, field, value)
+    # Capture before flush: after a rollback the ORM object is expired and
+    # touching profile.name in the error handler would lazy-load outside
+    # the async greenlet.
+    attempted_name = profile.name
+
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"An SLA profile named {attempted_name!r} already exists",
+        ) from exc
+
+    await write_audit(
+        session,
+        actor=user,
+        action="sla.update",
+        object_type="sla_profile",
+        object_id=profile.id,
+        detail={"fields": sorted(data)},
         request=request,
     )
     return _sla_read(profile)

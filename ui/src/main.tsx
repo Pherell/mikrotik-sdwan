@@ -20,6 +20,8 @@ import { UsersPage } from "./pages/UsersPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SiteDetailPage } from "./pages/SiteDetailPage";
 import { SdwanGroupsPage } from "./pages/SdwanGroupsPage";
+import { SlaCompliancePage } from "./pages/SlaCompliancePage";
+import { SlaProfilesPage } from "./pages/SlaProfilesPage";
 import { SitesPage } from "./pages/SitesPage";
 import { UplinksPage } from "./pages/UplinksPage";
 
@@ -60,8 +62,14 @@ createRoot(root).render(
 
             {/* SD-WAN: choosing between uplinks. */}
             <Route path="/uplinks" element={<UplinksPage />} />
-            <Route path="/sdwan-groups" element={<SdwanGroupsPage />} />
-            <Route path="/traffic-rules" element={<PoliciesPage />} />
+
+            {/* Traffic: what the chosen uplinks carry — the rules that
+                match it, the groups they point at, the standard those
+                groups are held to, and how they actually scored. */}
+            <Route path="/traffic/rules" element={<PoliciesPage />} />
+            <Route path="/traffic/groups" element={<SdwanGroupsPage />} />
+            <Route path="/traffic/sla-profiles" element={<SlaProfilesPage />} />
+            <Route path="/traffic/compliance" element={<SlaCompliancePage />} />
 
             {/* VPN: the overlay those uplinks carry, split per protocol.
                 One fabric engine underneath; the menu is the filter. */}
@@ -97,7 +105,9 @@ createRoot(root).render(
             <Route path="/tunnel-networks/:fabricId" element={<LegacyFabricRedirect />} />
             <Route path="/fabrics" element={<Navigate to="/vpn" replace />} />
             <Route path="/fabrics/:fabricId" element={<LegacyFabricRedirect />} />
-            <Route path="/policies" element={<Navigate to="/traffic-rules" replace />} />
+            <Route path="/policies" element={<Navigate to="/traffic/rules" replace />} />
+            <Route path="/traffic-rules" element={<Navigate to="/traffic/rules" replace />} />
+            <Route path="/sdwan-groups" element={<Navigate to="/traffic/groups" replace />} />
             <Route path="/jobs" element={<JobsPage />} />
             <Route path="/logs" element={<LogsPage />} />
             <Route path="/api-access" element={<ApiPage />} />

@@ -41,6 +41,29 @@ class SlaProfileCreate(SlaProfileBase):
     pass
 
 
+class SlaProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = None
+    loss_percent: int | None = Field(default=None, ge=1, le=100)
+    latency_ms: int | None = Field(default=None, ge=1, le=10000)
+    jitter_ms: int | None = Field(default=None, ge=1, le=10000)
+    probe_interval_seconds: int | None = Field(default=None, ge=1, le=3600)
+    probe_count: int | None = Field(default=None, ge=1, le=100)
+    recovery_seconds: int | None = Field(default=None, ge=0, le=3600)
+    eval_window_minutes: int | None = Field(default=None, ge=1, le=1440)
+
+    @field_validator("probe_interval_seconds")
+    @classmethod
+    def _not_too_twitchy(cls, v: int | None) -> int | None:
+        if v is None:
+            return v
+        if v < 1:
+            raise ValueError("probe_interval_seconds must be at least 1")
+        return v
+
+
 class SlaProfileRead(SlaProfileBase):
     model_config = ConfigDict(from_attributes=True)
 

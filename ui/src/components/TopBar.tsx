@@ -20,10 +20,15 @@ const NAV: Entry[] = [
   { label: "Overview", to: "/", end: true },
   {
     label: "SD-WAN",
+    children: [{ to: "/uplinks", label: "Uplinks" }],
+  },
+  {
+    label: "Traffic",
     children: [
-      { to: "/uplinks", label: "Uplinks" },
-      { to: "/sdwan-groups", label: "SD-WAN groups" },
-      { to: "/traffic-rules", label: "Traffic rules" },
+      { to: "/traffic/rules", label: "Rules" },
+      { to: "/traffic/groups", label: "SD-WAN groups" },
+      { to: "/traffic/sla-profiles", label: "SLA profiles" },
+      { to: "/traffic/compliance", label: "SLA compliance" },
     ],
   },
   {
