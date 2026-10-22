@@ -14,8 +14,8 @@ from app.models.enums import JobKind, JobState
 from app.models.job import Job
 from app.models.site import Site
 from app.reconcile.apply import find_stale_rollbacks
-from app.schemas.job import ApplyRequest, JobRead, PlanRead
-from app.services.reconcile import active_apply_job, apply_site, new_job, plan_site
+from app.schemas.job import ApplyRequest, IntentPreviewRead, JobRead, PlanRead
+from app.services.reconcile import active_apply_job, apply_site, new_job, plan_site, preview_intent
 
 router = APIRouter(tags=["jobs"])
 
@@ -36,6 +36,22 @@ async def plan(site_id: str, session: SessionDep, user: RequireViewer) -> PlanRe
     site = await _site_or_404(session, site_id, user.tenant_id)
     result = await plan_site(session, site)
     return PlanRead.model_validate(result.to_json())
+
+
+@router.post("/sites/{site_id}/preview", response_model=IntentPreviewRead)
+async def preview(
+    site_id: str, session: SessionDep, user: RequireViewer
+) -> IntentPreviewRead:
+    """Render the intent for a site without contacting the device at all.
+
+    Unlike /plan this opens no driver session: it shows what the controller
+    intends to own, rendered from configuration alone, so it works for an
+    unprovisioned or unreachable site -- and it is labelled as intent, never
+    as a diff against the device. Read-only, so a viewer may run it.
+    """
+    site = await _site_or_404(session, site_id, user.tenant_id)
+    result = await preview_intent(session, site)
+    return IntentPreviewRead.model_validate(result)
 
 
 @router.post("/sites/{site_id}/apply", response_model=JobRead)
