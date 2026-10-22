@@ -1,0 +1,597 @@
+[
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "address": "0.0.0.0/0",
+          "list": "sdwan-bulk-dst"
+        },
+        "tag": "sdwan:policy:bulk:list"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "address": "192.168.10.0/24",
+          "list": "sdwan-branch-1-lan"
+        },
+        "tag": "sdwan:policy:branch-1:lan:192.168.10.0/24"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "address": "203.0.113.1",
+          "list": "sdwan-branch-1-infra"
+        },
+        "tag": "sdwan:policy:branch-1:infra:203.0.113.1"
+      }
+    ],
+    "key": [
+      "list",
+      "address"
+    ],
+    "order": 10,
+    "ordered": false,
+    "owner_tag": "sdwan:policy:",
+    "path": "/ip/firewall/address-list",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [
+      "fib"
+    ],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "fib": "true",
+          "name": "sdwan-bulk-0"
+        },
+        "tag": "sdwan:policy:sdwan-bulk:table"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "fib": "true",
+          "name": "sdwan-bulk-1"
+        },
+        "tag": "sdwan:policy:sdwan-bulk:table"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "fib": "true",
+          "name": "sdwan-video"
+        },
+        "tag": "sdwan:policy:sdwan-video:table"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "fib": "true",
+          "name": "sdwan-voice"
+        },
+        "tag": "sdwan:policy:sdwan-voice:table"
+      }
+    ],
+    "key": [
+      "name"
+    ],
+    "order": 15,
+    "ordered": false,
+    "owner_tag": "sdwan:policy:",
+    "path": "/routing/table",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "action": "lookup",
+          "comment": "sdwan:policy:bulk:rule:sdwan-bulk-0",
+          "routing-mark": "sdwan-bulk-0",
+          "table": "sdwan-bulk-0"
+        },
+        "tag": "sdwan:policy:bulk:rule:sdwan-bulk-0"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "lookup",
+          "comment": "sdwan:policy:bulk:rule:sdwan-bulk-1",
+          "routing-mark": "sdwan-bulk-1",
+          "table": "sdwan-bulk-1"
+        },
+        "tag": "sdwan:policy:bulk:rule:sdwan-bulk-1"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "lookup",
+          "comment": "sdwan:policy:video:rule:sdwan-video",
+          "routing-mark": "sdwan-video",
+          "table": "sdwan-video"
+        },
+        "tag": "sdwan:policy:video:rule:sdwan-video"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "lookup",
+          "comment": "sdwan:policy:voice:rule:sdwan-voice",
+          "routing-mark": "sdwan-voice",
+          "table": "sdwan-voice"
+        },
+        "tag": "sdwan:policy:voice:rule:sdwan-voice"
+      }
+    ],
+    "key": [
+      "comment"
+    ],
+    "order": 62,
+    "ordered": false,
+    "owner_tag": "sdwan:policy:",
+    "path": "/routing/rule",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [
+      "disabled"
+    ],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "action": "accept",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:branch-1:local_dst:rule",
+          "dst-address-type": "local"
+        },
+        "tag": "sdwan:policy:branch-1:local_dst:rule"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "accept",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:branch-1:lan_dst:rule",
+          "dst-address-list": "sdwan-branch-1-lan"
+        },
+        "tag": "sdwan:policy:branch-1:lan_dst:rule"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "accept",
+          "chain": "output",
+          "comment": "sdwan:policy:branch-1:lan_dst:rule:output",
+          "dst-address-list": "sdwan-branch-1-lan"
+        },
+        "tag": "sdwan:policy:branch-1:lan_dst:rule:output"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "accept",
+          "chain": "output",
+          "comment": "sdwan:policy:branch-1:infra:rule",
+          "dst-address-list": "sdwan-branch-1-infra"
+        },
+        "tag": "sdwan:policy:branch-1:infra:rule"
+      },
+      {
+        "enforce": [
+          "disabled"
+        ],
+        "props": {
+          "action": "mark-connection",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:bulk:pcc-0",
+          "connection-mark": "no-mark",
+          "connection-state": "new",
+          "disabled": "false",
+          "dst-address-list": "sdwan-bulk-dst",
+          "new-connection-mark": "sdwan-bulk-c0",
+          "passthrough": "true",
+          "per-connection-classifier": "both-addresses:4/0"
+        },
+        "tag": "sdwan:policy:bulk:pcc-0"
+      },
+      {
+        "enforce": [
+          "disabled"
+        ],
+        "props": {
+          "action": "mark-connection",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:bulk:pcc-1",
+          "connection-mark": "no-mark",
+          "connection-state": "new",
+          "disabled": "false",
+          "dst-address-list": "sdwan-bulk-dst",
+          "new-connection-mark": "sdwan-bulk-c0",
+          "passthrough": "true",
+          "per-connection-classifier": "both-addresses:4/1"
+        },
+        "tag": "sdwan:policy:bulk:pcc-1"
+      },
+      {
+        "enforce": [
+          "disabled"
+        ],
+        "props": {
+          "action": "mark-connection",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:bulk:pcc-2",
+          "connection-mark": "no-mark",
+          "connection-state": "new",
+          "disabled": "false",
+          "dst-address-list": "sdwan-bulk-dst",
+          "new-connection-mark": "sdwan-bulk-c0",
+          "passthrough": "true",
+          "per-connection-classifier": "both-addresses:4/2"
+        },
+        "tag": "sdwan:policy:bulk:pcc-2"
+      },
+      {
+        "enforce": [
+          "disabled"
+        ],
+        "props": {
+          "action": "mark-connection",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:bulk:pcc-3",
+          "connection-mark": "no-mark",
+          "connection-state": "new",
+          "disabled": "false",
+          "dst-address-list": "sdwan-bulk-dst",
+          "new-connection-mark": "sdwan-bulk-c1",
+          "passthrough": "true",
+          "per-connection-classifier": "both-addresses:4/3"
+        },
+        "tag": "sdwan:policy:bulk:pcc-3"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "mark-routing",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:bulk:route-0",
+          "connection-mark": "sdwan-bulk-c0",
+          "new-routing-mark": "sdwan-bulk-0",
+          "passthrough": "false"
+        },
+        "tag": "sdwan:policy:bulk:route-0"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "mark-routing",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:bulk:route-1",
+          "connection-mark": "sdwan-bulk-c1",
+          "new-routing-mark": "sdwan-bulk-1",
+          "passthrough": "false"
+        },
+        "tag": "sdwan:policy:bulk:route-1"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "mark-routing",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:video",
+          "new-routing-mark": "sdwan-video",
+          "passthrough": "false"
+        },
+        "tag": "sdwan:policy:video"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "mark-routing",
+          "chain": "output",
+          "comment": "sdwan:policy:video:output",
+          "new-routing-mark": "sdwan-video",
+          "passthrough": "false"
+        },
+        "tag": "sdwan:policy:video:output"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "mark-routing",
+          "chain": "prerouting",
+          "comment": "sdwan:policy:voice",
+          "new-routing-mark": "sdwan-voice",
+          "passthrough": "false"
+        },
+        "tag": "sdwan:policy:voice"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "action": "mark-routing",
+          "chain": "output",
+          "comment": "sdwan:policy:voice:output",
+          "new-routing-mark": "sdwan-voice",
+          "passthrough": "false"
+        },
+        "tag": "sdwan:policy:voice:output"
+      }
+    ],
+    "key": [
+      "comment"
+    ],
+    "order": 70,
+    "ordered": true,
+    "owner_tag": "sdwan:policy:",
+    "path": "/ip/firewall/mangle",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [
+      "distance"
+    ],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:bulk:route:sdwan-bulk-0:fibre",
+          "distance": "1",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.2.1",
+          "routing-table": "sdwan-bulk-0"
+        },
+        "tag": "sdwan:policy:bulk:route:sdwan-bulk-0:fibre"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:bulk:route:sdwan-bulk-0:lte",
+          "distance": "2",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.3.1",
+          "routing-table": "sdwan-bulk-0"
+        },
+        "tag": "sdwan:policy:bulk:route:sdwan-bulk-0:lte"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:bulk:route:sdwan-bulk-1:fibre",
+          "distance": "2",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.2.1",
+          "routing-table": "sdwan-bulk-1"
+        },
+        "tag": "sdwan:policy:bulk:route:sdwan-bulk-1:fibre"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:bulk:route:sdwan-bulk-1:lte",
+          "distance": "1",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.3.1",
+          "routing-table": "sdwan-bulk-1"
+        },
+        "tag": "sdwan:policy:bulk:route:sdwan-bulk-1:lte"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:video:route:mpls",
+          "distance": "1",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.0.1",
+          "routing-table": "sdwan-video"
+        },
+        "tag": "sdwan:policy:video:route:mpls"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:video:route:mpls",
+          "distance": "1",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.0.5",
+          "routing-table": "sdwan-video"
+        },
+        "tag": "sdwan:policy:video:route:mpls"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:video:route:inet",
+          "distance": "2",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.1.1",
+          "routing-table": "sdwan-video"
+        },
+        "tag": "sdwan:policy:video:route:inet"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:voice:route:mpls",
+          "distance": "1",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.0.1",
+          "routing-table": "sdwan-voice"
+        },
+        "tag": "sdwan:policy:voice:route:mpls"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:voice:route:mpls",
+          "distance": "1",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.0.5",
+          "routing-table": "sdwan-voice"
+        },
+        "tag": "sdwan:policy:voice:route:mpls"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "check-gateway": "ping",
+          "comment": "sdwan:policy:voice:route:inet",
+          "distance": "2",
+          "dst-address": "0.0.0.0/0",
+          "gateway": "10.255.1.1",
+          "routing-table": "sdwan-voice"
+        },
+        "tag": "sdwan:policy:voice:route:inet"
+      }
+    ],
+    "key": [
+      "dst-address",
+      "gateway",
+      "routing-table"
+    ],
+    "order": 80,
+    "ordered": false,
+    "owner_tag": "sdwan:policy:",
+    "path": "/ip/route",
+    "write_once": []
+  },
+  {
+    "comment_capable": true,
+    "ignore": [
+      "loss-count",
+      "rtt-avg",
+      "rtt-jitter",
+      "sent-count",
+      "since",
+      "status"
+    ],
+    "items": [
+      {
+        "enforce": [],
+        "props": {
+          "comment": "sdwan:policy:sla:fibre:82a95505",
+          "disabled": "false",
+          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=102}",
+          "early-failure-detection": "true",
+          "host": "10.255.2.1",
+          "ignore-initial-down": "true",
+          "ignore-initial-up": "true",
+          "interval": "10s",
+          "packet-count": "10",
+          "thr-avg": "300ms",
+          "thr-loss-percent": "20",
+          "type": "icmp",
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.2.1\" comment=\"sdwan:policy:sla:fibre:82a95505\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=2}}"
+        },
+        "tag": "sdwan:policy:sla:fibre:82a95505"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "comment": "sdwan:policy:sla:lte:82a95505",
+          "disabled": "false",
+          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=102}; :foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=101}",
+          "early-failure-detection": "true",
+          "host": "10.255.3.1",
+          "ignore-initial-down": "true",
+          "ignore-initial-up": "true",
+          "interval": "10s",
+          "packet-count": "10",
+          "thr-avg": "300ms",
+          "thr-loss-percent": "20",
+          "type": "icmp",
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.3.1\" comment=\"sdwan:policy:sla:lte:82a95505\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=2}; :foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=1}}"
+        },
+        "tag": "sdwan:policy:sla:lte:82a95505"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "comment": "sdwan:policy:sla:mpls:aab6d189",
+          "disabled": "false",
+          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=101}",
+          "early-failure-detection": "true",
+          "host": "10.255.0.1",
+          "ignore-initial-down": "true",
+          "ignore-initial-up": "true",
+          "interval": "10s",
+          "packet-count": "20",
+          "thr-avg": "150ms",
+          "thr-jitter": "30ms",
+          "thr-loss-percent": "5",
+          "type": "icmp",
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.1\" comment=\"sdwan:policy:sla:mpls:aab6d189\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=1}}"
+        },
+        "tag": "sdwan:policy:sla:mpls:aab6d189"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "comment": "sdwan:policy:sla:mpls:aab6d189",
+          "disabled": "false",
+          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=101}",
+          "early-failure-detection": "true",
+          "host": "10.255.0.5",
+          "ignore-initial-down": "true",
+          "ignore-initial-up": "true",
+          "interval": "10s",
+          "packet-count": "20",
+          "thr-avg": "150ms",
+          "thr-jitter": "30ms",
+          "thr-loss-percent": "5",
+          "type": "icmp",
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.5\" comment=\"sdwan:policy:sla:mpls:aab6d189\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=1}}"
+        },
+        "tag": "sdwan:policy:sla:mpls:aab6d189"
+      },
+      {
+        "enforce": [],
+        "props": {
+          "comment": "sdwan:policy:sla:inet:aab6d189",
+          "disabled": "false",
+          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=102}; :foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=102}",
+          "early-failure-detection": "true",
+          "host": "10.255.1.1",
+          "ignore-initial-down": "true",
+          "ignore-initial-up": "true",
+          "interval": "10s",
+          "packet-count": "20",
+          "thr-avg": "150ms",
+          "thr-jitter": "30ms",
+          "thr-loss-percent": "5",
+          "type": "icmp",
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.1.1\" comment=\"sdwan:policy:sla:inet:aab6d189\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=2}; :foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=2}}"
+        },
+        "tag": "sdwan:policy:sla:inet:aab6d189"
+      }
+    ],
+    "key": [
+      "host",
+      "comment"
+    ],
+    "order": 90,
+    "ordered": false,
+    "owner_tag": "sdwan:policy:",
+    "path": "/tool/netwatch",
+    "write_once": []
+  }
+]
