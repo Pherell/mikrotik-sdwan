@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -19,6 +20,35 @@ from app.reconcile.plan import Plan, build_plan
 from app.services.fabric import render_device
 
 log = logging.getLogger(__name__)
+
+
+async def active_apply_job(
+    session: AsyncSession, site_id: str, *, exclude_id: str | None = None
+) -> Job | None:
+    """The apply job currently holding this site's push slot, if any.
+
+    At most one apply may push to a device at a time: concurrent pushes arm
+    two dead-man rollback schedulers on the router, and their pre-apply
+    backups can delete each other. The entry points that push -- the API,
+    the scheduled-apply sweep, drift auto-remediation -- consult this before
+    starting. Post-enrollment apply calls apply_site directly and relies on
+    the index backstop alone; a just-enrolled site has no other apply in
+    flight in practice. It is check-then-act, so the partial unique index on
+    jobs is the backstop for the true race; this is the fast path that turns
+    it into a clean refusal instead of a database error.
+    """
+    stmt = (
+        select(Job)
+        .where(
+            Job.site_id == site_id,
+            Job.kind == JobKind.apply,
+            Job.state.in_([JobState.queued, JobState.running]),
+        )
+        .order_by(Job.created_at.desc())
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Job.id != exclude_id)
+    return await session.scalar(stmt)
 
 
 async def plan_site(

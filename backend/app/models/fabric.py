@@ -25,7 +25,7 @@ class Fabric(Base, UUIDPk, Timestamps, Tenanted):
     )
     transport_params: Mapped[dict | None] = mapped_column(JSONCol, default=dict)
     topology: Mapped[Topology] = mapped_column(
-        String(24), nullable=False, default=Topology.hub_spoke_dynamic
+        String(24), nullable=False, default=Topology.hub_spoke
     )
 
     # Tunnel addressing. Every link consumes one /31 out of this pool.

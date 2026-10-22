@@ -124,7 +124,7 @@ function Setup() {
 
       <Step n={3} title="Create the tunnel network">
         <p>
-          <Link to="/tunnel-networks">Tunnel networks</Link> →{" "}
+          <Link to="/vpn">Tunnel networks</Link> →{" "}
           <strong>New</strong>.
         </p>
         <table className="stack">
@@ -251,7 +251,7 @@ const WORDS: { word: string; is: string; isNot: string; to?: string }[] = [
     word: "Tunnel network",
     is: "A set of devices, a way of connecting them, and a shape. The tunnels are computed from it.",
     isNot: "Not a tunnel, and not a VPN server. You never write a tunnel by hand here.",
-    to: "/tunnel-networks",
+    to: "/vpn",
   },
   {
     word: "SD-WAN group",
