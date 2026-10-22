@@ -78,7 +78,7 @@ export function GettingStarted({
           done={hasFabric}
           title="Create a tunnel network"
           what="An encrypted network joining your devices to each other over whatever internet they have. You choose how they connect — IPsec, WireGuard — and which devices take part."
-          to="/tunnel-networks"
+          to="/vpn"
           cta="Create one"
         />
         <Step
@@ -86,7 +86,7 @@ export function GettingStarted({
           done={hasLinks}
           title="Build the tunnels"
           what="One tunnel joins two uplinks. You never write these: the controller works out every pair from the network's members and shape."
-          to="/tunnel-networks"
+          to="/vpn"
           cta="Build them"
         />
         <Step

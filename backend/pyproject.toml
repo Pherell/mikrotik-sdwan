@@ -58,6 +58,9 @@ testpaths = ["tests"]
 # script does not. The Makefile used the first form and CI the second, so the
 # suite was green locally and red on every push for want of this line.
 pythonpath = ["."]
+markers = [
+    "chr: live RouterOS CHR tests; skipped unless CHR_LIVE=1 (see tests/chr/README.md)",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

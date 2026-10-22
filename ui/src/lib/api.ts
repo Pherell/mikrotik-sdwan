@@ -630,7 +630,10 @@ export const endpoints = {
   jobs: (siteId?: string) =>
     api.get<Job[]>(siteId ? `/jobs?site_id=${encodeURIComponent(siteId)}` : "/jobs"),
   job: (id: string) => api.get<Job>(`/jobs/${id}`),
-  fabrics: () => api.get<Fabric[]>("/fabrics"),
+  fabrics: (transport?: string) =>
+    api.get<Fabric[]>(
+      transport ? `/fabrics?transport=${encodeURIComponent(transport)}` : "/fabrics",
+    ),
   fabric: (id: string) => api.get<Fabric>(`/fabrics/${id}`),
   createFabric: (body: unknown) => api.post<Fabric>("/fabrics", body),
   deleteFabric: (id: string) => api.del(`/fabrics/${id}`),
@@ -640,6 +643,7 @@ export const endpoints = {
     api.del(`/fabrics/${id}/members/${siteId}`),
   expand: (id: string) => api.post<Expansion>(`/fabrics/${id}/expand`),
   links: (id: string) => api.get<FabricLink[]>(`/fabrics/${id}/links`),
+  allLinks: () => api.get<FabricLink[]>("/links"),
   transports: () => api.get<TransportInfo[]>("/fabrics/transports"),
   policies: () => api.get<Policy[]>("/policies"),
   createPolicy: (body: unknown) => api.post<Policy>("/policies", body),

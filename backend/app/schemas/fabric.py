@@ -21,7 +21,7 @@ class FabricBase(BaseModel):
     description: str | None = None
     transport: Transport = Transport.ipsec_gre
     transport_params: dict = Field(default_factory=dict)
-    topology: Topology = Topology.hub_spoke_dynamic
+    topology: Topology = Topology.hub_spoke
     ip_pool: str = "10.255.0.0/16"
     loopback_pool: str = "10.254.0.0/24"
     asn: int = Field(default=65000, ge=1, le=4294967295)
