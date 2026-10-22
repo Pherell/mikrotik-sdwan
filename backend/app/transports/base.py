@@ -17,6 +17,7 @@ from ipaddress import ip_address, ip_interface
 from typing import Literal, Protocol, runtime_checkable
 
 from app.drivers.base import ConfigSection
+from app.models.enums import Transport
 
 Side = Literal["a", "b"]
 
@@ -275,9 +276,19 @@ def get_transport(name: str) -> TransportDriver:
     try:
         return _REGISTRY[name]
     except KeyError:
+        pass
+    # A name can be a perfectly valid Transport enum value and still have no
+    # driver registered for it (ipsec_policy is defined, but nothing renders
+    # it). Calling that "unknown" sends the operator hunting for a typo that
+    # does not exist; say which of the two failures it actually is.
+    if name in {t.value for t in Transport}:
         raise TransportError(
-            f"Unknown transport {name!r}. Available: {sorted(_REGISTRY)}"
-        ) from None
+            f"Transport {name!r} is defined but not available: "
+            "no driver is registered for it yet."
+        )
+    raise TransportError(
+        f"Unknown transport {name!r}. Available: {sorted(_REGISTRY)}"
+    )
 
 
 def available() -> list[str]:

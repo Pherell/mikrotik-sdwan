@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
+from ipaddress import ip_network
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,6 +100,7 @@ async def expand_fabric(session: AsyncSession, fabric: Fabric) -> ExpansionResul
         list(fabric.links),
         transport,
         reserved_ports=await _ports_held_elsewhere(session, fabric),
+        reserved_subnets=await _subnets_held_elsewhere(session, fabric),
     )
 
     for link in result.created:
@@ -141,6 +143,36 @@ async def _ports_held_elsewhere(session: AsyncSession, fabric: Fabric) -> set[in
         )
     )
     return {int(p) for p in ports if p is not None}
+
+
+async def _subnets_held_elsewhere(session: AsyncSession, fabric: Fabric) -> set[str]:
+    """Link /31s that other fabrics in this tenant already hold from a pool
+    overlapping this fabric's pool.
+
+    The subnet twin of ``_ports_held_elsewhere``. Ports were reserved across
+    fabrics but subnets were not, and every fabric defaults to the same
+    tunnel pool -- so a second fabric expanded from the bottom of the same
+    addresses the first one already handed out. Existing links are never
+    renumbered (allocation is stable), so this only steers *new* links
+    around the ones already out there; two fabrics that already overlap keep
+    the addresses they have.
+    """
+    rows = (
+        await session.execute(
+            select(Link.subnet, Fabric.ip_pool)
+            .join(Fabric, Link.fabric_id == Fabric.id)
+            .where(
+                Fabric.tenant_id == fabric.tenant_id,
+                Link.fabric_id != fabric.id,
+            )
+        )
+    ).all()
+    mine = ip_network(fabric.ip_pool, strict=False)
+    return {
+        subnet
+        for subnet, pool in rows
+        if ip_network(pool, strict=False).overlaps(mine)
+    }
 
 
 def _assign_loopbacks(fabric: Fabric) -> None:

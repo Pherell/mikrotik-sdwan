@@ -133,6 +133,7 @@ def expand(
     existing: list[Link],
     transport,
     reserved_ports: Iterable[int] = (),
+    reserved_subnets: Iterable[str] = (),
 ) -> ExpansionResult:
     """Reconcile the link set against the topology.
 
@@ -144,6 +145,12 @@ def expand(
     fabrics that touch these same sites. Two fabrics both starting at 13231
     would otherwise hand the same port to a site in both, and the second
     interface would sit there not running.
+
+    ``reserved_subnets`` are /31s already held by links on *other* fabrics in
+    the same tenant whose pools overlap this one's. Every fabric defaults to
+    the same tunnel pool, so without this the second fabric re-hands the
+    first fabric's /31s from the bottom -- and a site in both fabrics ends up
+    with the same tunnel address on two interfaces.
     """
     result = ExpansionResult()
     wans = members_to_wans(members)
@@ -152,7 +159,7 @@ def expand(
     index: dict[frozenset[str], Link] = {
         frozenset({link.a_wan_id, link.b_wan_id}): link for link in existing
     }
-    taken_subnets = [link.subnet for link in existing]
+    taken_subnets = [link.subnet for link in existing] + list(reserved_subnets)
     port_base = getattr(transport, "listen_port_base", None)
     if port_base is not None:
         # The fabric may have moved the base, e.g. because something upstream
