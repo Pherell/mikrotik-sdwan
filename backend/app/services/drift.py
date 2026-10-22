@@ -31,7 +31,7 @@ from app.models.job import Job
 from app.models.site import Site
 from app.reconcile.plan import build_plan
 from app.services.fabric import render_device
-from app.services.reconcile import apply_site, new_job
+from app.services.reconcile import active_apply_job, apply_site, new_job
 
 log = logging.getLogger(__name__)
 
@@ -101,12 +101,22 @@ async def check_site(session: AsyncSession, site: Site) -> Job:
     await session.flush()
 
     if site.drift_action == "auto-remediate":
-        log.info("site %s drifted; auto-remediating", site.name)
-        remediation = new_job(site, JobKind.apply, None)
-        session.add(remediation)
-        await session.flush()
-        await apply_site(session, site, remediation)
-        job.result["remediation_job"] = remediation.id
+        # The sweep commits once at the end, so without this an interactive
+        # apply (or a scheduled one) already pushing to the site would get a
+        # second push on top of it -- two dead-man rollbacks on one device.
+        if await active_apply_job(session, site.id) is not None:
+            log.info(
+                "site %s drifted but an apply is already queued or running; "
+                "skipping auto-remediation",
+                site.name,
+            )
+        else:
+            log.info("site %s drifted; auto-remediating", site.name)
+            remediation = new_job(site, JobKind.apply, None)
+            session.add(remediation)
+            await session.flush()
+            await apply_site(session, site, remediation)
+            job.result["remediation_job"] = remediation.id
 
     return job
 
