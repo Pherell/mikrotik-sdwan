@@ -39,6 +39,12 @@ class SlaProfile(Base, UUIDPk, Timestamps, Tenanted):
     # a flapping link drags traffic back and forth.
     recovery_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
 
+    # How far back the central evaluator (app.telemetry.evaluator) looks when
+    # classifying this profile's paths. Longer windows judge steadier and
+    # react slower; the on-device thresholds above are unaffected -- this
+    # only sizes the compliance record's window.
+    eval_window_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_sla_tenant_name"),)
 
 

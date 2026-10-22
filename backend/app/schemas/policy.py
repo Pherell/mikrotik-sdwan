@@ -25,6 +25,7 @@ class SlaProfileBase(BaseModel):
     probe_interval_seconds: int = Field(default=10, ge=1, le=3600)
     probe_count: int = Field(default=10, ge=1, le=100)
     recovery_seconds: int = Field(default=60, ge=0, le=3600)
+    eval_window_minutes: int = Field(default=30, ge=1, le=1440)
 
     @field_validator("probe_interval_seconds")
     @classmethod

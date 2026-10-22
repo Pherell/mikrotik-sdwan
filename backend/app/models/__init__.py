@@ -10,7 +10,7 @@ from app.models.fabric import Fabric, FabricMember, Link
 from app.models.job import AuditEvent, Job
 from app.models.policy import AppGroup, Policy, SdwanGroup, SlaProfile
 from app.models.site import Site, Wan
-from app.models.telemetry import Sample
+from app.models.telemetry import Sample, SlaEvaluation
 from app.models.token import ApiToken
 from app.models.user import User
 
@@ -28,6 +28,7 @@ __all__ = [
     "Sample",
     "Site",
     "SdwanGroup",
+    "SlaEvaluation",
     "SlaProfile",
     "User",
     "Wan",
