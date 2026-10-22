@@ -521,6 +521,9 @@ function SlaForm({ onDone }: { onDone: () => void }) {
             value={form.jitter_ms}
             onChange={(e) => setForm({ ...form, jitter_ms: e.target.value })}
           />
+          <span className="muted">
+            RouterOS measures jitter as max − min RTT within one probe test.
+          </span>
         </label>
       </div>
       <div className="row">
