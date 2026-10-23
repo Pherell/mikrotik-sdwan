@@ -38,7 +38,12 @@ from app.schemas.site import (
     WanUpdate,
 )
 from app.security import SecretBox
-from app.services.diagnostics import run_ping, run_traceroute, tunnel_health
+from app.services.diagnostics import (
+    list_routing_tables,
+    run_ping,
+    run_traceroute,
+    tunnel_health,
+)
 from app.services.health import read_health
 from app.services.ports import read_ports
 from app.services.probe import apply_probe, probe_site
@@ -432,6 +437,26 @@ async def read_device(
 # the audit trail below is the reason the distinction is worth keeping.
 
 
+@router.get(
+    "/{site_id}/diagnostics/routing-tables", response_model=list[str]
+)
+async def routing_tables_for_site(
+    site_id: str, session: SessionDep, user: RequireViewer
+) -> list[str]:
+    """The routing tables/VRFs a diagnostic run on this device can use.
+
+    Read-only, so a viewer may run it: it changes nothing and the page asks
+    for it once when it opens. One device read per call -- the list is
+    never polled.
+    """
+    site = await _get_or_404(session, site_id, user.tenant_id)
+    try:
+        async with open_driver(site) as driver:
+            return await list_routing_tables(driver)
+    except DriverError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+
 @router.post("/{site_id}/diagnostics/ping", response_model=PingResult)
 async def ping_from_site(
     site_id: str,
@@ -448,7 +473,11 @@ async def ping_from_site(
         action="site.ping",
         object_type="site",
         object_id=site.id,
-        detail={"target": body.target, "interface": body.interface},
+        detail={
+            "target": body.target,
+            "interface": body.interface,
+            "routing_table": body.routing_table,
+        },
         request=request,
     )
     try:
@@ -476,7 +505,11 @@ async def traceroute_from_site(
         action="site.traceroute",
         object_type="site",
         object_id=site.id,
-        detail={"target": body.target, "interface": body.interface},
+        detail={
+            "target": body.target,
+            "interface": body.interface,
+            "routing_table": body.routing_table,
+        },
         request=request,
     )
     try:

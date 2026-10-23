@@ -60,6 +60,10 @@ class PingRequest(BaseModel):
     # down" from "this one uplink is down".
     interface: DiagName = None
     source: DiagName = None
+    # Resolve the destination in this routing table (a fib table the policy
+    # renderer created, or a VRF) instead of main. Unset keeps the device's
+    # own default, so a request that never names one is unchanged.
+    routing_table: DiagName = None
 
 
 class PingProbe(BaseModel):
@@ -77,6 +81,7 @@ class PingProbe(BaseModel):
 class PingResult(BaseModel):
     target: str
     interface: str | None = None
+    routing_table: str | None = None
     sent: int
     received: int
     loss_percent: float
@@ -92,6 +97,7 @@ class TracerouteRequest(BaseModel):
     # it. Seconds of wall clock, not hops.
     seconds: int = Field(default=5, ge=1, le=20)
     interface: DiagName = None
+    routing_table: DiagName = None
 
 
 class TraceHop(BaseModel):
@@ -108,6 +114,7 @@ class TraceHop(BaseModel):
 
 class TracerouteResult(BaseModel):
     target: str
+    routing_table: str | None = None
     hops: list[TraceHop] = []
 
 

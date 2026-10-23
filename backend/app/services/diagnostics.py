@@ -126,6 +126,8 @@ async def run_ping(driver: DeviceDriver, request: PingRequest) -> PingResult:
         params["interface"] = request.interface
     if request.source:
         params["src-address"] = request.source
+    if request.routing_table:
+        params["routing-table"] = request.routing_table
 
     raw = await driver.run("/ping", params)
 
@@ -151,6 +153,7 @@ async def run_ping(driver: DeviceDriver, request: PingRequest) -> PingResult:
     return PingResult(
         target=request.target,
         interface=request.interface,
+        routing_table=request.routing_table,
         sent=sent,
         received=received,
         # A run that produced no rows at all is total loss, not a zero divide.
@@ -177,6 +180,8 @@ async def run_traceroute(
     }
     if request.interface:
         params["interface"] = request.interface
+    if request.routing_table:
+        params["routing-table"] = request.routing_table
 
     raw = await driver.run("/tool/traceroute", params)
 
@@ -195,7 +200,31 @@ async def run_traceroute(
                 status=_text(row.get("status")) or None,
             )
         )
-    return TracerouteResult(target=request.target, hops=hops)
+    return TracerouteResult(
+        target=request.target, routing_table=request.routing_table, hops=hops
+    )
+
+
+async def list_routing_tables(driver: DeviceDriver) -> list[str]:
+    """The routing tables this device resolves in, main first.
+
+    One read of /routing/table, names only. The fib tables the policy
+    renderer creates (one per routing mark) appear here alongside any VRF
+    tables, which is exactly the list a ping or traceroute can be pointed
+    at. ``main`` is always present: RouterOS resolves in it whether or not
+    a row for it comes back, so a device whose table menu reads empty
+    still has it.
+    """
+    rows = await driver.read("/routing/table", props=["name"])
+    names: list[str] = []
+    for row in _rows(rows):
+        name = _text(row.get("name"))
+        if name and name not in names:
+            names.append(name)
+    if "main" in names:
+        names.remove("main")
+    names.insert(0, "main")
+    return names
 
 
 def _traceroute_rounds(rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:

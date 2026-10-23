@@ -648,6 +648,7 @@ export interface PingProbe {
 export interface PingResult {
   target: string;
   interface: string | null;
+  routing_table: string | null;
   sent: number;
   received: number;
   loss_percent: number;
@@ -671,6 +672,7 @@ export interface TraceHop {
 
 export interface TracerouteResult {
   target: string;
+  routing_table: string | null;
   hops: TraceHop[];
 }
 
@@ -843,12 +845,24 @@ export const endpoints = {
   // -- diagnostics ---------------------------------------------------------
   ping: (
     siteId: string,
-    body: { target: string; count?: number; interface?: string | null },
+    body: {
+      target: string;
+      count?: number;
+      interface?: string | null;
+      routing_table?: string | null;
+    },
   ) => api.post<PingResult>(`/sites/${siteId}/diagnostics/ping`, body),
   traceroute: (
     siteId: string,
-    body: { target: string; seconds?: number; interface?: string | null },
+    body: {
+      target: string;
+      seconds?: number;
+      interface?: string | null;
+      routing_table?: string | null;
+    },
   ) => api.post<TracerouteResult>(`/sites/${siteId}/diagnostics/traceroute`, body),
+  routingTables: (siteId: string) =>
+    api.get<string[]>(`/sites/${siteId}/diagnostics/routing-tables`),
   tunnels: (siteId: string) => api.get<TunnelHealth[]>(`/sites/${siteId}/tunnels`),
 
   // -- device console and rollback recovery --------------------------------
