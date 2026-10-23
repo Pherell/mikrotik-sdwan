@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # idles at ~24% with only brief spikes while a pass runs.
     telemetry_poll_seconds: int = 30
 
+    # SLA retention: how many days of 5-minute sla_evaluations buckets the
+    # controller keeps. The ceiling is 288 rows/day/path, so 90 days is
+    # ~25,920 rows/path (~2.6M rows, ~1GB with indexes, at 100 paths) --
+    # three times the longest compliance window (30d) with margin, cheap for
+    # Postgres. A daily server-side reaper deletes rows whose bucket_start
+    # is older than this; zero traffic to the devices, as always.
+    sla_retention_days: int = 90
+
     # M8 provisioning: the address a factory-default router calls back to.
     # Baked into every generated bootstrap script (it is on the far side of a
     # /tool fetch run by a device that has no other way to find the

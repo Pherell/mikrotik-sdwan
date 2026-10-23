@@ -8,12 +8,12 @@ produce two remediation jobs for the same device.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from arq import cron
 from arq.connections import RedisSettings
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import get_settings
 from app.db import SessionLocal
@@ -21,6 +21,7 @@ from app.models.base import utcnow
 from app.models.enums import JobKind, JobState
 from app.models.job import Job
 from app.models.site import Site
+from app.models.telemetry import SlaEvaluation
 from app.services.drift import check_all
 from app.services.reconcile import active_apply_job, apply_site
 from app.telemetry.evaluator import evaluate_all
@@ -163,6 +164,33 @@ async def startup(ctx: dict[str, Any]) -> None:
     await ctx["redis"].enqueue_job("telemetry_poll")
 
 
+async def reap_sla_evaluations(ctx: dict[str, Any]) -> dict[str, int]:
+    """Delete sla_evaluations rows past the retention window.
+
+    The evaluator writes one 5-minute bucket per path per bucket, forever;
+    without a reaper that table grows at 288 rows/day/path. Daily, server-
+    side only, zero device traffic -- the rows are judged history, the
+    devices never hear about it. The cutoff is bucket_start, the bucket the
+    row belongs to: anything older than ``sla_retention_days`` (90 by
+    default) is past every compliance window it could serve.
+    """
+    settings = get_settings()
+    cutoff = utcnow() - timedelta(days=settings.sla_retention_days)
+    async with SessionLocal() as session:
+        deleted = (
+            await session.execute(
+                delete(SlaEvaluation).where(SlaEvaluation.bucket_start < cutoff)
+            )
+        ).rowcount
+        await session.commit()
+    log.info(
+        "SLA retention reaper: deleted %d evaluations older than %d days",
+        deleted,
+        settings.sla_retention_days,
+    )
+    return {"deleted": deleted}
+
+
 async def shutdown(ctx: dict[str, Any]) -> None:
     from app.db import engine
 
@@ -171,7 +199,12 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions: list[Any] = [drift_sweep, telemetry_poll, run_scheduled_applies]
+    functions: list[Any] = [
+        drift_sweep,
+        telemetry_poll,
+        run_scheduled_applies,
+        reap_sla_evaluations,
+    ]
     cron_jobs = [
         # Offset off the hour so the sweep does not collide with whatever else
         # a fleet runs at :00.
@@ -180,6 +213,11 @@ class WorkerSettings:
         # the half-hour, and this is cheap -- one indexed query when nothing
         # is due, which is nearly always.
         cron(run_scheduled_applies, second=0, run_at_startup=True),
+        # Once a day, in the quiet hours: deleting old evaluation rows is a
+        # single indexed DELETE, but there is no reason to do it while the
+        # fleet is busy. Not at startup -- a missed day just means a slightly
+        # fuller table until tomorrow.
+        cron(reap_sla_evaluations, hour=3, minute=23, run_at_startup=False),
     ]
     on_startup = startup
     on_shutdown = shutdown
