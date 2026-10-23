@@ -36,7 +36,7 @@ const NODES = [
   {
     id: "rules",
     label: "Traffic rules",
-    to: "/traffic-rules",
+    to: "/traffic/rules",
     made: "Traffic to match, uplinks to prefer, and how bad one must get before moving.",
     gives: "Which path traffic takes, and when it moves.",
   },

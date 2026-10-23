@@ -102,7 +102,7 @@ export function GettingStarted({
           done={false}
           title="Add traffic rules"
           what="Optional. Which traffic prefers which uplink, and when to move it. Start from a preset — voice, SaaS, bulk — rather than from thresholds in milliseconds."
-          to="/traffic-rules"
+          to="/traffic/rules"
           cta="Add a rule"
         />
       </ol>

@@ -257,13 +257,13 @@ const WORDS: { word: string; is: string; isNot: string; to?: string }[] = [
     word: "SD-WAN group",
     is: "A named set of uplinks, in the order traffic should prefer them, with the standard each must meet to stay in use.",
     isNot: "Not a match rule. It says which way traffic goes, never which traffic.",
-    to: "/sdwan-groups",
+    to: "/traffic/groups",
   },
   {
     word: "Traffic rule",
     is: "Which traffic, and which SD-WAN group carries it.",
     isNot: "Not a firewall rule. It steers; it does not permit or deny.",
-    to: "/traffic-rules",
+    to: "/traffic/rules",
   },
   {
     word: "Health standard",
@@ -336,14 +336,14 @@ function Steering() {
         </p>
         <ul>
           <li>
-            <Link to="/sdwan-groups">
+            <Link to="/traffic/groups">
               <strong>SD-WAN group</strong>
             </Link>{" "}
             — <em>which way</em>. The uplinks, their order or their shares, and
             the health standard they must meet.
           </li>
           <li>
-            <Link to="/traffic-rules">
+            <Link to="/traffic/rules">
               <strong>Traffic rule</strong>
             </Link>{" "}
             — <em>which traffic</em>. Addresses, ports, protocol — and the group

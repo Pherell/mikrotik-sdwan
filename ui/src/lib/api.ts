@@ -348,7 +348,103 @@ export interface SlaProfile {
   probe_interval_seconds: number;
   probe_count: number;
   recovery_seconds: number;
+  // How far back the central evaluator looks when it judges a window of
+  // telemetry against this profile — the compliance page's unit of account.
+  eval_window_minutes: number;
   detection_seconds: number;
+  created_at: string;
+}
+
+// -- SLA compliance -----------------------------------------------------------
+
+export type SlaClass = "in_sla" | "degraded" | "down";
+
+/** One judged window of one link's telemetry, newest first from the API. */
+export interface SlaEvaluation {
+  id: string;
+  site_id: string;
+  link_id: string;
+  sdwan_group_id: string | null;
+  sla_profile_id: string | null;
+  bucket_start: string;
+  window_start: string;
+  window_end: string;
+  window_minutes: number;
+  loss_percent: number | null;
+  latency_ms: number | null;
+  jitter_ms: number | null;
+  classification: SlaClass;
+  previous_class: SlaClass | null;
+  evaluated_at: string;
+}
+
+export interface SlaEvaluationList {
+  link_id: string;
+  evaluations: SlaEvaluation[];
+}
+
+export interface SlaClassCounts {
+  in_sla: number;
+  degraded: number;
+  down: number;
+}
+
+/** Shares are null when nothing was judged — no data is not 0%. */
+export interface SlaClassShares {
+  in_sla: number | null;
+  degraded: number | null;
+  down: number | null;
+}
+
+export interface SlaSiteCompliance {
+  site_id: string;
+  site_name: string;
+  has_data: boolean;
+  buckets: number;
+  counts: SlaClassCounts;
+  shares: SlaClassShares;
+  violation_episodes: number;
+  current_class: string | null;
+  last_bucket_start: string | null;
+}
+
+export interface SlaLinkCompliance {
+  link_id: string;
+  slug: string;
+  fabric_id: string;
+  fabric_name: string;
+  a_site_name: string;
+  a_wan_name: string;
+  b_site_name: string;
+  b_wan_name: string;
+  has_data: boolean;
+  buckets: number;
+  counts: SlaClassCounts;
+  shares: SlaClassShares;
+  violation_episodes: number;
+  current_class: string | null;
+  last_bucket_start: string | null;
+}
+
+export type SlaComplianceWindow = "24h" | "7d" | "30d";
+
+export interface SlaCompliance {
+  window: string;
+  window_hours: number;
+  since: string;
+  until: string;
+  totals: {
+    buckets: number;
+    counts: SlaClassCounts;
+    shares: SlaClassShares;
+    violation_buckets: number;
+    violation_episodes: number;
+    links_total: number;
+    links_with_data: number;
+    paths_with_data: number;
+  };
+  sites: SlaSiteCompliance[];
+  links: SlaLinkCompliance[];
 }
 
 export interface AppGroup {
@@ -668,6 +764,12 @@ export const endpoints = {
   deletePolicy: (id: string) => api.del(`/policies/${id}`),
   slaProfiles: () => api.get<SlaProfile[]>("/sla-profiles"),
   createSla: (body: unknown) => api.post<SlaProfile>("/sla-profiles", body),
+  updateSla: (id: string, body: unknown) =>
+    api.patch<SlaProfile>(`/sla-profiles/${id}`, body),
+  linkEvaluations: (linkId: string) =>
+    api.get<SlaEvaluationList>(`/links/${linkId}/evaluations`),
+  slaCompliance: (window: SlaComplianceWindow) =>
+    api.get<SlaCompliance>(`/sla-compliance?window=${encodeURIComponent(window)}`),
   sdwanGroups: () => api.get<SdwanGroup[]>("/sdwan-groups"),
   createSdwanGroup: (body: unknown) => api.post<SdwanGroup>("/sdwan-groups", body),
   updateSdwanGroup: (id: string, body: unknown) =>
