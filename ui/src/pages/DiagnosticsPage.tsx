@@ -277,6 +277,7 @@ function ReachabilityPanel({ siteId }: { siteId: string }) {
   const toast = useToast();
   const [target, setTarget] = useState("8.8.8.8");
   const [uplink, setUplink] = useState("");
+  const [table, setTable] = useState("");
   const [ping, setPing] = useState<PingResult | null>(null);
   const [trace, setTrace] = useState<TracerouteResult | null>(null);
 
@@ -285,9 +286,27 @@ function ReachabilityPanel({ siteId }: { siteId: string }) {
     queryFn: () => endpoints.site(siteId),
   });
 
+  // The device's own routing tables, asked for once when the panel opens.
+  // Deliberately no refetchInterval: the list changes when someone applies,
+  // not while someone is looking at it, and the device is not polled.
+  const tables = useQuery({
+    queryKey: ["routing-tables", siteId],
+    queryFn: () => endpoints.routingTables(siteId),
+    retry: false,
+  });
+
+  // "main" is what the device does anyway; only a different table is worth
+  // sending, so an untouched selector leaves the request unchanged.
+  const routingTable = table && table !== "main" ? table : null;
+
   const runPing = useMutation({
     mutationFn: () =>
-      endpoints.ping(siteId, { target, count: 5, interface: uplink || null }),
+      endpoints.ping(siteId, {
+        target,
+        count: 5,
+        interface: uplink || null,
+        routing_table: routingTable,
+      }),
     onSuccess: (result) => {
       setTrace(null);
       setPing(result);
@@ -301,6 +320,7 @@ function ReachabilityPanel({ siteId }: { siteId: string }) {
         target,
         seconds: 8,
         interface: uplink || null,
+        routing_table: routingTable,
       }),
     onSuccess: (result) => {
       setPing(null);
@@ -348,6 +368,25 @@ function ReachabilityPanel({ siteId }: { siteId: string }) {
               "this one uplink is down".
             </span>
           </label>
+          <label>
+            Routing table
+            <select value={table} onChange={(e) => setTable(e.target.value)}>
+              <option value="">main — the device default</option>
+              {(tables.data ?? [])
+                .filter((name) => name !== "main")
+                .map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+            </select>
+            <span className="muted field-note">
+              {tables.isError
+                ? "Could not read this device's tables; runs will use main."
+                : "The tables this device has — one per policy routing mark, " +
+                  "plus any VRF. Read once, when this page opened."}
+            </span>
+          </label>
         </div>
 
         <div className="row" style={{ justifyContent: "flex-start" }}>
@@ -380,6 +419,7 @@ function PingReport({ result }: { result: PingResult }) {
         </strong>{" "}
         from {result.target}
         {result.interface && <> out of {result.interface}</>}
+        {result.routing_table && <> in table {result.routing_table}</>}
         {lost > 0 && <> — {result.loss_percent}% loss</>}
         {result.avg_ms !== null && (
           <>
@@ -427,7 +467,8 @@ function TraceReport({ result }: { result: TracerouteResult }) {
   return (
     <>
       <p>
-        Path to <strong>{result.target}</strong>, {result.hops.length} hops.
+        Path to <strong>{result.target}</strong>, {result.hops.length} hops
+        {result.routing_table && <> in table {result.routing_table}</>}.
       </p>
       <table className="stack">
         <thead>

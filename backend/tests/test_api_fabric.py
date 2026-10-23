@@ -1285,6 +1285,57 @@ async def test_traceroute_returns_the_path(api, patched_sites_driver) -> None:
     assert hops[-1]["address"] == "8.8.8.8"
 
 
+async def test_routing_tables_come_from_the_device(api, patched_sites_driver) -> None:
+    client, _, routers = api
+    headers = await _auth(client)
+    _, sites = await _three_site_fabric(client, headers)
+
+    hub = routers["198.51.100.5"]
+    hub.menus["routing/table"] = [
+        {"name": "vrf-blue", "fib": True},
+        {"name": "main", "fib": True},
+    ]
+
+    resp = await client.get(
+        f"/sites/{sites['hub1']}/diagnostics/routing-tables", headers=headers
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == ["main", "vrf-blue"]
+    # One read of the one menu -- the list is fetched when the page opens
+    # and never polled, so a second read here would be a design failure.
+    reads = [r for r in hub.reads if r[0] == "routing/table"]
+    assert len(reads) == 1
+
+
+async def test_routing_tables_for_another_tenants_site_are_not_found(
+    api, patched_sites_driver
+) -> None:
+    """Tenant-scoped like every neighbouring endpoint: someone else's site
+    is a 404, not an empty list that confirms it exists."""
+    from app.models import Site
+
+    client, maker, _ = api
+    headers = await _auth(client)
+
+    async with maker() as s:
+        s.add(
+            Site(
+                id="site-foreign",
+                name="theirs",
+                mgmt_host="192.0.2.9",
+                username="admin",
+                tenant_id="another-tenant",
+            )
+        )
+        await s.commit()
+
+    resp = await client.get(
+        "/sites/site-foreign/diagnostics/routing-tables", headers=headers
+    )
+    assert resp.status_code == 404
+
+
 async def test_tunnel_health_reports_a_tunnel_the_device_actually_has(
     api, patched_sites_driver
 ) -> None:

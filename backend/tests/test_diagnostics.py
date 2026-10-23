@@ -17,6 +17,7 @@ from app.models.fabric import Fabric, Link
 from app.models.site import Site, Wan
 from app.schemas.diagnostics import PingRequest, TracerouteRequest
 from app.services.diagnostics import (
+    list_routing_tables,
     parse_duration_ms,
     run_ping,
     run_traceroute,
@@ -92,6 +93,28 @@ def test_a_hostile_interface_name_is_refused_too() -> None:
         PingRequest(target="8.8.8.8", interface="ether1; /quit")
 
 
+def test_a_hostile_routing_table_is_refused_too() -> None:
+    """A table name reaches the same console line an interface name does, so
+    it is held to the same rule."""
+    with pytest.raises(ValidationError):
+        PingRequest(target="8.8.8.8", routing_table="main; /system reboot")
+    with pytest.raises(ValidationError):
+        TracerouteRequest(target="8.8.8.8", routing_table="a b")
+
+
+def test_a_routing_table_name_is_accepted() -> None:
+    """Table names on a device are routing marks and VRF names -- plain
+    names, which is all the validator has ever allowed."""
+    assert PingRequest(target="8.8.8.8", routing_table="vrf-blue").routing_table == (
+        "vrf-blue"
+    )
+    assert TracerouteRequest(target="8.8.8.8", routing_table="main").routing_table == (
+        "main"
+    )
+    # Unset is the default, and stays unset: the device decides.
+    assert PingRequest(target="8.8.8.8").routing_table is None
+
+
 def test_count_is_capped() -> None:
     """This runs inline and holds a device connection open for its duration."""
     with pytest.raises(ValidationError):
@@ -151,6 +174,38 @@ async def test_ping_out_of_one_uplink_passes_the_interface_through() -> None:
     assert path == "ping"
     assert body["interface"] == "ether2"
     assert result.interface == "ether2"
+
+
+async def test_ping_in_a_routing_table_passes_it_through() -> None:
+    fake = FakeRouterOS(password="secret")
+    driver = await _driver(fake)
+    try:
+        result = await run_ping(
+            driver,
+            PingRequest(target="8.8.8.8", count=1, routing_table="vrf-blue"),
+        )
+    finally:
+        await driver.close()
+
+    path, body = fake.commands[-1]
+    assert path == "ping"
+    assert body["routing-table"] == "vrf-blue"
+    assert result.routing_table == "vrf-blue"
+
+
+async def test_ping_without_a_routing_table_sends_none() -> None:
+    """Unset must mean byte-identical to before the field existed: a device
+    that resolves in main by default should not be told to."""
+    fake = FakeRouterOS(password="secret")
+    driver = await _driver(fake)
+    try:
+        result = await run_ping(driver, PingRequest(target="8.8.8.8", count=1))
+    finally:
+        await driver.close()
+
+    _, body = fake.commands[-1]
+    assert "routing-table" not in body
+    assert result.routing_table is None
 
 
 async def test_a_run_that_returned_no_rows_is_total_loss_not_a_zero_divide() -> None:
@@ -220,6 +275,51 @@ async def test_a_hop_that_never_answers_keeps_its_place_in_the_path() -> None:
     assert result.hops[1].address is None
     assert result.hops[1].status == "timeout"
     assert result.hops[1].loss_percent == 100.0
+
+
+async def test_traceroute_in_a_routing_table_passes_it_through() -> None:
+    fake = FakeRouterOS(password="secret")
+    driver = await _driver(fake)
+    try:
+        result = await run_traceroute(
+            driver, TracerouteRequest(target="8.8.8.8", routing_table="vrf-blue")
+        )
+    finally:
+        await driver.close()
+
+    _, body = fake.commands[-1]
+    assert body["routing-table"] == "vrf-blue"
+    assert result.routing_table == "vrf-blue"
+
+
+# -- routing tables -----------------------------------------------------------
+
+
+async def test_routing_tables_are_listed_with_main_first() -> None:
+    class Tables:
+        async def read(self, path, query=None, props=None):
+            assert path == "/routing/table"
+            # Names only: the page needs nothing else off the device.
+            assert props == ["name"]
+            return [
+                {"name": "vrf-blue"},
+                {"name": "main"},
+                {"name": "vrf-blue"},  # a duplicate is the device's, not ours
+                {"name": ""},
+            ]
+
+    assert await list_routing_tables(Tables()) == ["main", "vrf-blue"]
+
+
+async def test_routing_tables_still_offer_main_when_none_come_back() -> None:
+    """RouterOS resolves in main whether or not a row names it, so an empty
+    or unreadable table menu must not leave the selector with nothing."""
+
+    class Empty:
+        async def read(self, path, query=None, props=None):
+            return []
+
+    assert await list_routing_tables(Empty()) == ["main"]
 
 
 async def test_traceroute_is_bounded_by_wall_clock() -> None:
