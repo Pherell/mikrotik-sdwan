@@ -136,9 +136,17 @@ export interface Site {
   role: SiteRole;
   mgmt_host: string;
   mgmt_port: number | null;
+  ssh_port: number | null;
   device_kind: string;
   username: string;
   status: SiteStatus;
+  // C3 quarantine: while set, applies refuse to push. Set automatically
+  // after an apply leaves the device unverifiable, or by an operator;
+  // cleared only through the release endpoint.
+  quarantined: boolean;
+  quarantine_reason: string | null;
+  quarantined_at: string | null;
+  apply_generation: number;
   ros_version: string | null;
   board_name: string | null;
   architecture: string | null;
@@ -735,6 +743,10 @@ export const endpoints = {
   createSite: (body: unknown) => api.post<Site>("/sites", body),
   deleteSite: (id: string) => api.del(`/sites/${id}`),
   probe: (id: string) => api.post<ProbeResult>(`/sites/${id}/probe`),
+  quarantineSite: (id: string, reason: string) =>
+    api.post<Site>(`/sites/${id}/quarantine`, { reason }),
+  releaseQuarantine: (id: string) =>
+    api.post<Site>(`/sites/${id}/quarantine/release`),
   ports: (id: string) => api.get<Port[]>(`/sites/${id}/ports`),
   health: (id: string) => api.get<DeviceHealth>(`/sites/${id}/health`),
   addWan: (siteId: string, body: unknown) => api.post<Wan>(`/sites/${siteId}/wans`, body),

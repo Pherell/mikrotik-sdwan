@@ -95,6 +95,9 @@ class SiteBase(BaseModel):
     role: SiteRole = SiteRole.spoke
     mgmt_host: str = Field(min_length=1, max_length=255)
     mgmt_port: int | None = Field(default=None, ge=1, le=65535)
+    # SSH port of the console, for the B1 Safe Mode session. Separate from
+    # mgmt_port on purpose: on a ROS7 site mgmt_port is the REST port.
+    ssh_port: int | None = Field(default=None, ge=1, le=65535)
     device_kind: DeviceKind = DeviceKind.ros7
     username: str = Field(min_length=1, max_length=128)
     verify_tls: bool = False
@@ -136,6 +139,7 @@ class SiteUpdate(BaseModel):
     role: SiteRole | None = None
     mgmt_host: str | None = None
     mgmt_port: int | None = None
+    ssh_port: int | None = Field(default=None, ge=1, le=65535)
     device_kind: DeviceKind | None = None
     username: str | None = None
     password: str | None = Field(default=None, repr=False)
@@ -165,11 +169,29 @@ class SiteUpdate(BaseModel):
         return v
 
 
+class QuarantineRequest(BaseModel):
+    """An operator putting a site into C3 quarantine by hand.
+
+    The reason is required: a quarantine nobody explained is a device that
+    stays out of every rollout until somebody guesses why it was benched.
+    """
+
+    reason: str = Field(min_length=1, max_length=512)
+
+
 class SiteRead(SiteBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     status: SiteStatus
+    # C3 quarantine state. Read-only here: it changes through the
+    # quarantine/release endpoints (or automatically after a bad apply),
+    # never through a site PATCH, so it cannot be cleared by accident in
+    # an unrelated edit.
+    quarantined: bool = False
+    quarantine_reason: str | None = None
+    quarantined_at: UtcDatetime | None = None
+    apply_generation: int = 0
     ros_version: str | None = None
     board_name: str | None = None
     architecture: str | None = None

@@ -78,6 +78,15 @@ class Plan:
     # Paths that could not be read. A section is skipped rather than treated as
     # empty, because an empty read would look like "remove everything".
     unreadable: dict[str, str] = field(default_factory=dict)
+    # C4 scoped preimage: {path: [row, ...]} -- the controller-owned live
+    # rows exactly as the reads below returned them, kept so apply_site can
+    # persist them as this generation's restore point without reading the
+    # device a second time. Owned only: the operator's own rows are not
+    # ours to back up, and ``SectionDiff`` alone cannot serve this -- it
+    # keeps diffs, so a converged row (the common case) appears nowhere in
+    # it. Rows hold exactly the properties ``section_proplist`` asked for,
+    # nothing fuller; see ApplyBackup for what that means for a restore.
+    preimage: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     @property
     def empty(self) -> bool:
@@ -161,5 +170,8 @@ async def build_plan(driver: DeviceDriver, sections: list[ConfigSection]) -> Pla
             # would diff as "delete every managed row in it".
             plan.unreadable[section.path] = str(exc)
             continue
+        owned = [dict(row) for row in live if section.owns(row)]
+        if owned:
+            plan.preimage.setdefault(section.path, []).extend(owned)
         plan.sections.append(diff_section(section, live))
     return plan

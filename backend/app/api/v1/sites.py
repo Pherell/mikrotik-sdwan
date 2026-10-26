@@ -30,6 +30,7 @@ from app.schemas.health import DeviceHealth
 from app.schemas.ports import PortRead
 from app.schemas.site import (
     ProbeResult,
+    QuarantineRequest,
     SiteCreate,
     SiteRead,
     SiteUpdate,
@@ -47,6 +48,7 @@ from app.services.diagnostics import (
 from app.services.health import read_health
 from app.services.ports import read_ports
 from app.services.probe import apply_probe, probe_site
+from app.services.reconcile import quarantine_site, release_quarantine
 
 router = APIRouter(prefix="/sites", tags=["sites"])
 
@@ -199,6 +201,60 @@ async def probe(
         request=request,
     )
     return result
+
+
+@router.post("/{site_id}/quarantine", response_model=SiteRead)
+async def quarantine(
+    site_id: str,
+    body: QuarantineRequest,
+    session: SessionDep,
+    user: RequireOperator,
+    request: Request,
+) -> SiteRead:
+    """Bench a site by hand: no applies until the quarantine is released.
+
+    The manual twin of the automatic quarantine a bad apply triggers (C3).
+    Operator-level, like every other mutation here, and audited with the
+    reason -- the reason is the whole value of the record later.
+    """
+    site = await _get_or_404(session, site_id, user.tenant_id)
+    await quarantine_site(session, site, reason=body.reason)
+    await write_audit(
+        session,
+        actor=user,
+        action="site.quarantine",
+        object_type="site",
+        object_id=site.id,
+        detail={"reason": body.reason, "automatic": False},
+        request=request,
+    )
+    return _to_read(site)
+
+
+@router.post("/{site_id}/quarantine/release", response_model=SiteRead)
+async def release_site_quarantine(
+    site_id: str, session: SessionDep, user: RequireOperator, request: Request
+) -> SiteRead:
+    """Return a quarantined site to service.
+
+    Deliberately a separate endpoint rather than a field on the site
+    PATCH: releasing is the moment an operator asserts "I have looked at
+    this device and it is safe to push to again", and that assertion
+    deserves its own audited action, not a side effect of an edit.
+    """
+    site = await _get_or_404(session, site_id, user.tenant_id)
+    previous = site.quarantine_reason
+    await release_quarantine(session, site)
+    await write_audit(
+        session,
+        actor=user,
+        action="site.quarantine_release",
+        object_type="site",
+        object_id=site.id,
+        detail={"was": previous},
+        request=request,
+    )
+    return _to_read(site)
 
 
 async def _reject_duplicate_public_ip(

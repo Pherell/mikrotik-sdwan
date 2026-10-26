@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy import true as sa_true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -31,6 +41,12 @@ class Site(Base, UUIDPk, Timestamps, Tenanted):
     # --- management access -------------------------------------------------
     mgmt_host: Mapped[str] = mapped_column(String(255), nullable=False)
     mgmt_port: Mapped[int | None] = mapped_column(Integer)  # None -> driver default
+    # SSH port for the Safe Mode session (B1) -- deliberately separate from
+    # mgmt_port, which is the REST/SSH port of the *data* driver. A ROS7 site
+    # is managed over HTTPS on 443/8443 but its console still lives on SSH;
+    # conflating the two would have the Safe Mode login knocking on the REST
+    # port. None -> 22.
+    ssh_port: Mapped[int | None] = mapped_column(Integer)
     device_kind: Mapped[DeviceKind] = mapped_column(
         String(16), nullable=False, default=DeviceKind.ros7
     )
@@ -63,6 +79,23 @@ class Site(Base, UUIDPk, Timestamps, Tenanted):
 
     # --- operational -------------------------------------------------------
     rollback_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
+    # C3 quarantine. Set when an apply leaves the device in a state the
+    # controller cannot vouch for (a committed prefix plus a rolled-back
+    # remainder, a push that stopped halfway while the device stayed
+    # reachable) or by an operator by hand. While set, apply_site refuses to
+    # push at all -- the device is out of every rollout until a human looks
+    # at it and releases the quarantine through the API. The apply lock keeps
+    # two pushes from racing; this keeps a *known-bad* device from being
+    # pushed at all.
+    quarantined: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quarantine_reason: Mapped[str | None] = mapped_column(Text)
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Monotonic counter of push attempts against this site. Every apply that
+    # actually pushes stamps its journal rows and its scoped preimage backup
+    # with generation = apply_generation + 1 and then stores that back here,
+    # so a journal can be read as "what happened, in which apply, in order"
+    # long after the Job rows scroll away.
+    apply_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     drift_action: Mapped[str] = mapped_column(String(16), nullable=False, default="alert")
     tags: Mapped[dict | None] = mapped_column(JSONCol, default=dict)
 
