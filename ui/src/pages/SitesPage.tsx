@@ -134,7 +134,8 @@ function SiteRow({
         )}
       </td>
       <td data-label="Status">
-        <span className={`badge ${site.status}`}>{site.status}</span>
+        <span className={`badge ${site.status}`}>{site.status}</span>{" "}
+        {site.quarantined && <span className="badge error">quarantined</span>}
       </td>
     </tr>
   );

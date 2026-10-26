@@ -67,6 +67,17 @@ class Settings(BaseSettings):
 
     rollback_timeout_seconds: int = 120
 
+    # B1 transactional apply. When enabled, a ROS7/softhub apply runs its
+    # pushes inside an SSH-held Safe Mode session (one extra SSH session per
+    # apply), committed chunk by chunk, instead of relying on the dead-man
+    # scheduler alone. The bound is the plan's: under 100 actions per Safe
+    # Mode session, so a chunk is 90. Only the final uncommitted chunk is
+    # ever rolled back by an abort -- earlier chunks are already committed,
+    # which is exactly why a mid-apply failure quarantines the device (C3).
+    # Disabling this restores the legacy dead-man-only flow everywhere.
+    safe_mode_enabled: bool = True
+    safe_mode_chunk_size: int = 90
+
     # M7 telemetry: how often the poller reads netwatch and system/resource
     # back from every provisioned site. RouterOS is already measuring this for
     # SLA-based failover; this just keeps what it already said. 30s matches

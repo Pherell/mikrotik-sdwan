@@ -4,6 +4,7 @@ Imported for their side effect of registering with Base.metadata, which Alembic
 autogenerate and the test fixtures both rely on.
 """
 
+from app.models.apply_journal import ApplyBackup, ApplyJournalEntry
 from app.models.base import Base
 from app.models.enrollment import EnrollmentToken
 from app.models.fabric import Fabric, FabricMember, Link
@@ -17,6 +18,8 @@ from app.models.user import User
 __all__ = [
     "ApiToken",
     "AppGroup",
+    "ApplyBackup",
+    "ApplyJournalEntry",
     "AuditEvent",
     "Base",
     "EnrollmentToken",

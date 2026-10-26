@@ -57,6 +57,14 @@ export function SiteDetailPage() {
     },
   });
 
+  const releaseQuarantine = useMutation({
+    mutationFn: () => endpoints.releaseQuarantine(siteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["site", siteId] });
+      queryClient.invalidateQueries({ queryKey: ["sites"] });
+    },
+  });
+
   if (site.isLoading) return <div className="card"><Skeleton rows={5} /></div>;
   if (site.isError) return <div className="error">{(site.error as Error).message}</div>;
   if (!site.data) return null;
@@ -104,6 +112,27 @@ export function SiteDetailPage() {
         </div>
 
         {s.last_error && <div className="error" style={{ marginTop: 12 }}>{s.last_error}</div>}
+
+        {s.quarantined && (
+          <div className="error" style={{ marginTop: 12 }}>
+            <strong>This device is quarantined.</strong>{" "}
+            {s.quarantine_reason ?? "No reason recorded."}
+            {s.quarantined_at && (
+              <span className="muted"> — since {new Date(s.quarantined_at).toLocaleString()}</span>
+            )}
+            <div style={{ marginTop: 8 }}>
+              Applies are refused while a device is quarantined. Release it
+              only after inspecting the device and confirming its
+              configuration is sound.{" "}
+              <button
+                onClick={() => releaseQuarantine.mutate()}
+                disabled={releaseQuarantine.isPending}
+              >
+                {releaseQuarantine.isPending ? "Releasing…" : "Release quarantine"}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* The controller has always held both the stored uplink facts and the
             device's own; it never compared them. An uplink marked reachable
