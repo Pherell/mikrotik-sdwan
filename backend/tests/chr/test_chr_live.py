@@ -15,7 +15,8 @@ rows it finds before it starts, in case an earlier run died mid-test.
 
 Scope is deliberately one node: identity, one harmless write round-trip,
 and an idempotency probe through the reconcile planner. The hub +
-2-spoke topology and the chaos drills from plan C1 are later steps.
+2-spoke topology and the chaos drills from plan C1 live in
+test_chr_topology.py and test_chr_drills.py.
 """
 
 from __future__ import annotations

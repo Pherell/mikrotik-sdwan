@@ -13,6 +13,10 @@ Verified on real RouterOS 7.24.5 (CHR, see
   -- need a terminal.)
 * A second Ctrl+X releases it ("Releasing Safe Mode... Success!") and the
   changes persist.
+* Before any of that, the fresh console asks the terminal where its
+  cursor is (ESC [ 6 n) and waits for the answer; an SSH library that
+  does not emulate a terminal must reply itself or the prompt -- and
+  with it Safe Mode -- never arrives (plan C1 live run, 2026-10-27).
 * Kill the SSH client without releasing and the held changes are already
   rolled back at the first poll a second later. The documented ~9 minute
   delay is only the silent-partition case, where the device cannot tell
@@ -298,14 +302,40 @@ class SshSafeModeSession:
         console buffers input), but waiting for the prompt first keeps the
         ``<SAFE>`` search below from having to reason about half-printed
         login text.
+
+        One negotiation must be answered on the way: a fresh RouterOS
+        console opens by moving the cursor to the bottom of the terminal
+        and asking where it landed (ESC [ 6 n, Device Status Report),
+        then waits for the reply before printing anything else. A real
+        terminal answers automatically; asyncssh does not, so without a
+        reply the console sits silent, the drain times out, and the
+        Ctrl+X lands before the prompt exists and is discarded -- Safe
+        Mode is then never granted. Found live on a CHR (plan C1); the
+        interactive-ssh proof in 2026-10 never hit it because OpenSSH's
+        terminal answered for it.
         """
         loop = asyncio.get_event_loop()
         deadline = loop.time() + max(self._connect_timeout, 5.0)
+        seen = ""
+        answered = 0
         while loop.time() < deadline:
             try:
-                await asyncio.wait_for(process.stdout.read(4096), timeout=idle)
+                chunk = await asyncio.wait_for(
+                    process.stdout.read(4096), timeout=idle
+                )
             except TimeoutError:
                 return
+            if not chunk:
+                return
+            seen += (
+                chunk.decode("utf-8", errors="replace")
+                if isinstance(chunk, bytes)
+                else str(chunk)
+            )
+            # One reply per query; the console may ask more than once.
+            while seen.count("\x1b[6n") > answered:
+                answered += 1
+                process.stdin.write("\x1b[24;80R")
 
     async def _read_until(
         self, process: Any, markers: tuple[str, ...], *, within: float

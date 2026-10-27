@@ -20,6 +20,11 @@ if [ -z "${CHR_PASSWORD:-}" ]; then
 fi
 export CHR_PASSWORD
 export CHR_LIVE=1
+# The unit-test conftest drops the device connect timeout to 1s to keep
+# unreachable-device tests fast; a CHR under TCG emulation cannot finish
+# a TLS handshake that quickly, so live runs need realistic budgets.
+export SDWAN_DEVICE_CONNECT_TIMEOUT=${SDWAN_DEVICE_CONNECT_TIMEOUT:-15}
+export SDWAN_DEVICE_READ_TIMEOUT=${SDWAN_DEVICE_READ_TIMEOUT:-60}
 export CHR_BASE_URL=${CHR_BASE_URL:-https://127.0.0.1:18443}
 export CHR_USER=${CHR_USER:-admin}
 
