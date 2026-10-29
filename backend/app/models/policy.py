@@ -39,6 +39,54 @@ class SlaProfile(Base, UUIDPk, Timestamps, Tenanted):
     # a flapping link drags traffic back and forth.
     recovery_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
 
+    # -- anti-flap (plan A3) -------------------------------------------------
+    # Consecutive failed probe tests required before a soft (SLA) demotion,
+    # Fortinet-style fail xN. Enforced on-device: the netwatch down-script
+    # waits (fail_count - 1) probe intervals and demotes only if its entry
+    # is still down, which is the time-domain form of "N tests in a row
+    # failed" -- netwatch raises no event for the tests after the first.
+    # 1 restores the pre-A3 behaviour of demoting on the first failed test.
+    fail_count: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    # Consecutive passed tests required before a demoted path is restored,
+    # the restore xN half of the pattern. The restore delay is the longer of
+    # recovery_seconds and (restore_count - 1) probe intervals, so either
+    # knob can be the binding one; see app.render.policy.
+    restore_count: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    # Failback hysteresis: a recovered path must beat its own thresholds by
+    # these margins before traffic returns, not merely duck back under them
+    # (demote above T, restore below T - margin). Compared against the
+    # profile's own thresholds, not the live active path's numbers -- a
+    # netwatch entry can only read its own test results. See render.policy.
+    failback_latency_margin_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10
+    )
+    failback_jitter_margin_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5
+    )
+
+    # -- probe shape (plan A5) ------------------------------------------------
+    # What the netwatch entries measure. icmp judges loss/latency/jitter
+    # against the thresholds above; the other types judge a real service
+    # transaction instead (TCP connect, HTTP GET, DNS answer), which is
+    # closer to application experience and survives ICMP being filtered or
+    # deprioritised -- but carries no thr-* stats, so for them the on-device
+    # verdict is up/down only and the thresholds above do not apply.
+    probe_type: Mapped[str] = mapped_column(String(16), nullable=False, default="icmp")
+    # Service port for tcp-conn / http-get probes. Required in practice for
+    # tcp-conn (the schema enforces it there); http-get falls back to 80.
+    probe_port: Mapped[int | None] = mapped_column(Integer)
+    # DNS probes resolve a name: RouterOS rejects an address as the host of
+    # a type=dns entry ("must use dns name when type is dns", verified on
+    # the CHR lab), so a dns profile names what to resolve and that name --
+    # not the hop -- becomes the entry's host. The schema requires it for
+    # probe_type == "dns"; meaningless for the other types.
+    probe_dns_name: Mapped[str | None] = mapped_column(String(255))
+    # Extra probe targets judged together with the path's next hop: one
+    # netwatch entry each, and a soft demotion needs every entry in the set
+    # down at once (target agreement), so one dead anycast target cannot
+    # demote a healthy path. Empty means the hop alone is probed, as before.
+    probe_targets: Mapped[list | None] = mapped_column(JSONCol, default=list)
+
     # How far back the central evaluator (app.telemetry.evaluator) looks when
     # classifying this profile's paths. Longer windows judge steadier and
     # react slower; the on-device thresholds above are unaffected -- this

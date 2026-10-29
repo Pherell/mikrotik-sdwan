@@ -488,9 +488,9 @@
       {
         "enforce": [],
         "props": {
-          "comment": "sdwan:policy:sla:fibre:82a95505",
+          "comment": "sdwan:policy:sla:fibre:0e232c96",
           "disabled": "false",
-          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=102}",
+          "down-script": ":delay 40s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.2.1\" comment=\"sdwan:policy:sla:fibre:0e232c96\"] status] = \"down\") do={:foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=102}}",
           "early-failure-detection": "true",
           "host": "10.255.2.1",
           "ignore-initial-down": "true",
@@ -500,16 +500,16 @@
           "thr-avg": "300ms",
           "thr-loss-percent": "20",
           "type": "icmp",
-          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.2.1\" comment=\"sdwan:policy:sla:fibre:82a95505\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=2}}"
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.2.1\" comment=\"sdwan:policy:sla:fibre:0e232c96\"] status] = \"up\" and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.2.1\" comment=\"sdwan:policy:sla:fibre:0e232c96\"] rtt-avg] <= 00:00:00.290) do={:foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.2.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=2}}"
         },
-        "tag": "sdwan:policy:sla:fibre:82a95505"
+        "tag": "sdwan:policy:sla:fibre:0e232c96"
       },
       {
         "enforce": [],
         "props": {
-          "comment": "sdwan:policy:sla:lte:82a95505",
+          "comment": "sdwan:policy:sla:lte:0e232c96",
           "disabled": "false",
-          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=102}; :foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=101}",
+          "down-script": ":delay 40s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.3.1\" comment=\"sdwan:policy:sla:lte:0e232c96\"] status] = \"down\") do={:foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=102}; :foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=101}}",
           "early-failure-detection": "true",
           "host": "10.255.3.1",
           "ignore-initial-down": "true",
@@ -519,16 +519,16 @@
           "thr-avg": "300ms",
           "thr-loss-percent": "20",
           "type": "icmp",
-          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.3.1\" comment=\"sdwan:policy:sla:lte:82a95505\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=2}; :foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=1}}"
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.3.1\" comment=\"sdwan:policy:sla:lte:0e232c96\"] status] = \"up\" and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.3.1\" comment=\"sdwan:policy:sla:lte:0e232c96\"] rtt-avg] <= 00:00:00.290) do={:foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-0\"] do={/ip/route/set $r distance=2}; :foreach r in=[/ip/route/find gateway=\"10.255.3.1\" routing-table=\"sdwan-bulk-1\"] do={/ip/route/set $r distance=1}}"
         },
-        "tag": "sdwan:policy:sla:lte:82a95505"
+        "tag": "sdwan:policy:sla:lte:0e232c96"
       },
       {
         "enforce": [],
         "props": {
-          "comment": "sdwan:policy:sla:mpls:aab6d189",
+          "comment": "sdwan:policy:sla:mpls:8990655c",
           "disabled": "false",
-          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=101}",
+          "down-script": ":delay 40s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.1\" comment=\"sdwan:policy:sla:mpls:8990655c\"] status] = \"down\") do={:foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=101}}",
           "early-failure-detection": "true",
           "host": "10.255.0.1",
           "ignore-initial-down": "true",
@@ -539,16 +539,16 @@
           "thr-jitter": "30ms",
           "thr-loss-percent": "5",
           "type": "icmp",
-          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.1\" comment=\"sdwan:policy:sla:mpls:aab6d189\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=1}}"
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.1\" comment=\"sdwan:policy:sla:mpls:8990655c\"] status] = \"up\" and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.1\" comment=\"sdwan:policy:sla:mpls:8990655c\"] rtt-avg] <= 00:00:00.140 and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.1\" comment=\"sdwan:policy:sla:mpls:8990655c\"] rtt-jitter] <= 00:00:00.025) do={:foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.0.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=1}}"
         },
-        "tag": "sdwan:policy:sla:mpls:aab6d189"
+        "tag": "sdwan:policy:sla:mpls:8990655c"
       },
       {
         "enforce": [],
         "props": {
-          "comment": "sdwan:policy:sla:mpls:aab6d189",
+          "comment": "sdwan:policy:sla:mpls:8990655c",
           "disabled": "false",
-          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=101}",
+          "down-script": ":delay 40s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.5\" comment=\"sdwan:policy:sla:mpls:8990655c\"] status] = \"down\") do={:foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=101}; :foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=101}}",
           "early-failure-detection": "true",
           "host": "10.255.0.5",
           "ignore-initial-down": "true",
@@ -559,16 +559,16 @@
           "thr-jitter": "30ms",
           "thr-loss-percent": "5",
           "type": "icmp",
-          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.5\" comment=\"sdwan:policy:sla:mpls:aab6d189\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=1}}"
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.5\" comment=\"sdwan:policy:sla:mpls:8990655c\"] status] = \"up\" and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.5\" comment=\"sdwan:policy:sla:mpls:8990655c\"] rtt-avg] <= 00:00:00.140 and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.0.5\" comment=\"sdwan:policy:sla:mpls:8990655c\"] rtt-jitter] <= 00:00:00.025) do={:foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=1}; :foreach r in=[/ip/route/find gateway=\"10.255.0.5\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=1}}"
         },
-        "tag": "sdwan:policy:sla:mpls:aab6d189"
+        "tag": "sdwan:policy:sla:mpls:8990655c"
       },
       {
         "enforce": [],
         "props": {
-          "comment": "sdwan:policy:sla:inet:aab6d189",
+          "comment": "sdwan:policy:sla:inet:8990655c",
           "disabled": "false",
-          "down-script": ":foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=102}; :foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=102}",
+          "down-script": ":delay 40s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.1.1\" comment=\"sdwan:policy:sla:inet:8990655c\"] status] = \"down\") do={:foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=102}; :foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=102}}",
           "early-failure-detection": "true",
           "host": "10.255.1.1",
           "ignore-initial-down": "true",
@@ -579,9 +579,9 @@
           "thr-jitter": "30ms",
           "thr-loss-percent": "5",
           "type": "icmp",
-          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.1.1\" comment=\"sdwan:policy:sla:inet:aab6d189\"] status] = \"up\") do={:foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=2}; :foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=2}}"
+          "up-script": ":delay 60s; :if ([/tool/netwatch/get [/tool/netwatch/find host=\"10.255.1.1\" comment=\"sdwan:policy:sla:inet:8990655c\"] status] = \"up\" and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.1.1\" comment=\"sdwan:policy:sla:inet:8990655c\"] rtt-avg] <= 00:00:00.140 and [/tool/netwatch/get [/tool/netwatch/find host=\"10.255.1.1\" comment=\"sdwan:policy:sla:inet:8990655c\"] rtt-jitter] <= 00:00:00.025) do={:foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-video\"] do={/ip/route/set $r distance=2}; :foreach r in=[/ip/route/find gateway=\"10.255.1.1\" routing-table=\"sdwan-voice\"] do={/ip/route/set $r distance=2}}"
         },
-        "tag": "sdwan:policy:sla:inet:aab6d189"
+        "tag": "sdwan:policy:sla:inet:8990655c"
       }
     ],
     "key": [

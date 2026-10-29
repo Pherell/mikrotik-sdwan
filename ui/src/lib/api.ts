@@ -359,6 +359,20 @@ export interface SlaProfile {
   // How far back the central evaluator looks when it judges a window of
   // telemetry against this profile — the compliance page's unit of account.
   eval_window_minutes: number;
+  // Anti-flap (plan A3): consecutive failed/passed probe tests before a
+  // demotion/restore, and the margins a recovered path must beat its
+  // thresholds by before traffic fails back to it.
+  fail_count: number;
+  restore_count: number;
+  failback_latency_margin_ms: number;
+  failback_jitter_margin_ms: number;
+  // Probe shape (plan A5): what the netwatch entries measure, the service
+  // port for tcp-conn/http-get, and extra targets that must agree with
+  // the hop before a demotion.
+  probe_type: string;
+  probe_port: number | null;
+  probe_dns_name: string | null;
+  probe_targets: string[];
   detection_seconds: number;
   created_at: string;
 }

@@ -29,7 +29,10 @@ Scope, stated plainly because the boundary is the design:
   same value. Transitions are instead recorded (SlaEvaluation.previous_class)
   for whoever legitimately acts on them.
 - No anti-flap. Nothing here damps or debounces a classification that
-  oscillates bucket to bucket; that is plan item A3, a separate change.
+  oscillates bucket to bucket. Plan item A3's damping lives where the
+  actuation is -- on-device, in the netwatch scripts app.render.policy
+  renders (failure/restore counters and the failback margin) -- so this
+  record stays an undamped account of what the path did.
 - Hard-down stays on-device. A probe reporting down demotes its path via the
   netwatch script immediately; this module only records that it happened
   (classification "down") on the sweep's cadence.

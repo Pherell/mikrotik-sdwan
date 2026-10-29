@@ -844,16 +844,27 @@ def test_recovery_waits_out_the_hold_down_before_re_preferring() -> None:
     down = str(fibre.props["down-script"])
 
     assert up.startswith(":delay 45s; ")
-    # Re-checks its own probe and restores only if still up.
+    # Re-checks its own probe and restores only if still up -- and, since
+    # plan A3, only if its latest test also beats the latency threshold by
+    # the failback margin (120 - 10 = 110 ms here): the hysteresis band.
     assert 'host="10.255.0.1"' in up and f'comment="{fibre.tag}"' in up
-    assert 'status] = "up") do={' in up
+    assert 'status] = "up"' in up
+    assert "rtt-avg] <= 00:00:00.110" in up
     assert up.index(":delay") < up.index("/ip/route/set")
-    # Down is immediate.
-    assert ":delay" not in down
+    # Down used to be immediate; A3 gates it on the consecutive-failure
+    # counter, in time-domain form: (fail_count - 1) intervals of still
+    # being down -- (5 - 1) x 5 s for this profile's defaults.
+    assert down.startswith(":delay 20s; ")
+    assert 'status] = "down"' in down
     assert "\n" not in up
 
 
 def test_zero_recovery_restores_immediately() -> None:
+    """With every restore gate switched off -- no hold-down, a restore
+    count of 1, no failback margin -- the up-script is the bare body, as it
+    was before plan A3 gave recovery gates of its own. recovery_seconds=0
+    alone no longer means this: the restore counter and the hysteresis
+    band still apply unless they too are set to their off positions."""
     sla = SlaProfile(
         name="fast",
         loss_percent=20,
@@ -861,6 +872,8 @@ def test_zero_recovery_restores_immediately() -> None:
         probe_interval_seconds=10,
         probe_count=10,
         recovery_seconds=0,
+        restore_count=1,
+        failback_latency_margin_ms=0,
     )
     s = sections_of(view([policy(sla_profile=sla)], mpls=[path("wan1", ["10.255.0.0"])]))
     up = str(s["/tool/netwatch"].items[0].props["up-script"])
