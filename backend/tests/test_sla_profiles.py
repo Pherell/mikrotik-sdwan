@@ -146,3 +146,69 @@ async def test_patch_rename_to_existing_name_is_409(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 409, resp.text
+
+
+async def test_create_and_patch_round_trip_the_a3a5_fields(
+    api: tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    """The A3/A5 profile fields are stored, returned, and patchable --
+    not just accepted and silently dropped."""
+    client, maker = api
+    await _seed(maker)
+    token = await _token(client, "op@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = await client.post(
+        "/sla-profiles",
+        json={
+            "name": "critical",
+            "probe_type": "tcp-conn",
+            "probe_port": 8291,
+            "probe_targets": ["1.1.1.1", "8.8.8.8"],
+            "fail_count": 3,
+            "restore_count": 2,
+            "failback_latency_margin_ms": 25,
+            "failback_jitter_margin_ms": 7,
+        },
+        headers=headers,
+    )
+    assert resp.status_code in (200, 201), resp.text
+    body = resp.json()
+    assert body["probe_type"] == "tcp-conn"
+    assert body["probe_port"] == 8291
+    assert body["probe_targets"] == ["1.1.1.1", "8.8.8.8"]
+    assert body["fail_count"] == 3
+    assert body["restore_count"] == 2
+    assert body["failback_latency_margin_ms"] == 25
+    assert body["failback_jitter_margin_ms"] == 7
+
+    resp = await client.patch(
+        f"/sla-profiles/{body['id']}",
+        json={"fail_count": 8, "probe_targets": []},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fail_count"] == 8
+    assert resp.json()["probe_targets"] == []
+
+
+async def test_create_rejects_the_a3a5_misconfigurations(
+    api: tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession]],
+) -> None:
+    client, maker = api
+    await _seed(maker)
+    token = await _token(client, "op@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for payload in (
+        # tcp-conn without the port it is meant to connect to.
+        {"name": "bad1", "probe_type": "tcp-conn"},
+        # A failback margin that swallows the whole threshold.
+        {"name": "bad2", "latency_ms": 100, "failback_latency_margin_ms": 100},
+        # A target that is a name, not an address.
+        {"name": "bad3", "probe_targets": ["dns.example.com"]},
+        # A dns probe without the name it should resolve.
+        {"name": "bad4", "probe_type": "dns"},
+    ):
+        resp = await client.post("/sla-profiles", json=payload, headers=headers)
+        assert resp.status_code == 422, (payload, resp.text)

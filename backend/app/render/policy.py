@@ -869,11 +869,66 @@ def _effective_packet_count(sla: SlaProfile) -> int:
     return count
 
 
-def _sla_fingerprint(sla: SlaProfile) -> tuple[int, int, int, int, int, int]:
+def _or(value: int | None, default: int) -> int:
+    """A profile field, or its model default when unset.
+
+    Profiles built in memory (tests, DEFAULT_SLA) carry None for columns
+    nobody set -- SQLAlchemy only applies column defaults at insert -- so
+    the A3/A5 fields are read through here rather than trusted raw. The
+    older fields are read raw, as they always have been.
+    """
+    return default if value is None else value
+
+
+def _fail_count(sla: SlaProfile) -> int:
+    return _or(sla.fail_count, 5)
+
+
+def _restore_count(sla: SlaProfile) -> int:
+    return _or(sla.restore_count, 5)
+
+
+def _probe_type(sla: SlaProfile) -> str:
+    return sla.probe_type or "icmp"
+
+
+def _probe_dns_name(sla: SlaProfile) -> str:
+    """The name a dns probe resolves (plan A5).
+
+    The schema requires it for probe_type == "dns"; a profile built in
+    memory without one falls back to a well-known anycast resolver name
+    rather than rendering an entry the device would reject outright.
+    """
+    return sla.probe_dns_name or "one.one.one.one"
+
+
+def _extra_targets(sla: SlaProfile) -> list[str]:
+    """The profile's extra probe targets (plan A5), order kept, deduped.
+
+    The judged next hop is always a target too; it is added by the caller,
+    which is the only place that knows it.
+    """
+    out: list[str] = []
+    for target in sla.probe_targets or []:
+        text = str(target).strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _sla_fingerprint(
+    sla: SlaProfile,
+) -> tuple[
+    int, int, int, int, int, int, int, int, int, int, str, int, str, tuple[str, ...]
+]:
     """The rendered SLA standard, for probe sharing and probe identity.
 
     Uses the *effective* packet count, so two profiles that differ only in a
-    raw count the calibration overrides anyway still share one probe.
+    raw count the calibration overrides anyway still share one probe. The
+    A3/A5 fields are in here on the same principle as the thresholds: they
+    change what is rendered (scripts, entry count, probe type), so a profile
+    that differs in any of them is a different standard and gets its own
+    probes -- the old entries are swept, not silently re-purposed.
     """
     return (
         sla.loss_percent,
@@ -882,6 +937,14 @@ def _sla_fingerprint(sla: SlaProfile) -> tuple[int, int, int, int, int, int]:
         sla.probe_interval_seconds,
         _effective_packet_count(sla),
         sla.recovery_seconds,
+        _fail_count(sla),
+        _restore_count(sla),
+        _or(sla.failback_latency_margin_ms, 10),
+        _or(sla.failback_jitter_margin_ms, 5),
+        _probe_type(sla),
+        sla.probe_port or 0,
+        _probe_dns_name(sla) if _probe_type(sla) == "dns" else "",
+        tuple(_extra_targets(sla)),
     )
 
 
@@ -908,8 +971,14 @@ def _merge_probes(intents: list[ProbeIntent]) -> list[ConfigItem]:
     the netwatch entry itself, so a standard that changes is a different
     probe: the old entry is swept and a new one created, rather than one
     entry being silently re-purposed under the policies sharing it.
+
+    A standard with extra probe targets (plan A5) renders a *set* of
+    entries per hop -- one per target, the hop included -- whose scripts
+    share the same distance targets and gate demotion on the whole set
+    agreeing. The set is still rendered once per (hop, standard), however
+    many policies share it.
     """
-    groups: dict[tuple[str, tuple[int, int, int, int, int, int]], _MergedProbe] = {}
+    groups: dict[tuple[str, tuple], _MergedProbe] = {}
     for intent in intents:
         key = (intent.hop, _sla_fingerprint(intent.sla))
         merged = groups.setdefault(
@@ -926,13 +995,81 @@ def _merge_probes(intents: list[ProbeIntent]) -> list[ConfigItem]:
     for (hop, fingerprint), merged in groups.items():
         sla = merged.sla
         digest = hashlib.sha1(repr(fingerprint).encode()).hexdigest()[:8]
-        comment = f"{owner_tag('policy', 'sla')}:{merged.wan_name}:{digest}"
+        base_comment = f"{owner_tag('policy', 'sla')}:{merged.wan_name}:{digest}"
         healthy = sorted(merged.targets.items())
         demoted = [(table, distance + SLA_PENALTY) for table, distance in healthy]
+
+        # Plan A5: the judged hop plus the profile's extra targets, one
+        # netwatch entry each. A single-target standard keeps the historical
+        # comment exactly, so existing deployments see no probe churn from
+        # this feature alone; a multi-target set suffixes each entry with a
+        # hash of (judged hop, target) -- two hops sharing a WAN, a standard
+        # and an extra target would otherwise render two entries with the
+        # same (host, comment) key and different scripts.
+        #
+        # A dns standard is the exception in shape: the entry's host is the
+        # name being resolved, not an address (the device rejects an
+        # address there), so there is exactly one entry per hop, the extra
+        # IP targets do not apply, and agreement is the entry's own verdict.
+        # The suffixed comment form is used even for that single entry --
+        # two hops of one WAN resolve the same name, so their entries would
+        # otherwise collide on the (host, comment) key.
+        if _probe_type(sla) == "dns":
+            targets = [_probe_dns_name(sla)]
+            multi = True
+        else:
+            targets = [hop] + [t for t in _extra_targets(sla) if t != hop]
+            multi = len(targets) > 1
+        comments = {
+            target: (
+                f"{base_comment}:{hashlib.sha1(f'{hop}>{target}'.encode()).hexdigest()[:6]}"
+                if multi
+                else base_comment
+            )
+            for target in targets
+        }
+
+        for target in targets:
+            comment = comments[target]
+            siblings = [(t, comments[t]) for t in targets]
+            props: dict[str, object] = {
+                "host": target,
+                "type": _probe_type(sla),
+                "interval": f"{sla.probe_interval_seconds}s",
+                # The state a probe wakes up in after a reboot or an apply is
+                # not evidence about the path; firing the scripts on it demotes
+                # (or restores) on boot noise. The first real test decides.
+                "ignore-initial-down": True,
+                "ignore-initial-up": True,
+                "disabled": False,
+                # Demote rather than delete: the route stays in the table so
+                # the path can be re-preferred once it has recovered.
+                "down-script": _demote_script(
+                    hop, demoted, sla, own=(target, comment), siblings=siblings
+                ),
+                "up-script": _restore_script(
+                    hop, healthy, sla, own=(target, comment)
+                ),
+                "comment": comment,
+            }
+            props.update(_type_props(sla))
+            items.append(ConfigItem(props=props, tag=comment))
+    return items
+
+
+def _type_props(sla: SlaProfile) -> dict[str, object]:
+    """The netwatch properties a probe type understands.
+
+    icmp is the only type whose test produces loss/latency/jitter
+    statistics, so it is the only one that takes the thr-* thresholds (and
+    the packet-count calibration that makes the loss threshold resolvable).
+    The service types judge the transaction itself: RouterOS has no thr-*
+    for them, their verdict is up/down, and sending icmp-only properties at
+    a tcp-conn entry is rejected by the device.
+    """
+    probe_type = _probe_type(sla)
+    if probe_type == "icmp":
         props: dict[str, object] = {
-            "host": hop,
-            "type": "icmp",
-            "interval": f"{sla.probe_interval_seconds}s",
             "packet-count": _effective_packet_count(sla),
             "thr-loss-percent": sla.loss_percent,
             # ROS 7 netwatch has no "thr-latency"; the latency fail
@@ -943,51 +1080,31 @@ def _merge_probes(intents: list[ProbeIntent]) -> list[ConfigItem]:
             # instead of waiting out the full packet train: demotion comes
             # sooner at the same sample size.
             "early-failure-detection": True,
-            # The state a probe wakes up in after a reboot or an apply is
-            # not evidence about the path; firing the scripts on it demotes
-            # (or restores) on boot noise. The first real test decides.
-            "ignore-initial-down": True,
-            "ignore-initial-up": True,
-            "disabled": False,
-            # Demote rather than delete: the route stays in the table so the
-            # path can be re-preferred once it has recovered.
-            "down-script": _health_script(hop, demoted),
-            "up-script": _health_script(
-                hop,
-                healthy,
-                hold_down=sla.recovery_seconds,
-                probe=(hop, comment),
-            ),
-            "comment": comment,
         }
         if sla.jitter_ms:
             props["thr-jitter"] = f"{sla.jitter_ms}ms"
-        items.append(ConfigItem(props=props, tag=comment))
-    return items
+        return props
+    if probe_type == "tcp-conn":
+        # The schema requires the port for tcp-conn; a profile built in
+        # memory without one falls back to the HTTPS port rather than
+        # rendering a probe of nothing.
+        return {"port": sla.probe_port or 443}
+    if probe_type == "http-get":
+        return {"port": sla.probe_port or 80}
+    # dns: the entry's host (set in _merge_probes) is the name being
+    # resolved; RouterOS has no port or server property to add.
+    return {}
 
 
 def _health_script(
     gateway: str,
     targets: list[tuple[str | None, int]],
-    *,
-    hold_down: int = 0,
-    probe: tuple[str, str] | None = None,
 ) -> str:
-    """RouterOS script setting route distances.
+    """RouterOS script body setting route distances.
 
     ``targets`` is (routing table, distance) pairs; a table of None means every
     table. No renderer emits None any more -- probes name every table they
     touch, so a shared probe cannot rewrite another policy's distances.
-
-    ``hold_down`` is the SLA profile's ``recovery_seconds``, used on the
-    up-script only. Down is acted on at once; up must *stay* up that long
-    before the path is re-preferred. Without it a link that breaches on
-    latency recovers the moment traffic leaves it, takes the traffic back,
-    breaches again -- and under load_balance, where a member's latency is a
-    function of the load PCC puts on it, that loop never settles. The script
-    waits, then re-reads its own netwatch entry (``probe`` = host, comment)
-    and restores only if it is still up; a link that dropped again during the
-    wait stays demoted, and its next up event starts a fresh hold-down.
 
     Distances are absolute, not relative. An earlier version added a penalty to
     the current distance, which compounds: two down events in a row demote the
@@ -995,7 +1112,8 @@ def _health_script(
     and the demoted values are known at render time, so just write them.
 
     Kept to one line: RouterOS stores scripts verbatim, and a multi-line value
-    round-trips with whitespace changes that would diff dirty forever.
+    round-trips with whitespace changes that would diff dirty forever. The
+    gating wrappers below preserve that: a gated script is still one line.
     """
     clauses = []
     for table, distance in targets:
@@ -1006,15 +1124,175 @@ def _health_script(
             f":foreach r in=[/ip/route/find {where}] "
             f"do={{/ip/route/set $r distance={distance}}}"
         )
-    body = "; ".join(clauses)
-    if hold_down <= 0 or probe is None:
-        return body
-    host, comment = probe
+    return "; ".join(clauses)
+
+
+def _gate_script(
+    body: str, *, delay_seconds: int = 0, conditions: list[str]
+) -> str:
+    """Wrap a distance-writing body in a wait-and-recheck gate.
+
+    The pattern the up-script has always used, generalised: wait, re-read
+    the probe state, act only if the state still says so. Netwatch raises
+    one event per transition, so a script that must distinguish "one bad
+    test" from "still bad N tests later" can only do it by waiting and
+    looking again -- there is no per-test event to count. With no delay and
+    no conditions the body is returned bare, which is the pre-A3 shape.
+    """
+    script = body
+    if conditions:
+        script = f":if ({' and '.join(conditions)}) do={{{body}}}"
+    if delay_seconds > 0:
+        script = f":delay {delay_seconds}s; {script}"
+    return script
+
+
+def _status_condition(host: str, comment: str, status: str) -> str:
+    """A script expression: this netwatch entry currently reads ``status``."""
     return (
-        f":delay {hold_down}s; "
-        f':if ([/tool/netwatch/get [/tool/netwatch/find host="{host}" comment="{comment}"] status]'
-        f' = "up") do={{{body}}}'
+        f'[/tool/netwatch/get [/tool/netwatch/find host="{host}" comment="{comment}"]'
+        f' status] = "{status}"'
     )
+
+
+def _duration_literal(milliseconds: int) -> str:
+    """A RouterOS time literal for a millisecond count, e.g. 00:00:00.290."""
+    hours, rem = divmod(milliseconds, 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{millis:03d}"
+
+
+def _rtt_condition(host: str, comment: str, prop: str, limit_ms: int) -> str:
+    """A script expression: this entry's latest ``prop`` is within a limit.
+
+    Only icmp entries carry rtt statistics; the caller checks the type.
+    The limit is a duration literal because that is what a netwatch get
+    returns for these properties (verified against a live CHR, plan C1
+    lab) -- a bare number would compare a duration against a count.
+    """
+    return (
+        f'[/tool/netwatch/get [/tool/netwatch/find host="{host}" comment="{comment}"]'
+        f" {prop}] <= {_duration_literal(limit_ms)}"
+    )
+
+
+def _demote_script(
+    hop: str,
+    demoted: list[tuple[str, int]],
+    sla: SlaProfile,
+    *,
+    own: tuple[str, str],
+    siblings: list[tuple[str, str]],
+) -> str:
+    """The down-script: demote on sustained, agreed failure (plans A3+A5).
+
+    Two gates, both evaluated on-device so failover latency costs no
+    controller round trip:
+
+    - A3's consecutive-failure counter, in its time-domain form: wait
+      (fail_count - 1) probe intervals, then demote only if the entry is
+      *still* down. Staying down across the window means the tests in
+      between also failed -- a single twitchy test flips the entry back up
+      and aborts the demotion. fail_count=1 renders the pre-A3 immediate
+      demotion. (A hard-down path waits the same window: on-device there
+      is one status, and distinguishing "dead" from "breaching" inside a
+      script is not a distinction netwatch exposes.)
+    - A5's target agreement, when the standard probes more than the hop:
+      demote only if *every* entry in the set reads down at the recheck,
+      so one dead target cannot demote a path whose other targets answer.
+      The route's own check-gateway=ping still removes a truly dead
+      gateway independently of this soft demotion.
+
+    Only this entry's own recheck is needed when nothing gates: the body
+    is returned bare.
+    """
+    host, comment = own
+    body = _health_script(hop, demoted)
+    fail_delay = (_fail_count(sla) - 1) * sla.probe_interval_seconds
+    multi = len(siblings) > 1
+    if fail_delay <= 0 and not multi:
+        return body
+    conditions = [_status_condition(host, comment, "down")]
+    if multi:
+        conditions.extend(
+            _status_condition(sib_host, sib_comment, "down")
+            for sib_host, sib_comment in siblings
+            if sib_comment != comment
+        )
+    return _gate_script(body, delay_seconds=fail_delay, conditions=conditions)
+
+
+def _restore_script(
+    hop: str,
+    healthy: list[tuple[str, int]],
+    sla: SlaProfile,
+    *,
+    own: tuple[str, str],
+) -> str:
+    """The up-script: restore on sustained recovery, inside a margin (A3).
+
+    The wait is the longer of recovery_seconds and (restore_count - 1)
+    probe intervals: the first is a duration the path must stay good, the
+    second is the restore xN count in the same time-domain form as the
+    demote gate -- either knob can bind. After the wait the entry must
+    still read up, and -- the failback hysteresis -- its latest test must
+    beat the profile's thresholds by the failback margins, not merely duck
+    back under them: demote above T, restore below T - margin. Without the
+    band a link that breaches on latency recovers the moment traffic leaves
+    it, takes the traffic back, breaches again -- and under load_balance,
+    where a member's latency is a function of the load PCC puts on it,
+    that loop never settles.
+
+    DEVIATION from the plan text, deliberate: Sophos-style hysteresis
+    compares the recovered path against the *active* path's live numbers.
+    A netwatch script can only read netwatch entries, and which sibling
+    probe is "the active path" differs per routing table a shared probe
+    serves -- there is no on-device source for it that a script can name
+    at render time. The comparison shipped is against the profile's own
+    thresholds minus the margin: a fixed hysteresis band, which is the
+    part of the mechanism that stops the flap loop. Margins clamp at 1 ms
+    so a margin at or above a threshold (rejected by the schema, possible
+    in a hand-built profile) can never make restore unreachable.
+    """
+    host, comment = own
+    body = _health_script(hop, healthy)
+    delay = max(
+        sla.recovery_seconds,
+        (_restore_count(sla) - 1) * sla.probe_interval_seconds,
+    )
+    conditions: list[str] = []
+    if delay > 0:
+        # The status recheck only says something after a wait; with no
+        # wait the up event that fired this script just read it.
+        conditions.append(_status_condition(host, comment, "up"))
+    if _probe_type(sla) == "icmp":
+        # Only icmp tests measure RTT; the service probe types have no
+        # statistics to hold a margin against, so their restore is gated
+        # by the wait and the status recheck alone. A margin of 0 adds no
+        # condition either: restoring at the threshold itself is exactly
+        # what the entry's own up verdict already means.
+        latency_margin = _or(sla.failback_latency_margin_ms, 10)
+        if latency_margin > 0:
+            conditions.append(
+                _rtt_condition(
+                    host,
+                    comment,
+                    "rtt-avg",
+                    max(1, sla.latency_ms - latency_margin),
+                )
+            )
+        jitter_margin = _or(sla.failback_jitter_margin_ms, 5)
+        if sla.jitter_ms and jitter_margin > 0:
+            conditions.append(
+                _rtt_condition(
+                    host,
+                    comment,
+                    "rtt-jitter",
+                    max(1, sla.jitter_ms - jitter_margin),
+                )
+            )
+    return _gate_script(body, delay_seconds=delay, conditions=conditions)
 
 
 def _sections(

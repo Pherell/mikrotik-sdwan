@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from ipaddress import ip_network
+from ipaddress import ip_address, ip_network
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -16,6 +16,78 @@ def _prefixes(v: list[str] | None) -> list[str] | None:
     return v
 
 
+# Netwatch probe types a profile may choose (plan A5). icmp is the only one
+# whose test yields loss/latency/jitter statistics; the rest judge whether a
+# real service transaction succeeds.
+PROBE_TYPES = frozenset({"icmp", "tcp-conn", "http-get", "dns"})
+
+# The judged hop itself is always one target; these are the extras. A set
+# larger than this stops being "diverse targets" and starts being a probe
+# storm against the far end.
+MAX_PROBE_TARGETS = 4
+
+
+def _check_dns_name(v: str | None) -> str | None:
+    """A DNS probe's name must be a name: RouterOS rejects an address as
+    the host of a type=dns entry, and a string with spaces or slashes is
+    not resolvable anywhere."""
+    if v is None:
+        return v
+    name = v.strip()
+    try:
+        ip_address(name)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("probe_dns_name must be a DNS name, not an address")
+    if not name or len(name) > 253 or any(c in name for c in " /_"):
+        raise ValueError("probe_dns_name must be a DNS name, e.g. one.one.one.one")
+    labels = name.split(".")
+    if any(not label or label.startswith("-") or label.endswith("-") for label in labels):
+        raise ValueError("probe_dns_name must be a DNS name, e.g. one.one.one.one")
+    return name
+
+
+def _check_probe_targets(v: list[str]) -> list[str]:
+    if len(v) > MAX_PROBE_TARGETS:
+        raise ValueError(f"at most {MAX_PROBE_TARGETS} extra probe targets")
+    out: list[str] = []
+    for target in v:
+        # Netwatch hosts are addresses, not names: a name would resolve once
+        # and silently pin the probe to whatever it resolved to.
+        ip_address(target)
+        if target not in out:
+            out.append(target)
+    return out
+
+
+def _check_margins(
+    *,
+    latency_ms: int | None,
+    jitter_ms: int | None,
+    latency_margin: int | None,
+    jitter_margin: int | None,
+) -> None:
+    """A failback margin must leave a restore threshold above zero.
+
+    Restore happens below threshold - margin; a margin at or above its
+    threshold makes that unreachable, so the path could never take traffic
+    back -- a failover that only ever fails in one direction.
+    """
+    if latency_ms is not None and latency_margin is not None:
+        if latency_margin >= latency_ms:
+            raise ValueError(
+                "failback_latency_margin_ms must be smaller than latency_ms, "
+                "or no recovered path could ever meet the restore threshold"
+            )
+    if jitter_ms is not None and jitter_margin is not None:
+        if jitter_margin >= jitter_ms:
+            raise ValueError(
+                "failback_jitter_margin_ms must be smaller than jitter_ms, "
+                "or no recovered path could ever meet the restore threshold"
+            )
+
+
 class SlaProfileBase(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str | None = None
@@ -26,6 +98,16 @@ class SlaProfileBase(BaseModel):
     probe_count: int = Field(default=10, ge=1, le=100)
     recovery_seconds: int = Field(default=60, ge=0, le=3600)
     eval_window_minutes: int = Field(default=30, ge=1, le=1440)
+    # Anti-flap (plan A3).
+    fail_count: int = Field(default=5, ge=1, le=100)
+    restore_count: int = Field(default=5, ge=1, le=100)
+    failback_latency_margin_ms: int = Field(default=10, ge=0, le=10000)
+    failback_jitter_margin_ms: int = Field(default=5, ge=0, le=10000)
+    # Probe shape (plan A5).
+    probe_type: str = "icmp"
+    probe_port: int | None = Field(default=None, ge=1, le=65535)
+    probe_dns_name: str | None = Field(default=None, max_length=255)
+    probe_targets: list[str] = Field(default_factory=list)
 
     @field_validator("probe_interval_seconds")
     @classmethod
@@ -36,9 +118,50 @@ class SlaProfileBase(BaseModel):
             raise ValueError("probe_interval_seconds must be at least 1")
         return v
 
+    @field_validator("probe_type")
+    @classmethod
+    def _probe_type(cls, v: str) -> str:
+        if v not in PROBE_TYPES:
+            raise ValueError(
+                f"probe_type must be one of: {', '.join(sorted(PROBE_TYPES))}"
+            )
+        return v
+
+    @field_validator("probe_dns_name")
+    @classmethod
+    def _dns_name(cls, v: str | None) -> str | None:
+        return _check_dns_name(v)
+
+    @field_validator("probe_targets")
+    @classmethod
+    def _probe_targets(cls, v: list[str]) -> list[str]:
+        return _check_probe_targets(v)
+
+    # NOTE: as with SdwanGroupBase below, cross-field checks (margin vs
+    # threshold, tcp-conn's port) live on Create/Update, not here:
+    # SlaProfileRead inherits this base, and a validator rejecting stored
+    # data turns a plain GET into a 500.
+
 
 class SlaProfileCreate(SlaProfileBase):
-    pass
+    @model_validator(mode="after")
+    def _cross_field(self) -> SlaProfileCreate:
+        _check_margins(
+            latency_ms=self.latency_ms,
+            jitter_ms=self.jitter_ms,
+            latency_margin=self.failback_latency_margin_ms,
+            jitter_margin=self.failback_jitter_margin_ms,
+        )
+        if self.probe_type == "tcp-conn" and self.probe_port is None:
+            # Unlike http-get there is no sane default port for a bare TCP
+            # connect: 443 would silently probe a service the far end may
+            # not run and demote a healthy path forever.
+            raise ValueError("probe_type tcp-conn needs probe_port")
+        if self.probe_type == "dns" and not self.probe_dns_name:
+            # A dns entry's host is the name being resolved -- there is no
+            # address-shaped fallback the device would accept.
+            raise ValueError("probe_type dns needs probe_dns_name")
+        return self
 
 
 class SlaProfileUpdate(BaseModel):
@@ -53,6 +176,14 @@ class SlaProfileUpdate(BaseModel):
     probe_count: int | None = Field(default=None, ge=1, le=100)
     recovery_seconds: int | None = Field(default=None, ge=0, le=3600)
     eval_window_minutes: int | None = Field(default=None, ge=1, le=1440)
+    fail_count: int | None = Field(default=None, ge=1, le=100)
+    restore_count: int | None = Field(default=None, ge=1, le=100)
+    failback_latency_margin_ms: int | None = Field(default=None, ge=0, le=10000)
+    failback_jitter_margin_ms: int | None = Field(default=None, ge=0, le=10000)
+    probe_type: str | None = None
+    probe_port: int | None = Field(default=None, ge=1, le=65535)
+    probe_dns_name: str | None = Field(default=None, max_length=255)
+    probe_targets: list[str] | None = None
 
     @field_validator("probe_interval_seconds")
     @classmethod
@@ -62,6 +193,39 @@ class SlaProfileUpdate(BaseModel):
         if v < 1:
             raise ValueError("probe_interval_seconds must be at least 1")
         return v
+
+    @field_validator("probe_type")
+    @classmethod
+    def _probe_type(cls, v: str | None) -> str | None:
+        return v if v is None else SlaProfileBase._probe_type(v)
+
+    @field_validator("probe_dns_name")
+    @classmethod
+    def _dns_name(cls, v: str | None) -> str | None:
+        return _check_dns_name(v)
+
+    @field_validator("probe_targets")
+    @classmethod
+    def _probe_targets(cls, v: list[str] | None) -> list[str] | None:
+        return v if v is None else _check_probe_targets(v)
+
+    @model_validator(mode="after")
+    def _cross_field(self) -> SlaProfileUpdate:
+        """Cross-field checks only when both sides ride in this request --
+        the same partial-update reasoning as SdwanGroupUpdate: the combo
+        was enforced when the profile was created, and a single-field PATCH
+        cannot be judged without the stored other half."""
+        _check_margins(
+            latency_ms=self.latency_ms,
+            jitter_ms=self.jitter_ms,
+            latency_margin=self.failback_latency_margin_ms,
+            jitter_margin=self.failback_jitter_margin_ms,
+        )
+        if self.probe_type == "tcp-conn" and self.probe_port is None:
+            raise ValueError("probe_type tcp-conn needs probe_port in the same update")
+        if self.probe_type == "dns" and not self.probe_dns_name:
+            raise ValueError("probe_type dns needs probe_dns_name in the same update")
+        return self
 
 
 class SlaProfileRead(SlaProfileBase):

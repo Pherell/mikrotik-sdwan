@@ -149,6 +149,14 @@ function SlaForm({
     probe_count: profile?.probe_count ?? 10,
     recovery_seconds: profile?.recovery_seconds ?? 60,
     eval_window_minutes: profile?.eval_window_minutes ?? 30,
+    fail_count: profile?.fail_count ?? 5,
+    restore_count: profile?.restore_count ?? 5,
+    failback_latency_margin_ms: profile?.failback_latency_margin_ms ?? 10,
+    failback_jitter_margin_ms: profile?.failback_jitter_margin_ms ?? 5,
+    probe_type: profile?.probe_type ?? "icmp",
+    probe_port: profile?.probe_port != null ? String(profile.probe_port) : "",
+    probe_dns_name: profile?.probe_dns_name ?? "",
+    probe_targets: (profile?.probe_targets ?? []).join(", "),
   });
 
   const save = useMutation({
@@ -157,6 +165,12 @@ function SlaForm({
         ...form,
         description: form.description || null,
         jitter_ms: form.jitter_ms ? Number(form.jitter_ms) : null,
+        probe_port: form.probe_port ? Number(form.probe_port) : null,
+        probe_dns_name: form.probe_dns_name.trim() || null,
+        probe_targets: form.probe_targets
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
       };
       return profile
         ? endpoints.updateSla(profile.id, body)
@@ -297,10 +311,139 @@ function SlaForm({
           </label>
         </div>
 
+        <div className="row">
+          <label>
+            Failures before demotion
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={form.fail_count}
+              onChange={(e) =>
+                setForm({ ...form, fail_count: Number(e.target.value) })
+              }
+            />
+            <span className="muted">
+              Consecutive failed probe tests before a path is demoted, so
+              one twitchy test moves nothing. 1 demotes on the first failure.
+            </span>
+          </label>
+          <label>
+            Passes before restore
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={form.restore_count}
+              onChange={(e) =>
+                setForm({ ...form, restore_count: Number(e.target.value) })
+              }
+            />
+            <span className="muted">
+              Consecutive passed tests before traffic returns — whichever of
+              this and the recovery hold takes longer is the one that binds.
+            </span>
+          </label>
+          <label>
+            Failback margin, latency (ms)
+            <input
+              type="number"
+              min={0}
+              value={form.failback_latency_margin_ms}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  failback_latency_margin_ms: Number(e.target.value),
+                })
+              }
+            />
+            <span className="muted">
+              A recovered path must beat the latency threshold by this much
+              before it takes traffic back, not just duck under it.
+            </span>
+          </label>
+          <label>
+            Failback margin, jitter (ms)
+            <input
+              type="number"
+              min={0}
+              value={form.failback_jitter_margin_ms}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  failback_jitter_margin_ms: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+        </div>
+
+        <div className="row">
+          <label>
+            Probe type
+            <select
+              value={form.probe_type}
+              onChange={(e) => setForm({ ...form, probe_type: e.target.value })}
+            >
+              <option value="icmp">ICMP (loss / latency / jitter)</option>
+              <option value="tcp-conn">TCP connect</option>
+              <option value="http-get">HTTP GET</option>
+              <option value="dns">DNS</option>
+            </select>
+            <span className="muted">
+              Service probes measure a real transaction and survive ICMP
+              being filtered — but judge up/down only: the loss, latency and
+              jitter thresholds above apply to ICMP.
+            </span>
+          </label>
+          <label>
+            Probe port
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              placeholder="required for TCP connect"
+              value={form.probe_port}
+              onChange={(e) => setForm({ ...form, probe_port: e.target.value })}
+            />
+          </label>
+          <label>
+            DNS probe name
+            <input
+              placeholder="required for DNS, e.g. one.one.one.one"
+              value={form.probe_dns_name}
+              onChange={(e) =>
+                setForm({ ...form, probe_dns_name: e.target.value })
+              }
+            />
+            <span className="muted">
+              A DNS probe tests that this name resolves — the device will
+              not accept an address there.
+            </span>
+          </label>
+          <label>
+            Extra probe targets
+            <input
+              placeholder="e.g. 1.1.1.1, 8.8.8.8"
+              value={form.probe_targets}
+              onChange={(e) =>
+                setForm({ ...form, probe_targets: e.target.value })
+              }
+            />
+            <span className="muted">
+              Comma-separated addresses probed alongside the path's next hop.
+              A demotion needs every target down at once, so one dead target
+              cannot demote a healthy path. Not used by DNS probes, which
+              resolve the name above instead.
+            </span>
+          </label>
+        </div>
+
         <p className="muted">
-          Detection takes roughly {form.probe_interval_seconds * 2}s. Tightening
-          the interval speeds that up and costs router CPU; below a second or
-          two you start failing over on ordinary jitter.
+          Detection takes roughly {form.probe_interval_seconds * 2}s, plus the
+          failure-count window above before a demotion lands. Tightening the
+          interval speeds that up and costs router CPU; below a second or two
+          you start failing over on ordinary jitter.
         </p>
 
         <div className="row" style={{ justifyContent: "flex-start" }}>
